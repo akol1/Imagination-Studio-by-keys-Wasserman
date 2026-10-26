@@ -187,21 +187,28 @@ def questions(bible: dict, index: int, seg: dict, cast: dict, categories: list, 
         sid = continuity.subject_of(bible, name, "character", create=False)
         facts = continuity.current(bible, index, sid) if sid else []
         look = clip(cast.get(name), 16)
-        ask("identity", f"Where {name} ({look}) is visible, is it clearly the same person in every frame"
-                        + (" and the same person as in the reference picture" if sid and (bible["subjects"].get(sid) or {}).get("ref") else "") + "?", "yes")
+        # the user's cast (a seed sheet) is held hard; someone the Director brought in (a thief, a guard) is a note:
+        # on the pace and wardrobe run (2026-10-26) "is the first thief the same person" redrew three keyframes and
+        # rendered two pieces again
+        hero = any(f["key"] == "look" and f["source"] == "seed" for f in facts)
+
+        def ask_about(category: str, question: str, expect: str, major: bool = True) -> None:
+            ask(category, question, expect, major and hero)
+        ask_about("identity", f"Where {name} ({look}) is visible, is it clearly the same person in every frame"
+                              + (" and the same person as in the reference picture" if sid and (bible["subjects"].get(sid) or {}).get("ref") else "") + "?", "yes")
         # a double: generated crowds copy the hero (the gate's 4-piece film, 2026-10-26: a second braided man in the
         # same grey tunic beside Eirik, unseen by every check of that run)
-        ask("identity", f"Is there a second person who looks like {name}: the same hair, beard and clothes?", "no")
+        ask_about("identity", f"Is there a second person who looks like {name}: the same hair, beard and clothes?", "no")
         wear = next((f["value"] for f in facts if f["category"] == "wardrobe"), "")
         if wear:
-            ask("wardrobe", f"Where {name} is visible, does {name} wear {clip(wear, 12)}?", "yes")
+            ask_about("wardrobe", f"Where {name} is visible, does {name} wear {clip(wear, 30)}?", "yes")
         elif look:
             # no wardrobe fact yet: the cast sheet's look (on the gate's Infinity run the brown wool coat became a
             # waistcoat and nothing asked about it)
-            ask("wardrobe", f"Where {name} is visible, is {name} dressed as described here: {clip(cast.get(name), 30)}?", "yes")
+            ask_about("wardrobe", f"Where {name} is visible, is {name} dressed as described here: {clip(cast.get(name), 30)}?", "yes")
         held = next((f["value"] for f in facts if f["category"] == "props" and f["key"] == "held"), "")
         if held:
-            ask("props", f"Where {name} is visible, is {name} holding {clip(held, 10)}?", "yes", major=False)
+            ask_about("props", f"Where {name} is visible, is {name} holding {clip(held, 10)}?", "yes", major=False)
     ask("identity", "Does any person change into a different person, melt, or morph between these frames?", "no")
     ask("identity", "Is any face, hand or body clearly malformed, duplicated or floating?", "no", major=False)
     if fields.get("setting"):

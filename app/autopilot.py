@@ -2117,7 +2117,8 @@ def dense_keyframe(run: dict, seg: dict, picture: Path, folder: Path) -> dict:
     work = folder / f"keyframe-checks-{len(seg.get('keyframes') or [])}"
     work.mkdir(parents=True, exist_ok=True)
     asked = [q for q in checks.questions(bible, index, {**seg, "mode": "keyframe"}, cast_at(run, index), categories, continuity)
-             if "between these frames" not in q["text"]]
+             # one still: "the same person in every frame" means something only against a reference picture
+             if "between these frames" not in q["text"] and ("in every frame" not in q["text"] or "reference picture" in q["text"])]
     if "pace" in continuity.watched(copts) and checks.pace_of(seg.get("pace"))["kind"] in checks.FAST_KINDS:
         asked.append(checks.MID_MOTION)  # a fight opens on a blow in motion, not a stand-off
     if not asked:
@@ -2362,6 +2363,25 @@ def has_audio(clip: Path) -> bool:
     return bool(done.stdout.strip())
 
 
+EASE_IN_MAX_S = 2  # the most of a fight piece's opening the film leaves out
+
+
+def ease_in(seg: dict) -> float:
+    """Seconds of a fight piece's opening the film leaves out: MiniMax H3 eases out of the still it starts from, and on
+    the pace and wardrobe run (2026-10-26, 1376x768) 7 of 8 fight takes opened at 2 to 5 a second whatever the prompt
+    said, the keyframe already mid-strike, before the exchange ran at 10 to 16. The leading seconds measured slow (under
+    checks.SLOW) are cut, at most EASE_IN_MAX_S, when a fast second follows them; a piece the plan opens slowly keeps them."""
+
+    pace = ((seg.get("continuity") or {}).get("dense") or {}).get("pace") or {}
+    motion, plan = pace.get("motion") or [], checks.pace_of(seg.get("pace"))
+    if plan["kind"] not in checks.FAST_KINDS or not motion:
+        return 0.0
+    lead = 0
+    while lead < min(EASE_IN_MAX_S, len(motion) - 1) and motion[lead] < checks.SLOW and checks.planned(plan, lead + 0.5, len(motion)) == "fast":
+        lead += 1
+    return float(lead) if lead and any(m >= checks.SLOW for m in motion[lead:]) else 0.0
+
+
 def publish(run: dict) -> dict | None:
     """Every committed segment joined into ``film.mp4``: a continuation cross-fades over the one frame it repeats,
     a new scene dissolves in; picture and sound fade together, so they stay in step."""
@@ -2376,8 +2396,10 @@ def publish(run: dict) -> dict | None:
     for i, seg in enumerate(parts):
         clip = HOME / seg["output"]
         length = qa.duration(clip)
+        cut = ease_in(seg)
+        length = max(0.5, length - cut)
         lengths_.append(length)
-        inputs += ["-i", str(clip)]
+        inputs += (["-ss", f"{cut:.3f}"] if cut else []) + ["-i", str(clip)]
         if size is None:
             probe = subprocess.run(["ffprobe", "-v", "error", "-select_streams", "v:0", "-show_entries", "stream=width,height", "-of", "csv=p=0", str(clip)],
                                    capture_output=True, text=True, env=qa.ENV, timeout=30).stdout.strip().split(",")
@@ -2389,7 +2411,7 @@ def publish(run: dict) -> dict | None:
             graph.append(f"anullsrc=r=48000:cl=stereo,atrim=0:{length:.4f},aformat=sample_fmts=fltp[a{i}]")
     vlast, alast, total = "[v0]", "[a0]", lengths_[0]
     for i in range(1, len(parts)):
-        if parts[i].get("mode") == "previous":
+        if parts[i].get("mode") == "previous" and not ease_in(parts[i]):  # with its ease-in cut it no longer repeats the frame
             # a continuation opens on the frame the one before ends on: that frame is dropped, and the sound cross-fades
             # over the same 1/24 s. (A one-frame xfade is not used: ffmpeg 6.1 drops the second clip with it.)
             fade = CONTINUE_FADE

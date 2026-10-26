@@ -538,3 +538,27 @@ def test_a_fight_prompt_opens_in_motion_and_its_keyframe_is_asked_for_motion(loo
     video = next(b for b in loop["queue"].bodies if b["kind"] == "video")["params"]["prompt"]
     assert "From the very first frame, already in motion at full real-time speed: Vex fights" in video
     assert any("caught in the middle of a fast movement" in p for p, _ in watcher.yesno)
+
+
+def test_the_film_leaves_out_a_fight_pieces_slow_ease_in():
+    fight = {"pace": FIGHT, "continuity": {"dense": {"pace": {"motion": [3.1, 2.2, 12.0, 14.0, 9.0]}}}}
+    assert autopilot.ease_in(fight) == 2.0
+    assert autopilot.ease_in({**fight, "continuity": {"dense": {"pace": {"motion": [3.1, 16.3, 10.0]}}}}) == 1.0
+    assert autopilot.ease_in({**fight, "continuity": {"dense": {"pace": {"motion": [2.0, 2.0, 2.0, 2.0]}}}}) == 0.0  # nothing fast after it
+    assert autopilot.ease_in({**fight, "continuity": {"dense": {"pace": {"motion": [9.0, 2.0, 12.0]}}}}) == 0.0
+    assert autopilot.ease_in({"pace": {"kind": "calm"}, "continuity": {"dense": {"pace": {"motion": [1.0, 12.0]}}}}) == 0.0
+
+
+def test_a_joined_film_is_shorter_by_the_cut_ease_in(loop, monkeypatch):
+    class Varied(FightDirector):
+        def __call__(self, run, system, prompt):
+            said = json.loads(super().__call__(run, system, prompt))
+            said["shot"]["action"] = BEATS[len(autopilot.committed(run)) % len(BEATS)] + ", trading quick strikes with the drone."
+            return json.dumps(said)
+    monkeypatch.setattr(autopilot, "ask_text", Varied())
+    monkeypatch.setattr(autopilot.checks, "motion", lambda clip, env=None: [2.0, 12.0, 12.0])
+    run = go(new_run(2, seconds=3, continuity={"film_pass": False}))
+    assert run["state"] == "done", run["log"][-3:]
+    assert [autopilot.ease_in(s) for s in run["segments"]] == [1.0, 1.0]
+    clip = sum(autopilot.qa.duration(autopilot.HOME / s["output"]) for s in run["segments"])
+    assert run["film"]["seconds"] < clip - 0.9  # each 1 s test piece cut to its last half second (the floor), a dissolve between
