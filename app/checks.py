@@ -126,6 +126,18 @@ def pace_line(pace: dict, seconds: float) -> str:
     return line + "."
 
 
+def pace_opening(pace: dict) -> str:
+    """The first words of a fight's action: the speed from the very first frame. On the merge gate's films the openings
+    of fight pieces measured 3 to 5 against 13 to 22 in their exchanges: H3 eased in from a still frame."""
+
+    if pace["kind"] not in FAST_KINDS:
+        return ""
+    first = next((b for b in pace["beats"] if b["from"] <= 0.5), None)
+    if first and first["speed"] == "slow":
+        return ""
+    return "From the very first frame, already in motion at full real-time speed:"
+
+
 def planned(pace: dict, at: float, seconds: float) -> str:
     """The speed the plan has at second ``at``: fast in a fight or action piece unless a slow span covers it."""
 
@@ -208,6 +220,11 @@ def questions(bible: dict, index: int, seg: dict, cast: dict, categories: list, 
 def pace_question(expect_slow: bool) -> dict:
     return {"key": "pace", "category": "pace", "text": "Is the motion in these frames slow motion: people and things moving "
             "clearly slower than real life?", "expect": "yes" if expect_slow else "no", "major": False}
+
+
+# a fight's keyframe: a still pose makes the video model ease in slowly (the merge gate's openings, 3 to 5 a second)
+MID_MOTION = {"key": "m1", "category": "pace", "text": "Is someone caught in the middle of a fast movement, a blow or a swing "
+              "already in motion, rather than standing still or squaring up?", "expect": "yes", "major": True}
 
 
 def join_questions(categories: list) -> list[dict]:
@@ -320,11 +337,14 @@ def vote(asker, pictures: list, header: str, q: dict, first: str | None, votes: 
 # ---------- the pace, measured ----------
 
 # Mean absolute difference between consecutive frames, 0-255, at 64x36 grey, averaged over a second (camera and
-# subject motion together). Measured 2026-10-26 on a DGX Spark, per second: the Viking v2 pieces the owner found too
-# slow, 1.9 to 11 (the street fight, piece 5: 1.9, 3.4, 4.0, 6.7, 7.7, 7.5, 7.0, 11.0, 7.7, 4.9; the last stand, piece
-# 6: 2.1 to 5.4), a sprint down a street 4.4 to 26, two dancers at speed 9.0 to 15.0, a calm baker 0.8 to 2.7. Below
-# SLOW a second reads as slow for a fight. Ten clips: a first line, to be measured again on more.
-SLOW = 8.0
+# subject motion together). It scales with speed: the same clip made 0.5x slow motion (motion-interpolated) measures
+# 0.31 to 0.58 of itself, 0.49 at the median (51 clips, 433 s, measured 2026-10-26 on a DGX Spark). On the 17 action
+# clips among them (fights, a sprint, dancers, the Viking v2 pieces, the merge gate's films), SLOW at 6 calls 87 % of
+# the seconds of their 0.5x copies slow and 40 % of their own seconds (most of which the owner had found too slow:
+# the Viking v2 pieces, the openings of the gate's fights at 2.0 to 5.7); 8 caught 95 % but called 65 % slow, 5 caught
+# 77 % and 31 %. Calm clips sit at 0.4 to 3: a calm piece is never measured against it.
+SLOW = 6.0
+OPENING_S = 2  # a fight's first seconds that must not all be slow
 
 
 def motion(clip_path, env=None, fps: int = 24) -> list[float]:
@@ -367,11 +387,17 @@ def pace_verdict(pace: dict, seconds_motion: list[float], slow_answers: list[tup
     eyes = [a for t, a in slow_answers if a and planned(pace, t, length) != "slow"]
     eyes_slow = eyes.count("yes") / len(eyes) if eyes else None
     failed = share >= 0.85 if eyes_slow is None else (share >= 0.6 and eyes_slow > 0.5)
+    # the opening: the first OPENING_S seconds, planned fast, all measuring slow (an ease-in from a still frame)
+    head = [s for s in range(min(OPENING_S, len(seconds_motion))) if planned(pace, s + 0.5, length) == "fast"]
+    slow_open = bool(head) and len(head) == min(OPENING_S, len(seconds_motion)) and all(seconds_motion[s] < SLOW for s in head)
     out = {"kind": pace["kind"], "motion": seconds_motion, "slow_share": round(share, 2), "eyes_slow": None if eyes_slow is None else round(eyes_slow, 2),
-           "threshold": SLOW}
+           "threshold": SLOW, "opening": [seconds_motion[s] for s in head]}
     if failed:
         out.update(status="major", evidence=(f"planned fast, it comes out slow: {len(slow_fast)} of {len(fast)} fast seconds measure under "
                                              f"{SLOW:g}" + (f", and the eyes saw slow motion in {round(100 * eyes_slow)} % of its fast windows" if eyes_slow is not None else "")))
+    elif slow_open:
+        out.update(status="major", evidence=(f"the fight opens slowly: its first {len(head)} seconds, planned fast, measure "
+                                             + ", ".join(f"{seconds_motion[s]:.1f}" for s in head) + f" (under {SLOW:g}); start it already in motion"))
     else:
         out["status"] = "ok"
     return out

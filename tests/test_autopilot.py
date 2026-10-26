@@ -114,7 +114,7 @@ class Queue:
 
     def submit(self, body):
         params = body["params"]
-        if body["kind"] == "scout":  # a keyframe: one still, where the server's scout job puts it
+        if body["kind"] in ("scout", "edit"):  # a keyframe: one still (made, or edited from a portrait), where those jobs put it
             job_id = f"j{len(self.jobs) + 1}"
             picture = HOME / "scouts" / job_id / f"scout_s{params['seed']}.png"
             picture.parent.mkdir(parents=True, exist_ok=True)

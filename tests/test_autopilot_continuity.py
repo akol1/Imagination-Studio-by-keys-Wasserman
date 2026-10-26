@@ -68,8 +68,9 @@ def test_the_bible_versions_facts_across_an_era_change(loop, monkeypatch):
     assert live(bible, 2, "eirik", "look") == ["a ten-year-old with copper braids"]
     assert live(bible, 3, "eirik", "look") == ["a man of twenty-five with copper braids and a brown frock coat"]
     assert live(bible, 4, "eirik", "marks") == ["small crescent scar, left cheekbone"]
-    assert live(bible, 2, "eirik", "wardrobe") == ["rough undyed wool tunic, soaked"] and live(bible, 3, "eirik", "wardrobe") == []
-    tunic = next(f for f in bible["facts"] if f["key"] == "wardrobe")
+    # the man's sheet brings its own wardrobe line for its era (continuity.wardrobe_line), canonical from segment 3
+    assert live(bible, 2, "eirik", "wardrobe") == ["rough undyed wool tunic, soaked"] and live(bible, 3, "eirik", "wardrobe") == ["a brown frock coat"]
+    tunic = next(f for f in bible["facts"] if f["key"] == "wardrobe" and "tunic" in f["value"])
     assert (tunic["from"], tunic["to"], tunic["era"]) == (1, 2, 1)  # closed, not overwritten: the history stays
     # the eyes check segment 3 against the new era; the Director of segment 4 reads it
     check3 = watcher.checklists[2]

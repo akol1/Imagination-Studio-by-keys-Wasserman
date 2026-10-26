@@ -200,6 +200,14 @@ as "no answer" to every question, so a good piece was rendered again. Now (`app/
   it off.) An answer that is not JSON, or answers fewer than
   70 % of the questions, is asked again once. The reader is tolerant: nested answers are flattened, Python's
   `True`/`None`, trailing commas and single quotes are put right, reasoning in think tags is dropped.
+- **Wardrobe, one exact line.** Each cast sheet's clothes become one short line (`wardrobe` on the sheet, else the parts
+  of its look that name clothes, in its own words): a canonical fact of the bible for that sheet's segments (era), never
+  replaced by what the eyes see. It is said word for word in every keyframe and video prompt that names the person
+  ("Eirik Hale wears exactly this in every shot: brown wool coat over a cream linen shirt, dark breeches, black boots"),
+  every window asks whether he wears it, and the join asks for the same clothes. A confirmed wardrobe drift is a major
+  in `standard` (a retake). With keyframes on and a cast picture for the era, the keyframe is an edit of that portrait
+  (an `edit` job, the other named people's pictures beside it, at the video's size), not a picture drawn from words;
+  `keyframe_model` picks the picture model.
 - **Votes.** A failed question of a major kind is asked again on its own until `checks.votes` (3) answers, and fails
   only by a majority of the yes/no answers; a tie fails nothing. Then the second look (above) has the last word.
 - **The keyframe** gets the same questions (one still) before anything moves (`checks.keyframe`).
@@ -235,10 +243,17 @@ Every Viking v2 piece came out slow. Its motion prompts gave one long sentence o
   and quick handheld reframes, with slow motion only from 6 to 8 s on the centerline punch, then straight back to full
   real-time speed." A calm piece gets no pace words.
 - **The pace is measured.** `checks.motion` takes the mean difference between consecutive frames (64x36 grey) a second
-  at a time. Measured on a DGX Spark (2026-10-26): the Viking v2 pieces the owner found too slow 1.9 to 11 a second
-  (the street fight 1.9 to 11, mostly under 8; the last stand 2.1 to 5.4), a sprint down a street 4.4 to 26, two
-  dancers at speed 9.0 to 15.0, a calm baker 0.8 to 2.7. Under 8 (`checks.SLOW`) a second reads as slow for a fight.
-  This line comes from ten clips: measure it again on more.
+  at a time. It scales with speed: the same clip made 0.5x slow motion measures about half (0.31 to 0.58, median 0.49;
+  51 clips, 433 s). On the 17 action clips among them, 6 (`checks.SLOW`) calls 87 % of their 0.5x seconds slow and 40 %
+  of their own (most of those the owner had found too slow: the Viking v2 pieces, the gate's fight openings at 2.0 to
+  5.7); 8 caught 95 % but called 65 % slow. Calm clips sit at 0.4 to 3 and are never measured against it.
+- **A fight starts in motion.** On the merge gate's films the fight openings measured 3 to 5 a second against 13 to 22
+  in their exchanges: H3 eases out of a still frame. The fight's action now opens with "From the very first frame,
+  already in motion at full real-time speed:", the Director writes the strike already under way and ends each fight
+  piece mid-movement (the next one starts from that frame), a fight's keyframe catches a blow in motion (the eyes are
+  asked, and a stand-off is drawn again), and a fight whose first two seconds, planned fast, both measure slow is a
+  pace retake. MiniMax H3 has no negative prompt (and the Studio never writes "no X" lines), so "slow motion" is kept
+  out of the prompt except for the planned key move.
 - **The eyes are asked too**: "is the motion in these frames slow motion?" in each window of a fight.
 - **A fight that comes out slow is a major** (`pace`, a retake in `standard` and `strict`): 60 % or more of the
   seconds the plan has fast measure slow and the eyes said slow motion in most of those windows (85 % when the eyes

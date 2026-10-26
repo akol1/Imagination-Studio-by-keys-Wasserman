@@ -42,7 +42,8 @@ STRICTNESS = {
     # retake: the categories whose confirmed major finding renders the segment again; unsure: what a major finding
     # becomes when its second look cannot be made
     "lenient": {"retake": ("identity", "era"), "unsure": "drop"},
-    "standard": {"retake": ("identity", "era", "setting", "story", "action", "pace"), "unsure": "minor"},
+    # wardrobe is part of who someone is (the gate's Infinity film: a brown waistcoat became a dark coat with gold trim)
+    "standard": {"retake": ("identity", "wardrobe", "era", "setting", "story", "action", "pace"), "unsure": "minor"},
     "strict": {"retake": WATCHED, "unsure": "major"},
 }
 DEFAULT = {"strictness": "standard", "categories": list(CATEGORIES), "film_pass": True}
@@ -71,6 +72,23 @@ ERA_KEYS = ("age", "hair", "build", "look")  # identity that an era may change; 
 LOOKED_ONCE = ("face", "hair", "eyes", "age", "build", "look", "marks")  # set once an era from what is seen: a later look is checked against it
 STORY_LIMIT, DIRECTOR_STORY, CHECK_STORY = 10 ** 6, 14, 6
 CORRECTIONS = 8
+
+
+CLOTHES = re.compile(r"\b(coat|jacket|shirt|tunic|cloak|cape|dress|gown|skirt|trousers|breeches|pants|jeans|boots|shoes|belt|"
+                     r"vest|waistcoat|hood|hat|helmet|armou?r|mail|apron|robe|scarf|gloves|sash|uniform|kilt|sandals|collar|"
+                     r"jersey|sweater|hoodie|leggings|bodice|doublet|furs?|shield|visor)\b", re.I)
+
+
+def wardrobe_line(character: dict) -> str:
+    """A cast sheet's wardrobe as one short, exact line: its own ``wardrobe`` when the seed gives one, else the parts of
+    its look that name clothes (and what is carried), in the sheet's own words. Said word for word in every keyframe and
+    video prompt of its segments, and checked against in every window."""
+
+    given = str(character.get("wardrobe") or "").strip()
+    if given:
+        return clip(given, 30)
+    parts = [p.strip() for p in re.split(r"[,;]|\bwith\b|\band\b|\bwearing\b|\bin\b(?= (?:a|an|his|her|their)\b)", str(character.get("look") or "")) if p.strip()]
+    return clip(", ".join(p for p in parts if CLOTHES.search(p)), 30)
 
 
 def slug(text) -> str:
@@ -215,6 +233,8 @@ def new(seed: dict, cast: dict | None = None) -> dict:
                 subject["ref"] = c["image"]
             if c.get("look"):
                 establish(bible, sid, "identity", "look", c["look"], c.get("from") or 1, "seed", until=c.get("to"), words=80)
+            if wardrobe_line(c):  # canonical for its segments: what the eyes see is checked against it, never replaces it
+                establish(bible, sid, "wardrobe", "wardrobe", wardrobe_line(c), c.get("from") or 1, "seed", until=c.get("to"), words=30)
     for name, look in (cast or {}).items():
         if look and subject_of(bible, name, "character", create=False) is None:
             sid = subject_of(bible, name, "character")

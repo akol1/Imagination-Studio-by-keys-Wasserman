@@ -376,8 +376,10 @@ sharp impacts, a snappy camera (whip pans, quick handheld reframes). Slow motion
 only (the decisive blow, a signature technique), a third of the segment at most, and its timing is written into \
 "action", like "0-6 s rapid real-time exchange of punches and blocks; 6-8 s slow motion on the centerline punch; \
 8-10 s back to full speed as he drives forward". "pace.beats" lists those seconds with their speed. Outside the key \
-move neither "action" nor "camera" says slow or slowly. A calm or dialogue segment moves at natural real-time speed; \
-its "beats" may be empty.
+move neither "action" nor "camera" says slow or slowly. A fight "action" opens with the strike already under way (its \
+first words are the movement: "Eirik's fist is already driving into ..."), never with a stand-off or a look, and a fight \
+segment ends in the middle of a movement, never a still pose: the next one starts from that frame. A calm or dialogue \
+segment moves at natural real-time speed; its "beats" may be empty.
 
 You run the film on your own: nobody approves a segment. You choose the story's next step and the camera for every \
 segment yourself (framing, angle, movement: whatever shows the action best; there is no fixed camera mode). Favour \
@@ -693,6 +695,7 @@ def clean_seed(given: dict) -> dict:
         first, last = span(c.get("segments"))
         characters.append({"id": re.sub(r"[^a-z0-9]+", "_", str(c["name"]).lower()).strip("_") or f"c{i + 1}",
                            "name": str(c["name"]).strip()[:80], "look": str(c.get("look") or "").strip()[:600], "image": image or None,
+                           **({"wardrobe": str(c["wardrobe"]).strip()[:300]} if str(c.get("wardrobe") or "").strip() else {}),
                            **({"from": first} if first else {}), **({"to": last} if last else {})})
     outline = []
     for i, beat in enumerate((given.get("outline") or [])[:LIMIT]):
@@ -740,6 +743,8 @@ def clean_settings(given: dict, base: dict | None = None) -> dict:
     for key in ("preset", "quality"):
         if given.get(key):
             s[key] = str(given[key])
+    if given.get("keyframe_model") is not None:  # the picture model an edited keyframe is drawn with ("" for the Studio's default)
+        s["keyframe_model"] = str(given["keyframe_model"]).strip()[:40]
     for key, low, high in (("seconds", 1, 15), ("segments", 0, LIMIT), ("seed", 0, 2 ** 31 - 1), ("max_scene_segments", 2, 50),
                            ("beat_history", 3, 50), ("retakes", 0, RETAKES), ("preview_every", 1, 50), ("width", 256, 1536), ("height", 256, 1536),
                            ("think_tokens", 0, 32768), ("max_minutes", 0, 60 * 24 * 30), ("max_film_seconds", 0, 10 ** 6), ("film_every", 1, 100),
@@ -1210,8 +1215,13 @@ def keyframes_for(run: dict, index: int) -> bool:
     return wanted and not (beat_of(run, index) or {}).get("image")
 
 
+# the video sizes of the presets AutoPilot offers (server.PRESETS): an edited keyframe is made at the video's own size
+PRESET_SIZES = {"sharp": (1376, 768), "small": (864, 480), "p720": (1280, 736), "native": (1344, 768), "draft": (1344, 768)}
+
 KEYFRAME_ASK = ("\nThis segment opens on a keyframe made first by the picture model: fill \"keyframe\" with that opening still "
-                "(who is where, the framing, the place, the light; 60 words at most), and write the action from that picture on.")
+                "(who is where, the framing, the place, the light; 60 words at most), and write the action from that picture on. "
+                "A fight's keyframe catches a blow already in motion (a fist or a weapon mid-swing, a body leaning into the "
+                "strike), never a stand-off: the video model eases slowly out of a still pose.")
 
 
 def director_asker(run: dict):
@@ -1392,19 +1402,37 @@ def mode_of(run: dict, seg: dict) -> str:
     return "text"
 
 
+def wardrobe_at(run: dict, name: str, index: int) -> str:
+    """The exact wardrobe line of ``name`` in segment ``index``: the seed sheet's for its segments (continuity.wardrobe_line)."""
+
+    for c in run["seed"].get("characters") or []:
+        if c.get("name") == name and (c.get("from") or 1) <= index <= (c.get("to") or 10 ** 6):
+            return continuity.wardrobe_line(c)
+    return ""
+
+
 def look_lines(run: dict, fields: dict, index: int) -> str:
-    """The pinned looks of the cast this segment names, said every time: the renderer has no memory."""
+    """The pinned looks of the cast this segment names, said every time (the renderer has no memory), each with its
+    exact wardrobe line again: "the same clothes in every shot"."""
 
     text = " ".join(str(fields.get(k) or "") for k in ("setting", "action")).lower()
-    return " ".join(f"{name} is {look.rstrip('.')}." for name, look in cast_at(run, index).items()
-                    if look and name.lower().split()[0] in text)
+    out = []
+    for name, look in cast_at(run, index).items():
+        if look and name.lower().split()[0] in text:
+            out.append(f"{name} is {look.rstrip('.')}.")
+            wear = wardrobe_at(run, name, index)
+            if wear:
+                out.append(f"{name} wears exactly this in every shot: {wear.rstrip('.')}.")
+    return " ".join(out)
 
 
 def prompt_of(run: dict, seg: dict, mode: str) -> str:
     s, f = run["settings"], dict(seg["fields"])
-    paced = checks.pace_line(checks.pace_of(seg.get("pace")), float(seg.get("seconds") or 10))
+    pace = checks.pace_of(seg.get("pace"))
+    paced = checks.pace_line(pace, float(seg.get("seconds") or 10))
     if paced:
-        f["action"] = (f.get("action", "").rstrip() + " " + paced).strip()
+        # a fight starts in motion: the speed is the first thing the action says, the plan's pace after it
+        f["action"] = (checks.pace_opening(pace) + " " + f.get("action", "").strip() + " " + paced).strip()
     style = style_at(s, seg["index"])  # only this segment's era or setting: a style for every era bled Boston into the sea
     music = f.get("music") or "N/A"
     if s.get("music") and music.upper() == "N/A":
@@ -1415,7 +1443,8 @@ def prompt_of(run: dict, seg: dict, mode: str) -> str:
         names = [c["name"] for c in pictured(run, seg["index"])]
         for line in dialogue:
             line["subject"] = names.index(line["speaker"]) + 1 if line["speaker"] in names else 1
-        fields = {"scene": " ".join(bit for bit in (style, f.get("setting", "")) if bit), "camera": f.get("camera", ""),
+        wear = " ".join(f"{n} wears exactly this in every shot: {wardrobe_at(run, n, seg['index']).rstrip('.')}." for n in names if wardrobe_at(run, n, seg["index"]))
+        fields = {"scene": " ".join(bit for bit in (style, wear, f.get("setting", "")) if bit), "camera": f.get("camera", ""),
                   "action": f.get("action", ""), "dialogue": dialogue, "soundscape": f.get("soundscape", ""), "music": music,
                   "subjects": names, "people": True}
         return compose_references(fields, len(names))
@@ -1563,11 +1592,27 @@ def render_keyframe(run: dict, seg: dict) -> None:
     params = {"prompt": prompt, "count": 1, "seed": int(seg["seed"]) + 7919 * (n - 1), "preset": s["preset"], "autopilot": {"run": run["id"], "segment": seg["index"], "keyframe": n}}
     if s["preset"] == "custom" and s.get("width") and s.get("height"):
         params.update(width=int(s["width"]) // 16 * 16, height=int(s["height"]) // 16 * 16)
+    kind = "scout"
+    named = " ".join((seg.get("keyframe_prompt") or "", seg["fields"].get("action", ""), seg["fields"].get("setting", ""))).lower()
+    portraits = [c for c in pictured(run, seg["index"]) if c["name"].lower().split()[0] in named][:3]
+    if portraits:
+        # the era's reference portrait is the picture the keyframe is drawn from (an edit of it, the others beside it):
+        # face, hair and clothes come from the picture, not from words the picture model reads its own way
+        kind = "edit"
+        who = "; ".join(f"image {i + 1} is {c['name']}" for i, c in enumerate(portraits))
+        params = {"image": portraits[0]["image"], "images": [c["image"] for c in portraits[1:]], "seed": params["seed"],
+                  "prompt": (f"{who}. Keep each one's face, hair, beard and clothes exactly as in their picture. Make this film still: "
+                             + prompt), "autopilot": params["autopilot"],
+                  **({"image_model": s["keyframe_model"]} if s.get("keyframe_model") else {})}
+        size = PRESET_SIZES.get(s["preset"]) or ((int(s["width"]) // 16 * 16, int(s["height"]) // 16 * 16) if s.get("width") and s.get("height") else None)
+        if size:
+            params.update(width=size[0], height=size[1])
     try:
-        job = submit({"kind": "scout", "title": f"AutoPilot · {run['name']} · {seg['index']}: keyframe {n}", "params": params})
+        job = submit({"kind": kind, "title": f"AutoPilot · {run['name']} · {seg['index']}: keyframe {n}", "params": params})
     except HTTPException as error:
         raise Failed(f"the queue refused the keyframe of segment {seg['index']}: {error.detail}") from None
-    seg.setdefault("keyframes", []).append({"take": n, "round": round_, "job": job["id"], "prompt": prompt, "seed": params["seed"], "path": None})
+    seg.setdefault("keyframes", []).append({"take": n, "round": round_, "job": job["id"], "prompt": prompt, "seed": params["seed"], "path": None,
+                                            "kind": kind, **({"from": params["image"]} if kind == "edit" else {})})
     seg.update(status="keyframe_queued", job=job["id"])
     say(run, f"Segment {seg['index']}: its keyframe" + (f", take {n}" if n > 1 else "") + ".", stage="keyframe", segment=seg["index"], job=job["id"])
 
@@ -1961,7 +2006,7 @@ def yes_no(run: dict, asker, pictures: list, header: str, asked: list, opts: dic
     failed = []
     for q in asked:
         answer = found.get(q["key"])
-        if q["category"] == "pace" or not answer or answer == q["expect"]:
+        if q["key"] == "pace" or not answer or answer == q["expect"]:  # the windows' pace answer is weighed in pace_verdict
             continue
         if q["major"] and opts["votes"] > 1:
             answer = checks.vote(asker, pictures, header, q, answer, opts["votes"], slate.extract_json, log, {**where, "kind": "vote"})
@@ -2072,6 +2117,8 @@ def dense_keyframe(run: dict, seg: dict, picture: Path, folder: Path) -> dict:
     work.mkdir(parents=True, exist_ok=True)
     asked = [q for q in checks.questions(bible, index, {**seg, "mode": "keyframe"}, cast_at(run, index), categories, continuity)
              if "between these frames" not in q["text"]]
+    if "pace" in continuity.watched(copts) and checks.pace_of(seg.get("pace"))["kind"] in checks.FAST_KINDS:
+        asked.append(checks.MID_MOTION)  # a fight opens on a blow in motion, not a stand-off
     if not asked:
         return {"findings": [], "log": [], "stats": checks.summary([])}
     refs = references(run, bible, index, seg, work)

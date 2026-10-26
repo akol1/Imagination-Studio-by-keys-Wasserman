@@ -87,7 +87,13 @@ def test_a_fight_that_comes_out_slow_throughout_fails_and_one_at_speed_passes():
     eyes_slow = [(1, "yes"), (3, "yes"), (5, "yes"), (7, "yes"), (9, "yes")]
     assert checks.pace_verdict(plan, slow, eyes_slow, 10)["status"] == "major"
     assert checks.pace_verdict(plan, fast, [(1, "no"), (3, "no"), (9, "no")], 10)["status"] == "ok"
-    assert checks.pace_verdict(plan, slow, [(1, "no"), (3, "no"), (9, "no")], 10)["status"] == "ok"  # the eyes disagree: not a retake
+    late = [12.0, 12.0] + [0.8] * 8
+    assert checks.pace_verdict(plan, late, [(1, "no"), (3, "no"), (9, "no")], 10)["status"] == "ok"  # the eyes disagree: not a retake
+    # an opening that eases in from a still frame is a retake by measurement alone, whatever the rest does
+    opening = checks.pace_verdict(plan, [3.1, 4.9] + [14.0] * 8, [(1, "no"), (3, "no")], 10)
+    assert opening["status"] == "major" and "opens slowly" in opening["evidence"] and opening["opening"] == [3.1, 4.9]
+    assert checks.pace_verdict(plan, [3.1, 9.0] + [14.0] * 8, [], 10)["status"] == "ok"
+    assert checks.pace_opening(plan).startswith("From the very first frame") and checks.pace_opening(checks.pace_of({"kind": "calm"})) == ""
     assert checks.pace_verdict(plan, slow, [], 10)["status"] == "major"  # no answer from the eyes: the measurement, stricter
     assert checks.pace_verdict(checks.pace_of({"kind": "calm"}), slow, [], 10)["status"] == "not_planned"
 
@@ -489,3 +495,46 @@ def test_each_window_asks_about_a_double_and_the_sheets_clothes():
     texts = [q["text"] for q in asked]
     assert any("second person who looks like Eirik" in t for t in texts)
     assert any(q["category"] == "wardrobe" and "grey wool tunic" in q["text"] for q in asked)
+
+
+# ---------- the wardrobe, one exact line ----------
+
+def test_each_sheet_gets_one_exact_wardrobe_line_said_in_every_prompt(loop, monkeypatch):
+    continuity = autopilot.continuity
+    assert continuity.wardrobe_line({"look": "a man of thirty, copper-red hair tied back, brown wool coat over a cream linen shirt, black boots"}) == \
+        "brown wool coat over a cream linen shirt, black boots"
+    assert continuity.wardrobe_line({"look": "a man of twenty-five with copper braids and a brown frock coat"}) == "a brown frock coat"
+    assert continuity.wardrobe_line({"look": "x", "wardrobe": "a brown waistcoat, cream shirt"}) == "a brown waistcoat, cream shirt"
+    run = go(new_run(2, continuity={"film_pass": False}))
+    bible = json.loads((autopilot.run_dir(run["id"]) / "bible.json").read_text())
+    fact = next(f for f in bible["facts"] if f["category"] == "wardrobe" and f["source"] == "seed")
+    assert fact["value"] == "chrome visor, orange reflective jacket"  # the sheet's clothes, canonical: what the eyes see never replaces it
+    for body in loop["queue"].bodies:
+        assert "Vex wears exactly this in every shot: chrome visor, orange reflective jacket." in body["params"]["prompt"]
+
+
+def test_a_keyframe_is_drawn_from_the_eras_portrait(loop, monkeypatch):
+    import subprocess
+    portrait = HOME / "uploads" / "vex-portrait.png"
+    portrait.parent.mkdir(parents=True, exist_ok=True)
+    subprocess.run(["ffmpeg", "-v", "error", "-y", "-f", "lavfi", "-i", "color=c=orange:size=160x96", "-frames:v", "1", str(portrait)], check=True)
+    from test_autopilot import SEED, client
+    seed = {**SEED, "characters": [{**SEED["characters"][0], "image": "uploads/vex-portrait.png"}]}
+    said = client.post("/api/autopilot/runs", json={"name": "Portrait", "seed": seed, "settings": {"segments": 1, "keyframes": "on", "identity": "frame",
+                                                                                               "preset": "sharp", "continuity": {"film_pass": False}}})
+    run = go(autopilot.load(said.json()["id"]))
+    edits = [b for b in loop["queue"].bodies if b["kind"] == "edit"]
+    assert edits and edits[0]["params"]["image"] == "uploads/vex-portrait.png" and (edits[0]["params"]["width"], edits[0]["params"]["height"]) == (1376, 768)
+    assert "image 1 is Vex" in edits[0]["params"]["prompt"] and "wears exactly this in every shot" in edits[0]["params"]["prompt"]
+    assert run["segments"][0]["keyframes"][0]["kind"] == "edit" and run["segments"][0]["mode"] == "keyframe"
+
+
+def test_a_fight_prompt_opens_in_motion_and_its_keyframe_is_asked_for_motion(loop, monkeypatch):
+    monkeypatch.setattr(autopilot, "ask_text", FightDirector())
+    monkeypatch.setattr(autopilot.checks, "motion", lambda clip, env=None: [12.0] * 10)
+    watcher = Watcher(yesno=answers_for({}))
+    monkeypatch.setattr(autopilot, "ask_vision", watcher)
+    run = go(new_run(1, keyframes="on", continuity={"film_pass": False}))
+    video = next(b for b in loop["queue"].bodies if b["kind"] == "video")["params"]["prompt"]
+    assert "From the very first frame, already in motion at full real-time speed: Vex fights" in video
+    assert any("caught in the middle of a fast movement" in p for p, _ in watcher.yesno)
