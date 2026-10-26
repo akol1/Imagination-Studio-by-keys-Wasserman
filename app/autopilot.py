@@ -2081,9 +2081,10 @@ def dense_check(run: dict, seg: dict, clip: Path, folder: Path, take: int, lengt
     if fast:
         paced = checks.pace_verdict(pace, checks.motion(clip, qa.ENV), slow_answers, length)
         asked_about.add("pace")
-        if paced["status"] == "major":
+        if paced["status"] in ("major", "minor"):
             failed_about.add("pace")
-            failed.append({"category": "pace", "status": "major", "verdict": "major", "frame": 0, "subject": "", "source": "measured", "evidence": paced["evidence"]})
+            failed.append({"category": "pace", "status": paced["status"], "verdict": paced["status"], "frame": 0, "subject": "", "source": "measured",
+                           "evidence": paced["evidence"] + ("; the film cuts that lead" if paced["status"] == "minor" else "")})
     # one finding a question (the first window it failed in, with how many windows saw it)
     findings, seen = [], {}
     for f in failed:

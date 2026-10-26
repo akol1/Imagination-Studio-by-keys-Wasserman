@@ -90,8 +90,10 @@ def test_a_fight_that_comes_out_slow_throughout_fails_and_one_at_speed_passes():
     late = [12.0, 12.0] + [0.8] * 8
     assert checks.pace_verdict(plan, late, [(1, "no"), (3, "no"), (9, "no")], 10)["status"] == "ok"  # the eyes disagree: not a retake
     # an opening that eases in from a still frame is a retake by measurement alone, whatever the rest does
-    opening = checks.pace_verdict(plan, [3.1, 4.9] + [14.0] * 8, [(1, "no"), (3, "no")], 10)
+    opening = checks.pace_verdict(plan, [3.1, 4.9] + [4.0] * 8, [(1, "no"), (3, "no")], 10)
     assert opening["status"] == "major" and "opens slowly" in opening["evidence"] and opening["opening"] == [3.1, 4.9]
+    # a slow lead that a fast second follows is cut from the film (ease_in): a note, not a retake
+    assert checks.pace_verdict(plan, [3.1, 4.9] + [14.0] * 8, [(1, "no"), (3, "no")], 10)["status"] == "minor"
     assert checks.pace_verdict(plan, [3.1, 9.0] + [14.0] * 8, [], 10)["status"] == "ok"
     assert checks.pace_opening(plan).startswith("From the very first frame") and checks.pace_opening(checks.pace_of({"kind": "calm"})) == ""
     assert checks.pace_verdict(plan, slow, [], 10)["status"] == "major"  # no answer from the eyes: the measurement, stricter

@@ -403,7 +403,10 @@ def pace_verdict(pace: dict, seconds_motion: list[float], slow_answers: list[tup
         out.update(status="major", evidence=(f"planned fast, it comes out slow: {len(slow_fast)} of {len(fast)} fast seconds measure under "
                                              f"{SLOW:g}" + (f", and the eyes saw slow motion in {round(100 * eyes_slow)} % of its fast windows" if eyes_slow is not None else "")))
     elif slow_open:
-        out.update(status="major", evidence=(f"the fight opens slowly: its first {len(head)} seconds, planned fast, measure "
+        # the film cuts a slow lead that a fast second follows (autopilot.ease_in): then it is a note for the Director,
+        # not a retake (on the pace and wardrobe run the retakes for it cost a render each and fixed one in three)
+        rescued = any(m >= SLOW for m in seconds_motion[len(head):])
+        out.update(status="minor" if rescued else "major", evidence=(f"the fight opens slowly: its first {len(head)} seconds, planned fast, measure "
                                              + ", ".join(f"{seconds_motion[s]:.1f}" for s in head) + f" (under {SLOW:g}); start it already in motion"))
     else:
         out["status"] = "ok"

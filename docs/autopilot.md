@@ -208,6 +208,10 @@ as "no answer" to every question, so a good piece was rendered again. Now (`app/
   in `standard` (a retake). With keyframes on and a cast picture for the era, the keyframe is an edit of that portrait
   (an `edit` job, the other named people's pictures beside it, at the video's size), not a picture drawn from words;
   `keyframe_model` picks the picture model.
+- **The user's cast is held hard.** Identity and wardrobe questions about the seed's cast are majors; about someone
+  the Director brought in (a thief, a guard) they are corrections, never retakes (on the pace and wardrobe run "is the
+  first thief the same person" redrew three keyframes and rendered two pieces again). A keyframe is asked "the same
+  person in every frame" only against a reference picture.
 - **Votes.** A failed question of a major kind is asked again on its own until `checks.votes` (3) answers, and fails
   only by a majority of the yes/no answers; a tie fails nothing. Then the second look (above) has the last word.
 - **The keyframe** gets the same questions (one still) before anything moves (`checks.keyframe`).
@@ -252,8 +256,14 @@ Every Viking v2 piece came out slow. Its motion prompts gave one long sentence o
   already in motion at full real-time speed:", the Director writes the strike already under way and ends each fight
   piece mid-movement (the next one starts from that frame), a fight's keyframe catches a blow in motion (the eyes are
   asked, and a stand-off is drawn again), and a fight whose first two seconds, planned fast, both measure slow is a
-  pace retake. MiniMax H3 has no negative prompt (and the Studio never writes "no X" lines), so "slow motion" is kept
+  pace retake when nothing fast follows them, and a note for the Director when the film can cut them (below). MiniMax H3 has no negative prompt (and the Studio never writes "no X" lines), so "slow motion" is kept
   out of the prompt except for the planned key move.
+- **The film leaves out a fight's slow ease-in.** On the pace and wardrobe run (4 fight pieces at 1376x768, keyframes
+  edited from the hero's portrait and already mid-strike) 7 of 8 takes still opened at 2 to 5 a second before the
+  exchange ran at 10 to 16: MiniMax H3 eases out of the still it starts from, whatever the prompt says. When the film is
+  joined, the leading seconds of a fight piece that measure slow, planned fast, are cut (at most 2, only when a fast
+  second follows), and the piece joins with a quick dissolve. Re-joined, that film's fight openings measured 16.3,
+  4.5 and 5.4 for the first second instead of 4.1, 2.2 and 3.3.
 - **The eyes are asked too**: "is the motion in these frames slow motion?" in each window of a fight.
 - **A fight that comes out slow is a major** (`pace`, a retake in `standard` and `strict`): 60 % or more of the
   seconds the plan has fast measure slow and the eyes said slow motion in most of those windows (85 % when the eyes
