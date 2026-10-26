@@ -360,10 +360,11 @@ def questions(run: dict, shot: dict, wing: bool, keyframe: bool = False) -> list
     if keyframe:
         ask("pace", "Is someone caught in the middle of a fast movement, a blow or a block already in motion, rather than standing still?", "yes")
         return out
-    ask("action", f"Does this happen: {name} {shot['move']}?", "yes")
+    # the move as the choreography wrote it (it often names the opponent first: "Opponent 1 throws a hook; Chen ...")
+    ask("action", f"Does this happen in these frames: {shot['move'].rstrip('.')}?", "yes")
     if re.search(r"punch|strike|palm|elbow|kick|thrust|fist|hit", shot["move"] + shot["technique"], re.I):
         ask("action", "Does a blow visibly land on a body?", "yes")
-    ask("action", f"Does the struck man react like this: {shot['effect'].split('->')[-1].split('→')[-1].strip()}?", "yes")
+    ask("action", f"Does the struck man react like this: {shot['effect'].split('->')[-1].split('→')[-1].strip()}?", "yes", major=False)
     ask("physics", "Does anyone float, hover, or slide across the floor without stepping?", "no")
     ask("physics", "Does any arm, leg, hand or weapon bend, stretch, melt, duplicate or vanish?", "no")
     ask("physics", "Do two bodies merge into each other or pass through each other?", "no")
