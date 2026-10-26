@@ -471,3 +471,21 @@ def test_identity_questions_that_pass_in_every_window_overrule_the_watchers_drif
     second = run["segments"][1]
     assert len(second["takes"]) == 1 and second["passed"] is True
     assert second["watch"]["identity_drift"] is False and "every window" in second["watch"]["drift_overruled"]
+
+
+def test_the_watchers_drift_flag_is_read_leniently():
+    data = {"ending": "Eirik over the chest", "identity_drift": "True"}
+    assert autopilot.check_watch(data) == "" and data["identity_drift"] is True
+    data = {"ending": "Eirik over the chest"}
+    assert autopilot.check_watch(data) == "" and data["identity_drift"] is False
+
+
+def test_each_window_asks_about_a_double_and_the_sheets_clothes():
+    continuity = autopilot.continuity
+    cast = {"Eirik": "copper-red hair in a braid, short red beard, grey wool tunic"}
+    bible = continuity.new({"characters": [{"name": "Eirik", "look": cast["Eirik"]}]}, cast)
+    seg = {"fields": {"action": "Eirik swings his shield", "setting": "a shingle beach"}, "mode": "text"}
+    asked = checks.questions(bible, 1, seg, cast, list(continuity.WATCHED), continuity)
+    texts = [q["text"] for q in asked]
+    assert any("second person who looks like Eirik" in t for t in texts)
+    assert any(q["category"] == "wardrobe" and "grey wool tunic" in q["text"] for q in asked)
