@@ -11,8 +11,8 @@ good piece again. So:
             continuation's join (the last frame of the piece before beside this one's first) is a window of its own
   yes/no    each window gets short questions built from the continuity bible (is Eirik still the man in the
             reference? does he wear the brown coat? is this the cobbled street? anything from a later era? does a person
-            turn into another?), each answered "yes", "no" or "unclear"; pass or fail is decided here, against the answer
-            the bible expects. "unclear" and a missing answer are never a failure; an answer that is not JSON, or that
+            turn into another?), each answered "yes" or "no"; pass or fail is decided here, against the answer the bible
+            expects. A missing answer (or an "unclear" given anyway) is never a failure; an answer that is not JSON, or that
             answers less than ``ANSWERED`` of the questions, is asked again
   votes     a failed question of a major kind is asked again on its own, ``votes`` times in all, and fails only by a
             majority of the yes/no answers; the second look of autopilot.second_look still has the last word
@@ -36,8 +36,13 @@ FAST_KINDS = ("fight", "action", "chase")
 PACE_KINDS = FAST_KINDS + ("calm", "dialogue")
 SPEEDS = ("fast", "real", "slow")
 SLOW_WORDS = re.compile(r"\bslow[- ]?(motion|mo)\b|\bslowly\b|\bslow\b", re.I)
+# The questions offer only yes and no. With "unclear" offered as well, Cosmos3-Edge answered "unclear" to nearly every
+# question that expects "no" (a morph, a malformed hand, an out-of-era object, slow motion) on the first live Infinity
+# run (2026-10-26, a DGX Spark): 3 of 6 questions a window unanswered, every window asked twice. Asked yes or no only,
+# the same windows were answered in full in about 1 s each; with its reasoning on it took 3 to 11 s, refused once and
+# flipped two answers. An "unclear" that comes back anyway still counts as no answer.
 SYSTEM = ("You inspect frames of a film carefully and answer each question only from what you can see. "
-          "Answer with JSON only: one object mapping each key to \"yes\", \"no\" or \"unclear\".")
+          "Answer with JSON only: one object mapping each key to \"yes\" or \"no\".")
 
 
 def clip(text, words: int) -> str:
@@ -213,9 +218,8 @@ def join_questions(categories: list) -> list[dict]:
 
 def prompt(header: str, asked: list[dict]) -> str:
     listed = "\n".join(f'"{q["key"]}": {q["text"]}' for q in asked)
-    return (f"YES/NO CHECK. {header}\nAnswer each question with \"yes\" or \"no\", only from what the pictures show; when you "
-            f"cannot see it (out of shot, too small, turned away, too dark), answer \"unclear\".\n{listed}\n\n"
-            "Answer with one flat JSON object mapping each key to \"yes\", \"no\" or \"unclear\", and nothing else.")
+    return (f"YES/NO CHECK. {header}\nAnswer each question with \"yes\" or \"no\", only from what the pictures show.\n{listed}\n\n"
+            "Answer with one flat JSON object mapping each key to \"yes\" or \"no\", and nothing else.")
 
 
 # ---------- the answers ----------

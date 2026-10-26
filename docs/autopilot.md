@@ -192,8 +192,11 @@ as "no answer" to every question, so a good piece was rendered again. Now (`app/
 - **Yes/no, decided in code.** Each window gets short questions built from the bible: is Eirik the same person in
   every frame and as in his reference, does he wear the brown coat, does he hold the musket, is this the place the
   piece asked for, is anything out of place for the era, does a person turn into another, is a face or hand malformed,
-  is the light as the scene's. The eyes answer `yes`, `no` or `unclear`; pass or fail is decided against the answer the
-  bible expects. `unclear` and a missing answer are never a failure. An answer that is not JSON, or answers fewer than
+  is the light as the scene's. The eyes answer `yes` or `no`; pass or fail is decided against the answer the bible
+  expects. A missing answer is never a failure. (Offered `unclear` too, Cosmos3-Edge answered it to nearly every
+  question that expects "no" on the first live run; asked yes or no only, the same windows were answered in full in
+  about 1 s. With its reasoning on it took 3 to 11 s, refused once and flipped two answers, so the eyes are asked with
+  it off.) An answer that is not JSON, or answers fewer than
   70 % of the questions, is asked again once. The reader is tolerant: nested answers are flattened, Python's
   `True`/`None`, trailing commas and single quotes are put right, reasoning in think tags is dropped.
 - **Votes.** A failed question of a major kind is asked again on its own until `checks.votes` (3) answers, and fails
@@ -299,6 +302,31 @@ One run on a DGX Spark through the Studio's queue: 4 segments of 5 s at 864x480,
 a render took 1 min 16 s to 2 min 4 s (the first includes ComfyUI loading), the check and watch 41 s to 1 min 25 s (Whisper on the processor, Cosmos loaded
 for each look in about 3 s), the Director 9 to 17 s. One retake (the false drift described above, before the second
 look existed) and one Director answer that was not JSON, written again.
+
+**The first Infinity run** (2026-10-26, one DGX Spark beside its own Studio and a voice agent's Cosmos, which stayed
+up): a fight on a 1773 Boston quay, Infinity with a 30 s limit, 1376x768, FastH3 8 passes, 10 s pieces, Bolt as the
+Director with thinking on, Cosmos3-Edge as the eyes, one retake allowed.
+
+- Three pieces of 243 frames (10.1 s each), 30.3 s of film, about 61 min in all. Every piece kept its full length at
+  1376x768: the memory check found room each time, the guard never stopped a render, and the least available memory
+  seen was 27.2 GB (a 10 s render peaks near 71 GB). A render took 8 min 20 s to 9 min 20 s.
+- The Director: 22 s to 3 min a piece with Bolt reasoning (Bolt loaded again after each render). One answer was not
+  JSON and was asked again; a pace rule that wanted the slow span's seconds written into the action turned three
+  answers back and was dropped (the video prompt gets them from the plan).
+- The app was killed twice on purpose (once while piece 1 was being checked, once while its retake was): each time it
+  came back by itself on restart and went on from the checkpoint, checking the take that was already rendered rather
+  than rendering it again. Its Cosmos had been left behind on the Studio's port the first time; it now runs under the
+  leash and ended with the app the second time.
+- The dense checks: 10 to 12 requests and 32 questions a take, 12 to 13 s of a 9-minute piece (about 2 %). Cosmos3-Edge
+  had first been asked with its own reasoning on (its template's default) and spent 53 s and its whole budget on one
+  check without answering: it is now asked with it off (6.7 s for the checklist, about 1 s a window).
+- With the yes/no-only wording (after the run, the same pieces checked again): 29 of 30, 32 of 32 and 37 of 37
+  questions answered, 2 to 5 votes a piece, one setting finding filtered by the second look, one lighting correction,
+  and piece 1 found slow (5 of 8 fast seconds measured under 8, the eyes saw slow motion in every fast window): a pace
+  retake. Its prompt had the pace words: the words alone do not make H3 fast every time, the check and the retake are
+  what catch it.
+- Piece 1's first take was rendered again for identity drift from the watcher while its identity questions had passed
+  in every window; such a drift call is now a correction, not a retake.
 
 ## The vision brain
 
