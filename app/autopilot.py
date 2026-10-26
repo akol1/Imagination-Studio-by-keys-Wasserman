@@ -2232,8 +2232,9 @@ def choreograph(run: dict, seg: dict, folder: Path) -> None:
     count = int(opts.get("opponents") or 0) or max(3, len(fight.opponents_of(run["seed"])))
     wing = bool(re.search(r"wing ?chun", json.dumps(run["seed"]) + (s.get("guidance") or ""), re.I))
     say(run, f"Segment {seg['index']}: the Director choreographs the fight ({count} opponents).", stage="director", segment=seg["index"])
-    text = fight.prompt(run, seg, count, float(opts.get("seconds") or 45), style_at(s, seg["index"]))
-    data, rejected = ask_json(lambda t: ask_text(run, fight.SYSTEM, t), lambda d: fight.problem(d, count, wing), text, "fight choreography")
+    text = fight.prompt(run, seg, count, float(opts.get("seconds") or 45), style_at(s, seg["index"]))  # noqa: E501
+    target = float(opts.get("seconds") or 45)
+    data, rejected = ask_json(lambda t: ask_text(run, fight.SYSTEM, t), lambda d: fight.problem(d, count, wing, target), text, "fight choreography")
     f.update(state="keyframes", shots=fight.clean(data), location=str(data.get("location") or "")[:200], opponents=count, wing=wing,
              rejected=rejected)
     run["fight_location"] = f["location"]

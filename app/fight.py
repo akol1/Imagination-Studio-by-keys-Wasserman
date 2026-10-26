@@ -95,6 +95,14 @@ shown in detail.
 - Write in English."""
 
 
+def raw_seconds(target: float) -> tuple[float, int]:
+    """(seconds of shots to render, shots) for a fight of ``target`` seconds once ramped and trimmed: the shots run about
+    1.5x faster on average and lose TRIM_S each. On the first dojo run the Director wrote 9 shots, 20 s, for a 50 s fight."""
+
+    shots = max(6, round(target / 2.0))
+    return round(1.5 * (target + TRIM_S * shots)), shots
+
+
 def frames_for(seconds: float) -> int:
     return SHOT_FRAMES.get(min(SHOT_FRAMES, key=lambda s: abs(s - float(seconds or 2))), 56)
 
@@ -127,7 +135,7 @@ def prompt(run: dict, seg: dict, count: int, target: float, style: str) -> str:
             + f"The segment this fight is (its beat): {seg.get('beat', '')}\nIts setting: {(seg.get('fields') or {}).get('setting', '')}\n"
             + (f"Visual style: {style}\n" if style else "")
             + (f"The user's direction: {run['settings']['guidance']}\n" if run["settings"].get("guidance") else "")
-            + f"\nWrite the whole fight: about {target:.0f} seconds of shots in all (about {max(8, round(target / 2.5))} shots).\n"
+            + "\nWrite the whole fight: about {:.0f} seconds of shots in all, {} shots or more. It escalates: at first the opponents come one at a time and most take two or three shots before they go down (an exchange, a block, then the finish); later two or three attack at once; the last ones fall together.\n".format(*raw_seconds(target))
             + (f"\nThe hero fights in Wing Chun. Every move of his is one of these techniques, named in \"technique\" and said in "
                f"plain physical words in \"move\"; attack and defense at the same time, close range, short powerful strikes, elbows "
                f"in, the centerline; no big wind-ups, high spinning kicks or acrobatics for him. The opponents may fight in other "
@@ -136,7 +144,7 @@ def prompt(run: dict, seg: dict, count: int, target: float, style: str) -> str:
                if wing else ""))
 
 
-def problem(data: dict, count: int, wing: bool) -> str:
+def problem(data: dict, count: int, wing: bool, target: float = 0) -> str:
     """Why a choreography cannot be used ("" when it can)."""
 
     shots = data.get("shots")
@@ -171,6 +179,14 @@ def problem(data: dict, count: int, wing: bool) -> str:
             return f"shot {i}: the hero's technique is one of the Wing Chun techniques listed, by name"
         keys += bool(shot.get("key"))
         down = after
+    if target:
+        raw, wanted = raw_seconds(target)
+        total = sum(float(x.get("seconds") or 0) for x in shots)
+        if total < 0.8 * raw or len(shots) < 0.75 * wanted:
+            return (f"{len(shots)} shots, {total:g} s: the fight needs about {raw:.0f} s of shots, {wanted} shots or more. Most opponents "
+                    "take two or three shots before they go down (an exchange, a block, the finish); later several attack at once")
+        if count >= 5 and sum(1 for x in shots if len(x.get("opponents") or []) >= 2) < 2:
+            return "the fight escalates: at least two shots where two or three opponents attack at once"
     if keys > KEYS_MAX:
         return f"{keys} key moves: one or two decisive moves only, every other shot is a fast exchange"
     if down != set(range(1, count + 1)):

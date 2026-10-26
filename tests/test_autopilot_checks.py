@@ -591,6 +591,8 @@ def test_a_choreography_is_checked_in_code():
     assert "Wing Chun" in fight.problem({"shots": [{**DOJO[0], "technique": "spinning hook kick"}] + DOJO[1:]}, 3, True)
     assert "cause -> effect" in fight.problem({"shots": [{**DOJO[0], "effect": "he falls"}] + DOJO[1:]}, 3, True)
     assert "1.5 to 4" in fight.problem({"shots": [{**DOJO[0], "seconds": 8}] + DOJO[1:]}, 3, True)
+    # long enough for its target: on the first dojo run the Director wrote 9 shots, 20 s, for a 50 s fight
+    assert fight.raw_seconds(50) == (84, 25) and "84 s of shots" in fight.problem(good, 3, True, 50)
     shots = fight.clean(good)
     assert [s["frames"] for s in shots] == [56, 56, 73] and shots[2]["down_before"] == [1, 2]
     assert [fight.ramp_of(s) for s in shots] == [fight.RAMP_FALL, fight.RAMP_EXCHANGE, fight.RAMP_KEY]
@@ -609,6 +611,7 @@ def test_a_fight_segment_is_choreographed_shot_by_shot_ramped_and_cut(loop, monk
     import subprocess
     director = DojoDirector()
     monkeypatch.setattr(autopilot, "ask_text", director)
+    monkeypatch.setattr(fight, "raw_seconds", lambda target: (7, 3))  # a three-shot fight is long enough here
     monkeypatch.setattr(autopilot.checks, "motion", lambda clip, env=None: [12.0])
     answers = {"n": 0}
 
