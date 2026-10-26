@@ -965,7 +965,10 @@ def ask(backend: str, system: str, prompt: str, tier: str = "top", endpoint: str
             raise RuntimeError("no local model server answers: start Ollama, LM Studio, vLLM or llama.cpp, or set its address in Settings → Connections")
         plain = {"model": answering_model(models, model or config["local_model"]), "temperature": 0.7,
                  "messages": [{"role": "system", "content": system}, {"role": "user", "content": prompt}]}
-        thinking = {**plain, "chat_template_kwargs": {"enable_thinking": True}, "max_tokens": int(think) + THINK_ANSWER_TOKENS}
+        # thinking_budget closes the reasoning at the budget and lets the answer follow (TensorFold's engine); without it
+        # Bolt reasoned to the end of max_tokens on a Director prompt and answered nothing (a DGX Spark, 2026-10-26)
+        thinking = {**plain, "chat_template_kwargs": {"enable_thinking": True}, "thinking_budget": int(think),
+                    "max_tokens": int(think) + THINK_ANSWER_TOKENS}
 
         def asked_with(body: dict):
             def asked(live: str) -> str:
@@ -989,7 +992,9 @@ def ask(backend: str, system: str, prompt: str, tier: str = "top", endpoint: str
             except RuntimeError as error:
                 if not re.search(r"said 4(00|22)", str(error)):
                     raise
-            # the reasoning used the whole budget, or the server does not take the switch: once more without it
+            # the reasoning used the whole budget, or the server does not take the switch: once more without it, its
+            # length bounded (unbounded, that answer once ran to the server's 32,768 tokens of repetition)
+            return one({**plain, "max_tokens": THINK_ANSWER_TOKENS + 1000})
         return one(plain)
     if backend not in CLIS:
         raise RuntimeError("pick a brain: " + ", ".join(BACKENDS))

@@ -177,9 +177,16 @@ def questions(bible: dict, index: int, seg: dict, cast: dict, categories: list, 
         look = clip(cast.get(name), 16)
         ask("identity", f"Where {name} ({look}) is visible, is it clearly the same person in every frame"
                         + (" and the same person as in the reference picture" if sid and (bible["subjects"].get(sid) or {}).get("ref") else "") + "?", "yes")
+        # a double: generated crowds copy the hero (the gate's 4-piece film, 2026-10-26: a second braided man in the
+        # same grey tunic beside Eirik, unseen by every check of that run)
+        ask("identity", f"Is there a second person who looks like {name}: the same hair, beard and clothes?", "no")
         wear = next((f["value"] for f in facts if f["category"] == "wardrobe"), "")
         if wear:
             ask("wardrobe", f"Where {name} is visible, does {name} wear {clip(wear, 12)}?", "yes")
+        elif look:
+            # no wardrobe fact yet: the cast sheet's look (on the gate's Infinity run the brown wool coat became a
+            # waistcoat and nothing asked about it)
+            ask("wardrobe", f"Where {name} is visible, is {name} dressed as described here: {clip(cast.get(name), 30)}?", "yes")
         held = next((f["value"] for f in facts if f["category"] == "props" and f["key"] == "held"), "")
         if held:
             ask("props", f"Where {name} is visible, is {name} holding {clip(held, 10)}?", "yes", major=False)

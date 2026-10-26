@@ -1729,7 +1729,10 @@ def check_watch(data: dict) -> str:
         if data.get(key) is not None and not isinstance(data.get(key), list):
             return f'"{key}" is a list'
     if not isinstance(data.get("identity_drift"), bool):
-        return '"identity_drift" is true or false'
+        # read leniently: "true"/"false" as words, and left out as false (the identity questions of every window and
+        # the drift confirm look again). On the gate's Infinity run Cosmos3-Edge left it out three times in a row
+        word = str(data.get("identity_drift") or "").strip().lower()
+        data["identity_drift"] = word in ("true", "yes", "1")
     if not str(data.get("ending") or "").strip():
         return '"ending" says what the final frame shows'
     return ""

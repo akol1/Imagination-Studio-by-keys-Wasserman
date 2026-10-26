@@ -148,13 +148,14 @@ def test_the_director_asks_bolt_with_thinking_on_and_keeps_only_the_answer(bolt_
     assert said == '{"scene": "x"}'
     body = Server.bodies[-1]
     assert body["chat_template_kwargs"] == {"enable_thinking": True} and body["max_tokens"] == 4096 + agents.THINK_ANSWER_TOKENS
+    assert body["thinking_budget"] == 4096
     # reasoning left in the content, as some servers do
     Server.replies = [(200, {"content": "<think>the coat is brown</think>\n{\"a\": 1}"})]
     assert agents.ask("local", "sys", "q", endpoint=bolt_like, settings=config, think=512) == '{"a": 1}'
     # the reasoning used the whole budget: asked again without it
     Server.replies = [(200, {"content": "", "reasoning_content": "on and on"}), (200, {"content": '{"b": 2}'})]
     assert agents.ask("local", "sys", "q", endpoint=bolt_like, settings=config, think=512) == '{"b": 2}'
-    assert "chat_template_kwargs" not in Server.bodies[-1]
+    assert "chat_template_kwargs" not in Server.bodies[-1] and Server.bodies[-1]["max_tokens"] == agents.THINK_ANSWER_TOKENS + 1000
     # a server that refuses the switch
     Server.replies = [(400, "unknown field"), (200, {"content": '{"c": 3}'})]
     assert agents.ask("local", "sys", "q", endpoint=bolt_like, settings=config, think=512) == '{"c": 3}'
@@ -183,7 +184,7 @@ def answers_for(rules):
         keys = re.findall(r'^"(\w+)": (.*)$', prompt, re.M)
         out = {}
         for key, text in keys:
-            out[key] = "yes" if not re.search(r"change into a different|malformed|out of place|slow motion", text) else "no"
+            out[key] = "yes" if not re.search(r"change into a different|malformed|out of place|slow motion|second person who looks like", text) else "no"
             for pattern, said in rules.items():
                 if re.search(pattern, text):
                     out[key] = said.pop(0) if isinstance(said, list) else said

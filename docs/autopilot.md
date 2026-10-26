@@ -190,7 +190,8 @@ as "no answer" to every question, so a good piece was rendered again. Now (`app/
 - **Windows.** Each take is looked at in windows of about `checks.every` seconds (2), each `checks.frames` frames (3)
   with their times, after the reference picture of each person the shot names. A 10 s piece is five windows.
 - **Yes/no, decided in code.** Each window gets short questions built from the bible: is Eirik the same person in
-  every frame and as in his reference, does he wear the brown coat, does he hold the musket, is this the place the
+  every frame and as in his reference, is there a second person who looks like him (a double: generated crowds copy
+  the hero), does he wear the brown coat (the bible's wardrobe, else the cast sheet's look), does he hold the musket, is this the place the
   piece asked for, is anything out of place for the era, does a person turn into another, is a face or hand malformed,
   is the light as the scene's. The eyes answer `yes` or `no`; pass or fail is decided against the answer the bible
   expects. A missing answer is never a failure. (Offered `unclear` too, Cosmos3-Edge answered it to nearly every
@@ -248,14 +249,18 @@ Every Viking v2 piece came out slow. Its motion prompts gave one long sentence o
 When the film's brain is a local server (the Studio's Bolt above all), every Director question (the next piece, a
 retake from the findings, a keyframe rewrite, the chapter fold, the story so far) asks it to reason before it answers:
 `chat_template_kwargs: {"enable_thinking": true}`, the switch NVIDIA's chat template for Nemotron 3.5 Bolt reads, with
-`max_tokens` the reasoning budget (`think_tokens`, 4096) plus 3000 for the answer. TensorFold's engine takes the
+`thinking_budget` (`think_tokens`, 4096: the engine closes the reasoning there and the answer follows) and `max_tokens`
+that budget plus 3000 for the answer. Without `thinking_budget` Bolt reasoned to the end of `max_tokens` on a long
+Director prompt, answered nothing, and the plain retry, unbounded, ran to the server's 32,768 tokens: seven minutes for
+one piece. The retry without thinking is now bounded too (4000 tokens). TensorFold's engine takes the
 switch per request even though the Studio starts it with `--no-thinking`, and returns the reasoning in
 `reasoning_content`; it is dropped, and so are think tags left in the answer. When the reasoning uses the whole budget
 (an empty answer) or a server refuses the switch, the question is asked again without it. A CLI brain (Claude Code,
 Codex) reasons by itself: nothing changes there. `think: false` turns it off.
 
 Measured on a DGX Spark (2026-10-26, Bolt with the Studio's settings, a 10 s fight plan): 2222 reasoning tokens and
-22 s with thinking against 1.7 s without; the answer parsed as JSON both times.
+22 s with thinking against 1.7 s without; the answer parsed as JSON both times. With `thinking_budget`, a Director
+prompt of 1630 tokens: 4742 tokens and 52 s, ended by the model (`finish=stop`).
 
 ## Infinity
 
@@ -327,6 +332,10 @@ Director with thinking on, Cosmos3-Edge as the eyes, one retake allowed.
   what catch it.
 - Piece 1's first take was rendered again for identity drift from the watcher while its identity questions had passed
   in every window; such a drift call is now a correction, not a retake.
+
+**After a crash** the app picks the run up where it was. A take that was rendered is checked, not rendered again. A
+render that was still running when the app died goes on in ComfyUI on its own and is then queued again by the resumed
+run, so that piece costs one render more (measured: the gate's Infinity run, killed during piece 2).
 
 ## The vision brain
 
