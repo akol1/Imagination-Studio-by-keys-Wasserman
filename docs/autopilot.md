@@ -333,6 +333,27 @@ Director with thinking on, Cosmos3-Edge as the eyes, one retake allowed.
 - Piece 1's first take was rendered again for identity drift from the watcher while its identity questions had passed
   in every window; such a drift call is now a correction, not a retake.
 
+**The merge gate** (2026-10-26, one DGX Spark, a throwaway Studio from this branch beside the node's own Studio and
+Cosmos, runs started from the Studio's API as a user would, nobody stepping in):
+
+- A fixed film of 4 pieces across two eras (a Norse shore around 900, Boston in 1773; one man's sheet for each),
+  1376x768, 10.1 s pieces, Bolt reasoning, Cosmos3-Edge checking: 51 min, 4 pieces of 243 frames, no retake, no memory
+  event, the least available memory 25.3 GB. The eras stayed apart (no Boston in the Norse pieces, no longship in
+  Boston), each man kept his face, hair and clothes through his pieces. 118 check requests and 272 questions in all,
+  11 to 35 s a piece; one wardrobe finding became the Director's correction. Fight motion a second (see *Pace*): the
+  shield fight 4.1 to 15.3, the closing punches 13 to 22 before the fall, a fight opening that the Director planned at
+  real speed 3.3 to 5.4.
+- The same film on the code before the gate's fixes (seed 21): one retake, for an extra person the QA gate saw, which
+  the second take did not have; a second braided man in the hero's tunic that no check asked about (now asked); the
+  Director took seven minutes on one piece (now bounded by `thinking_budget`).
+- Infinity, 30 s limit: 3 pieces, killed by `kill -9` during piece 2's render and again by an outside memory watchdog
+  (set at 25 GB, the render's own dip went to 24.99 GB, the Studio's floor is 12.5 GB) after piece 3 had rendered. Both
+  times the restarted app went on by itself; the second time the rendered piece was checked, not rendered again.
+  Cosmos3-Edge once left `identity_drift` out three times in a row: Infinity waited a minute and went on (that flag is
+  now read leniently). The brown coat turned into a waistcoat and nothing asked about it (now asked).
+- A single 5 s video at 1376x768 through the queue rendered in 4 min 8 s; a Slate plan through the Studio's Bolt
+  answered in 60 s (a brain question while a render holds Bolt's memory is refused with the reason, as designed).
+
 **After a crash** the app picks the run up where it was. A take that was rendered is checked, not rendered again. A
 render that was still running when the app died goes on in ComfyUI on its own and is then queued again by the resumed
 run, so that piece costs one render more (measured: the gate's Infinity run, killed during piece 2).
