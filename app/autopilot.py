@@ -1589,7 +1589,8 @@ def render_keyframe(run: dict, seg: dict) -> None:
     round_ = len(seg.get("takes") or [])  # the keyframes of this video take (a rewritten shot gets new ones)
     looks = look_lines(run, {"setting": seg.get("keyframe_prompt", ""), "action": seg["fields"].get("action", "")}, seg["index"])
     prompt = " ".join(bit for bit in (style_at(s, seg["index"]), looks, seg.get("keyframe_prompt") or seg["fields"].get("setting", "")) if bit)
-    params = {"prompt": prompt, "count": 1, "seed": int(seg["seed"]) + 7919 * (n - 1), "preset": s["preset"], "autopilot": {"run": run["id"], "segment": seg["index"], "keyframe": n}}
+    params = {"prompt": prompt, "count": 1, "seed": int(seg["seed"]) + 7919 * (n - 1), "preset": s["preset"], "autopilot": {"run": run["id"], "segment": seg["index"], "keyframe": n},
+              **({"image_model": s["keyframe_model"]} if s.get("keyframe_model") else {})}
     if s["preset"] == "custom" and s.get("width") and s.get("height"):
         params.update(width=int(s["width"]) // 16 * 16, height=int(s["height"]) // 16 * 16)
     kind = "scout"
