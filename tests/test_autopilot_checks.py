@@ -72,7 +72,7 @@ def test_the_pace_plan_keeps_fights_fast_with_slow_motion_for_the_key_move_only(
     assert "mostly fast" in checks.pace_problem(checks.pace_of({"kind": "fight", "beats": [{"from": 0, "to": 7, "speed": "slow"}, {"from": 7, "to": 10, "speed": "fast"}]}),
                                                 "0-7 s slow motion fight; 7-10 s fast", "handheld", 10)
     assert "camera" in checks.pace_problem(plan, TIMED, "The camera arcs slowly left", 10)
-    assert "timing" in checks.pace_problem(plan, "they trade blows and one punch lands in slow motion", "handheld", 10)
+    assert checks.pace_problem(plan, "they trade blows and one punch lands in slow motion", "handheld", 10) == ""  # pace_line adds its seconds
     assert "slow motion" in checks.pace_problem(checks.pace_of({"kind": "calm"}), "she walks in slow motion", "static", 10)
     line = checks.pace_line(plan, 10)
     assert "fast, real-time speed" in line and "slow motion only from 6 to 8 s on the centerline punch" in line

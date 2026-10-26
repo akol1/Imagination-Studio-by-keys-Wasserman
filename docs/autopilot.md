@@ -223,8 +223,9 @@ Every Viking v2 piece came out slow. Its motion prompts gave one long sentence o
   decisive blow, a signature technique), a third of the piece at most, and its timing is written into the action:
   "0-6 s rapid real-time exchange ...; 6-8 s slow motion on the centerline punch; 8-10 s back to full speed". An
   answer is turned back when a fight has no beats, more than two slow spans or too much slow time, a camera that
-  says "slow" or "slowly", a slow span without its timing in the action, or an action that says slow motion with no
-  slow span planned.
+  says "slow" or "slowly", or an action that says slow motion with no slow span planned. (A rule that also wanted the
+  slow span's seconds in the action turned Bolt's answer back three times on the first live run; the video prompt gets
+  the seconds from the plan anyway.)
 - **The video prompt says the speed.** MiniMax H3 has no speed control; the words are all it gets. A fight's action
   ends with "Pace: fast, real-time speed throughout, quick strikes and rapid exchanges, sharp impacts, snappy whip pans
   and quick handheld reframes, with slow motion only from 6 to 8 s on the centerline punch, then straight back to full

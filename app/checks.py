@@ -36,7 +36,6 @@ FAST_KINDS = ("fight", "action", "chase")
 PACE_KINDS = FAST_KINDS + ("calm", "dialogue")
 SPEEDS = ("fast", "real", "slow")
 SLOW_WORDS = re.compile(r"\bslow[- ]?(motion|mo)\b|\bslowly\b|\bslow\b", re.I)
-TIMED = re.compile(r"\d+(\.\d+)?\s*(?:[-–to]+)\s*\d+(\.\d+)?\s*s\b", re.I)
 SYSTEM = ("You inspect frames of a film carefully and answer each question only from what you can see. "
           "Answer with JSON only: one object mapping each key to \"yes\", \"no\" or \"unclear\".")
 
@@ -85,8 +84,9 @@ def pace_of(data) -> dict:
 
 def pace_problem(pace: dict, action: str, camera: str, seconds: float) -> str:
     """Why a pace plan cannot be used ("" when it can). A fight or an action piece is mostly fast: slow motion only for
-    one or two key moves, a third of the piece at most, with its timing written into the action; outside those spans
-    neither the action nor the camera says "slow"."""
+    one or two key moves, a third of the piece at most; outside those spans neither the action nor the camera says
+    "slow". The key move's seconds need not be in the action: pace_line writes them into the video prompt (on the
+    first live Infinity run Bolt's timings were turned back three times by a stricter rule)."""
 
     slow = [b for b in pace["beats"] if b["speed"] == "slow"]
     slow_s = sum(b["to"] - b["from"] for b in slow)
@@ -102,9 +102,6 @@ def pace_problem(pace: dict, action: str, camera: str, seconds: float) -> str:
                     "only for the key move, a third of the piece at most")
         if SLOW_WORDS.search(camera or ""):
             return '"camera" says slow: a fight or action camera is snappy (whip pans, quick reframes, handheld); the key move is slowed in "action" only'
-        if slow and not TIMED.search(action or ""):
-            return ('the slow-motion key move needs its timing written into "action", like "0-6 s rapid real-time exchange ...; '
-                    '6-8 s slow motion on the centerline punch; 8-10 s back to full speed"')
     if SLOW_WORDS.search(action or "") and not slow:
         return '"action" says slow motion but "pace.beats" has no slow span: say real-time, or plan the key move\'s span'
     return ""
