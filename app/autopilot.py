@@ -2240,7 +2240,7 @@ def choreograph(run: dict, seg: dict, folder: Path) -> None:
         said.append(ask_text(run, fight.SYSTEM, t))
         write_json(folder / "choreography-answers.json", said)  # every answer kept, the ones turned back too
         return said[-1]
-    data, rejected = ask_json(asker, lambda d: fight.problem(d, count, wing, target), text, "fight choreography")
+    data, rejected = ask_json(asker, lambda d: fight.problem(fight.repair(d, count), count, wing, target), text, "fight choreography")
     f.update(state="keyframes", shots=fight.clean(data), location=str(data.get("location") or "")[:200], opponents=count, wing=wing,
              rejected=rejected)
     run["fight_location"] = f["location"]

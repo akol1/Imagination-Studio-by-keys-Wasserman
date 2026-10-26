@@ -592,6 +592,12 @@ def test_a_choreography_is_checked_in_code():
     assert "1.5 to 4" in fight.problem({"shots": [{**DOJO[0], "seconds": 8}] + DOJO[1:]}, 3, True)
     # long enough for its target: on the first dojo run the Director wrote 9 shots, 20 s, for a 50 s fight
     assert fight.raw_seconds(50) == (45, 19) and "45 s of shots" in fight.problem(good, 3, True, 50)
+    # the bookkeeping put right where the intent is plain: a man goes down at his last shot and stays down
+    messy = {"shots": [{**DOJO[0], "down_after": []}, {**DOJO[1], "opponents": [2, 3, 1], "down_after": [1, 5]}, {**DOJO[2], "down_after": [3]}]}
+    fixed = fight.repair(messy, 3)
+    assert [x["down_after"] for x in fixed["shots"]] == [[], [1, 2], [1, 2, 3]] and fight.problem(fixed, 3, True) == ""
+    keyed = fight.repair({"shots": [{**x, "key": True} for x in DOJO]}, 3)
+    assert [x["key"] for x in keyed["shots"]] == [False, True, True]
     shots = fight.clean(good)
     assert [s["frames"] for s in shots] == [73, 90, 90] and shots[2]["down_before"] == [1, 2]  # each a second longer than its move
     assert [fight.ramp_of(s) for s in shots] == [fight.RAMP_FALL, fight.RAMP_EXCHANGE, fight.RAMP_KEY]

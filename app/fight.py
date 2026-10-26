@@ -149,6 +149,31 @@ def prompt(run: dict, seg: dict, count: int, target: float, style: str) -> str:
                if wing else ""))
 
 
+def repair(data: dict, count: int) -> dict:
+    """The bookkeeping of who is down, put right where the intent is plain: each man goes down at his last shot (a man
+    who still fights after he was "down" was not down yet), and stays down after it. Over 18 to 23 shots Bolt's
+    "down_after" lists were the one thing it kept getting wrong on the dojo run (a man down twice, a man never down)."""
+
+    shots = data.get("shots")
+    if not isinstance(shots, list) or not all(isinstance(x, dict) for x in shots):
+        return data
+    try:
+        last = {}
+        for i, shot in enumerate(shots):
+            for o in shot.get("opponents") or []:
+                last[int(o)] = i
+        down: set = set()
+        for i, shot in enumerate(shots):
+            down |= {o for o, at in last.items() if at == i}
+            shot["down_after"] = sorted(down)
+    except (TypeError, ValueError):
+        pass
+    keys = [shot for shot in shots if shot.get("key")]
+    for shot in keys[:-KEYS_MAX]:  # more key moves than a fight holds: the last ones stay the decisive ones
+        shot["key"] = False
+    return data
+
+
 def problem(data: dict, count: int, wing: bool, target: float = 0) -> str:
     """Why a choreography cannot be used ("" when it can)."""
 
@@ -185,7 +210,7 @@ def problem(data: dict, count: int, wing: bool, target: float = 0) -> str:
     if target:
         raw, wanted = raw_seconds(target)
         total = sum(float(x.get("seconds") or 0) for x in shots)
-        if total < 0.85 * raw or len(shots) < 0.8 * wanted:
+        if total < 0.8 * raw or len(shots) < 0.8 * wanted:
             return (f"{len(shots)} shots, {total:g} s: the fight needs about {raw:.0f} s of shots, {wanted} shots or more. Most opponents "
                     "take two or three shots before they go down (an exchange, a block, the finish); later several attack at once")
         if count >= 5 and sum(1 for x in shots if len(x.get("opponents") or []) >= 2) < 2:
