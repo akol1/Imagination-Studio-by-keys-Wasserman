@@ -59,6 +59,7 @@ from pathlib import Path
 from fastapi import APIRouter, HTTPException, Request
 
 import checks  # the dense yes/no checks, decided in code, and the pace measured from the pixels
+import fight  # a fight as a choreographed sequence of short shots
 import continuity  # the continuity bible and what its checks mean
 import cosmos  # the vision brain (NVIDIA Cosmos3-Edge on TensorFold), beside this file
 import lengths  # which frame counts the model takes
@@ -94,7 +95,9 @@ DEFAULTS = {"style": "", "guidance": "", "preset": "sharp", "quality": "fh8", "w
             # Its film is joined and a checkpoint written after every piece, the last joins checked every film_every pieces
             "infinity": False, "max_minutes": 0, "max_film_seconds": 0, "film_every": 4, "film_window": 6, "story_every": 6,
             # memory first: a piece that does not fit is made shorter at the same size, never smaller; not under this
-            "min_seconds": 4}
+            "min_seconds": 4,
+            # a fight segment: a choreographed sequence of short shots (fight.py) instead of one take; "off" keeps one take
+            "fight": {"sequence": "auto", "opponents": 0, "seconds": 45}}
 RETAKES = 4  # the most retakes a segment may be given
 MEMORY_RETRIES = 3  # a piece the memory guard stopped is made again shorter, at the same size, this many times at most
 INFINITY_RETRIES = 5  # an Infinity run that hits a problem waits and carries on, this many times in a row at most
@@ -696,6 +699,7 @@ def clean_seed(given: dict) -> dict:
         characters.append({"id": re.sub(r"[^a-z0-9]+", "_", str(c["name"]).lower()).strip("_") or f"c{i + 1}",
                            "name": str(c["name"]).strip()[:80], "look": str(c.get("look") or "").strip()[:600], "image": image or None,
                            **({"wardrobe": str(c["wardrobe"]).strip()[:300]} if str(c.get("wardrobe") or "").strip() else {}),
+                           **({"role": "opponent"} if c.get("role") == "opponent" else {}),
                            **({"from": first} if first else {}), **({"to": last} if last else {})})
     outline = []
     for i, beat in enumerate((given.get("outline") or [])[:LIMIT]):
@@ -743,6 +747,17 @@ def clean_settings(given: dict, base: dict | None = None) -> dict:
     for key in ("preset", "quality"):
         if given.get(key):
             s[key] = str(given[key])
+    if isinstance(given.get("fight"), dict):
+        g, fs = given["fight"], dict(s.get("fight") or DEFAULTS["fight"])
+        if g.get("sequence") in ("auto", "always", "off"):
+            fs["sequence"] = g["sequence"]
+        for key, low, high in (("opponents", 0, 20), ("seconds", 10, 120)):
+            if g.get(key) not in (None, ""):
+                try:
+                    fs[key] = max(low, min(high, int(g[key])))
+                except (TypeError, ValueError):
+                    raise HTTPException(400, f"fight.{key} is a whole number from {low} to {high}")
+        s["fight"] = fs
     if given.get("keyframe_model") is not None:  # the picture model an edited keyframe is drawn with ("" for the Studio's default)
         s["keyframe_model"] = str(given["keyframe_model"]).strip()[:40]
     for key, low, high in (("seconds", 1, 15), ("segments", 0, LIMIT), ("seed", 0, 2 ** 31 - 1), ("max_scene_segments", 2, 50),
@@ -1182,6 +1197,8 @@ def segment(run: dict, stop: threading.Event) -> None:
             if seg["status"] == "keyframe":
                 seg["keyframe"] = None
             save(run)
+        elif seg["status"] == "fight":
+            fight_segment(run, seg, stop)
         elif seg["status"] == "failed":
             raise Failed(f"segment {seg['index']} could not be rendered: {seg.get('error') or 'no reason'}")
 
@@ -1271,6 +1288,8 @@ def plan(run: dict) -> dict:
            **({"end": True} if data.get("end") is True and s.get("infinity") else {})}
     if keyframes_for(run, index):
         seg.update(status="keyframe", keyframe_prompt=clip_words(data.get("keyframe"), 70), keyframes=[])
+    if fights(run, seg):
+        seg.update(status="fight", fight={"state": "choreograph"})
     folder = run_dir(run["id"]) / "segments" / seg["id"]
     write_json(folder / "director.json", {"prompt": prompt, "answer": data, "rejected": rejected})
     run["segments"].append(seg)
@@ -1896,7 +1915,7 @@ def check(run: dict, seg: dict) -> None:
                          "watch": watched, "continuity": checked, "transcript": transcript, "fields": copy.deepcopy(seg["fields"]),
                          "beat": seg["beat"], "prompt": seg.get("prompt"), "mode": seg.get("mode")})
     write_json(folder / f"continuity-take{take}.json", checked)
-    if reasons and take <= int(s.get("retakes") or 0):
+    if reasons and take <= int(s.get("retakes") or 0) and not seg.get("fight"):  # a fight's shots were retaken one by one
         seg["status"], seg["fix"] = "retake", fix
         say(run, f"Segment {seg['index']}: take {take} failed ({'; '.join(reasons)[:200]}); again at the next seed"
             + (", the shot rewritten from the findings." if fix else "."), segment=seg["index"])
@@ -2145,6 +2164,221 @@ def add_stats(run: dict, seg: dict, stats: dict) -> None:
             holder[key] = round(holder.get(key, 0) + (stats.get(key) or 0), 1)
 
 
+# ---------- a fight: a sequence of short shots (fight.py) ----------
+
+def fights(run: dict, seg: dict) -> bool:
+    """Whether segment ``seg`` is made as a fight sequence: the run's choice (auto: a segment the Director plans as a
+    fight), never for a segment that opens on a picture of the user's own."""
+
+    choice = (run["settings"].get("fight") or {}).get("sequence", "auto")
+    if choice == "off" or (beat_of(run, seg["index"]) or {}).get("image"):
+        return False
+    return choice == "always" or checks.pace_of(seg.get("pace"))["kind"] == "fight"
+
+
+def wait_job(job_id: str, stop: threading.Event) -> dict:
+    while True:
+        job = job_of(job_id)
+        if job is None:
+            return {"status": "lost"}
+        if job.get("status") in ("done", "failed", "cancelled"):
+            return job
+        wait(stop)
+
+
+def picture_of(job: dict) -> str | None:
+    picture = next((o for o in job.get("outputs") or [] if str(o).endswith(".png")), None)
+    if picture and Path(picture).is_absolute() and HOME.resolve() in Path(picture).resolve().parents:
+        picture = str(Path(picture).relative_to(HOME))
+    return picture if on_disk(picture) else None
+
+
+def fight_segment(run: dict, seg: dict, stop: threading.Event) -> None:
+    """The fight of segment ``seg``, from its choreography to its cut clip, one step at a time, each written to run.json
+    so a restart picks it up where it was."""
+
+    f = seg["fight"]
+    folder = run_dir(run["id"]) / "segments" / seg["id"] / "fight"
+    folder.mkdir(parents=True, exist_ok=True)
+    if f["state"] == "choreograph":
+        choreograph(run, seg, folder)
+    if f["state"] == "keyframes":
+        for shot in f["shots"]:
+            while shot["status"] == "keyframe":
+                fight_keyframe(run, seg, shot, folder, stop)
+        f["state"] = "shots"
+        save(run)
+    if f["state"] == "shots":
+        for shot in f["shots"]:
+            while shot["status"] == "render":
+                fight_shot(run, seg, shot, folder, stop)
+        f["state"] = "cut"
+        save(run)
+    if f["state"] == "cut":
+        parts = [HOME / next(t for t in shot["takes"] if t["take"] == shot["kept"])["ramped"] for shot in f["shots"]]
+        target = folder / f"fight-take{len(seg['takes']) + 1}.mp4"
+        if not fight.cut(parts, target, qa.ENV):
+            raise Failed(f"the fight of segment {seg['index']} could not be cut together")
+        seg.update(output=relative(target), mode="fight", status="rendered", job=None,
+                   prompt="\n\n".join(f"[shot {s['n']}] " + (next(t for t in s["takes"] if t["take"] == s["kept"]).get("prompt") or "") for s in f["shots"]))
+        f["state"] = "done"
+        f["seconds"] = round(fight.duration(target, qa.ENV), 2)
+        say(run, f"Segment {seg['index']}: the fight is cut: {len(f['shots'])} shots, {f['seconds']:.1f} s.", segment=seg["index"])
+
+
+def choreograph(run: dict, seg: dict, folder: Path) -> None:
+    s, f = run["settings"], seg["fight"]
+    opts = s.get("fight") or {}
+    count = int(opts.get("opponents") or 0) or max(3, len(fight.opponents_of(run["seed"])))
+    wing = bool(re.search(r"wing ?chun", json.dumps(run["seed"]) + (s.get("guidance") or ""), re.I))
+    say(run, f"Segment {seg['index']}: the Director choreographs the fight ({count} opponents).", stage="director", segment=seg["index"])
+    text = fight.prompt(run, seg, count, float(opts.get("seconds") or 45), style_at(s, seg["index"]))
+    data, rejected = ask_json(lambda t: ask_text(run, fight.SYSTEM, t), lambda d: fight.problem(d, count, wing), text, "fight choreography")
+    f.update(state="keyframes", shots=fight.clean(data), location=str(data.get("location") or "")[:200], opponents=count, wing=wing,
+             rejected=rejected)
+    run["fight_location"] = f["location"]
+    write_json(folder / "choreography.json", {"prompt": text, "answer": data, "rejected": rejected})
+    say(run, f"Segment {seg['index']}: {len(f['shots'])} shots choreographed"
+        + (f" ({len(rejected)} answer{'s' if len(rejected) != 1 else ''} turned back first)" if rejected else "") + ".", segment=seg["index"])
+    save(run)
+
+
+def fight_eyes(run: dict, seg: dict, shot: dict, pictures: list, keyframe: bool, folder: Path, label: str) -> dict:
+    """The shot's (or its keyframe's) yes/no questions, failed majors voted on: {"failed", "log"}."""
+
+    opts = checks.options(run["settings"])
+    log, who = [], []
+    asked = fight.questions(run, shot, seg["fight"].get("wing", False), keyframe)
+    header = (f"Shot {shot['n']} of a fight: the first picture is the hero's reference, "
+              + ("the second the opponent's reference, " if len([p for p in pictures if "reference" in p[0]]) > 1 else "")
+              + ("then the still the shot opens on." if keyframe else "then frames of the shot in time order."))
+    bad, _ = yes_no(run, window_asker(run, folder, who), pictures, header, asked, opts, log, {"kind": "keyframe" if keyframe else "shot", "window": shot["n"], "at": []})
+    write_json(folder / f"{label}-checks.json", log)
+    add_stats(run, seg, checks.summary(log))
+    return {"failed": [{"category": b["question"]["category"], "status": "major" if b["question"]["major"] else "minor",
+                        "text": b["question"]["text"], "answer": b["answer"]} for b in bad], "stats": checks.summary(log)}
+
+
+def refs_of(run: dict, shot: dict) -> tuple[list, str]:
+    line, sheets = fight.who_line(run, shot)
+    pictures = [(f"Reference picture of {c['name']}", HOME / c["image"]) for c in sheets if c.get("image") and on_disk(c["image"])]
+    return pictures, line
+
+
+def fight_keyframe(run: dict, seg: dict, shot: dict, folder: Path, stop: threading.Event) -> None:
+    s = run["settings"]
+    pictures, line = refs_of(run, shot)
+    n = len(shot["keyframes"]) + 1
+    hero = (fight.hero_of(run["seed"]) or {}).get("name", "the hero")
+    still = " ".join(bit for bit in (style_at(s, seg["index"]), seg["fight"].get("location", ""), line, fight.floor_line(shot),
+                                     f"{shot['camera']}: {hero} in the middle of the move, already in motion: {shot['move']}",
+                                     f"({fight.plain(shot['technique'])})" if fight.plain(shot["technique"]) else "") if bit)
+    params = {"seed": int(seg["seed"]) * 100 + shot["n"] * 7 + n, "autopilot": {"run": run["id"], "segment": seg["index"], "shot": shot["n"], "keyframe": n},
+              **({"image_model": s["keyframe_model"]} if s.get("keyframe_model") else {})}
+    size = PRESET_SIZES.get(s["preset"])
+    if size:
+        params.update(width=size[0], height=size[1])
+    if pictures:
+        names = "; ".join(f"image {i + 1} is {c.split('of ', 1)[-1]}" for i, (c, _) in enumerate(pictures))
+        kind = "edit"
+        params.update(image=relative(pictures[0][1]), images=[relative(p) for _, p in pictures[1:]],
+                      prompt=f"{names}. Keep each one's face, hair and clothes exactly as in their picture. Make this film still: {still}")
+    else:
+        kind = "scout"
+        params.update(prompt=still, count=1, preset=s["preset"])
+    try:
+        job = submit({"kind": kind, "title": f"AutoPilot · {run['name']} · fight shot {shot['n']}: keyframe {n}", "params": params})
+    except HTTPException as error:
+        raise Failed(f"the queue refused the keyframe of fight shot {shot['n']}: {error.detail}") from None
+    say(run, f"Segment {seg['index']}, fight shot {shot['n']}/{len(seg['fight']['shots'])}: its keyframe" + (f", take {n}" if n > 1 else "") + ".",
+        stage="keyframe", segment=seg["index"], job=job["id"])
+    done = wait_job(job["id"], stop)
+    path = picture_of(done) if done.get("status") == "done" else None
+    if not path:
+        if n >= 3:
+            raise Failed(f"the keyframe of fight shot {shot['n']} could not be made: {done.get('error') or done.get('status')}")
+        shot["keyframes"].append({"take": n, "path": None, "error": str(done.get("error") or done.get("status"))[:200]})
+        save(run)
+        return
+    found = fight_eyes(run, seg, shot, pictures + [("The still under check", HOME / path)], True, folder, f"shot{shot['n']:02d}-key{n}")
+    shot["keyframes"].append({"take": n, "path": path, "prompt": params.get("prompt"), "failed": found["failed"]})
+    majors = [x for x in found["failed"] if x["status"] == "major"]
+    if majors and n <= fight.SHOT_RETAKES:
+        say(run, f"Segment {seg['index']}, fight shot {shot['n']}: keyframe {n} failed ({'; '.join(x['category'] + ': ' + x['text'][:60] for x in majors)[:160]}); drawn again.",
+            segment=seg["index"])
+        save(run)
+        return
+    best = min((k for k in shot["keyframes"] if k.get("path")), key=lambda k: sum(1 for x in k["failed"] if x["status"] == "major"))
+    shot.update(keyframe=best["path"], status="render")
+    save(run)
+
+
+def fight_shot(run: dict, seg: dict, shot: dict, folder: Path, stop: threading.Event) -> None:
+    s = run["settings"]
+    take = len(shot["takes"]) + 1
+    hero = (fight.hero_of(run["seed"]) or {}).get("name", "the hero")
+    pictures, line = refs_of(run, shot)
+    action = fight.action_of(shot, hero)
+    fixes = [t for t in shot["takes"] if t.get("failed")]
+    if fixes:  # the retake says plainly what the eyes found missing
+        action += " Make sure: " + "; ".join(x["text"].rstrip("?") + (" (it must not)" if x["answer"] == "yes" else " (it must)")
+                                              for x in fixes[-1]["failed"] if x["status"] == "major")[:400] + "."
+    fields = {"scene": " ".join(bit for bit in (style_at(s, seg["index"]), seg["fight"].get("location", ""), line, fight.floor_line(shot)) if bit),
+              "camera": shot["camera"], "action": action, "dialogue": [],
+              "soundscape": "Sharp impacts of fists and palms on cloth and bodies, bare feet on a wooden floor, the onlookers' gasps.",
+              "music": s.get("music") or "N/A"}
+    prompt = compose(fields, True, frames=shot["frames"])
+    output = folder / f"shot{shot['n']:02d}-take{take}.mp4"
+    params = {"prompt": prompt, "preset": s["preset"], "quality": s["quality"], "frames": shot["frames"], "seed": int(seg["seed"]) * 100 + shot["n"] + 1000 * take,
+              "output": relative(output), "qa": False, "image": shot["keyframe"], "autopilot": {"run": run["id"], "segment": seg["index"], "shot": shot["n"]}}
+    try:
+        job = submit({"kind": "video", "title": f"AutoPilot · {run['name']} · fight shot {shot['n']}" + (f", take {take}" if take > 1 else ""), "params": params})
+    except HTTPException as error:
+        raise Failed(f"the queue refused fight shot {shot['n']}: {error.detail}") from None
+    say(run, f"Segment {seg['index']}, fight shot {shot['n']}/{len(seg['fight']['shots'])}: rendering"
+        + (f" take {take}" if take > 1 else "") + f" ({lengths.seconds_of(shot['frames']):.1f} s).", stage="render", segment=seg["index"], job=job["id"])
+    started = time.time()
+    done = wait_job(job["id"], stop)
+    clip = HOME / ((done.get("outputs") or [relative(output)])[0])
+    if done.get("status") != "done" or not clip.is_file():
+        shot["takes"].append({"take": take, "error": str(done.get("error") or done.get("status"))[:300], "failed": []})
+        if take > fight.SHOT_RETAKES:
+            raise Failed(f"fight shot {shot['n']} could not be rendered: {done.get('error') or done.get('status')}")
+        save(run)
+        return
+    speed = fight.ramp_of(shot)
+    ramped = folder / f"shot{shot['n']:02d}-take{take}-ramped.mp4"
+    if not fight.ramp(clip, ramped, speed, fight.TRIM_S, qa.ENV):
+        ramped = clip
+    length = qa.duration(clip)
+    frames = []
+    for i, at in enumerate((0.25, 0.5, 0.75)):
+        target = folder / f"shot{shot['n']:02d}-take{take}-f{i + 1}.png"
+        if checks.grab(clip, max(fight.TRIM_S, at * length), target, cosmos.FRAME, qa.ENV):
+            frames.append((f"Frame at {at * length:.2f} s", target))
+    found = fight_eyes(run, seg, shot, pictures + frames, False, folder, f"shot{shot['n']:02d}-take{take}")
+    record = {"take": take, "output": relative(clip), "ramped": relative(ramped), "speed": speed, "prompt": prompt, "seed": params["seed"],
+              "render_s": round(time.time() - started), "failed": found["failed"], "checks": found["stats"],
+              "motion_before": checks.motion(clip, qa.ENV), "motion_after": checks.motion(ramped, qa.ENV)}
+    try:
+        import pace as limbs_pace  # the limb speed a second, camera taken out (pace.py)
+        record["limbs_before"] = (limbs_pace.limbs(clip) or {}).get("limbs")
+        record["limbs_after"] = (limbs_pace.limbs(ramped) or {}).get("limbs")
+    except Exception:  # noqa: BLE001 - NumPy may be missing
+        pass
+    shot["takes"].append(record)
+    majors = [x for x in found["failed"] if x["status"] == "major"]
+    if majors and take <= fight.SHOT_RETAKES:
+        say(run, f"Segment {seg['index']}, fight shot {shot['n']}: take {take} failed ({'; '.join(x['category'] + ': ' + x['text'][:70] for x in majors)[:200]}); "
+                 "rendered again.", segment=seg["index"])
+        save(run)
+        return
+    kept = min((t for t in shot["takes"] if t.get("ramped")), key=lambda t: sum(1 for x in t["failed"] if x["status"] == "major"))
+    shot.update(kept=kept["take"], status="done")
+    say(run, f"Segment {seg['index']}, fight shot {shot['n']}: kept take {kept['take']}" + (" (no take passed every check)" if majors else "") + ".", segment=seg["index"])
+    save(run)
+
+
 def frame_time(caption: str) -> float | None:
     found = re.search(r"at ([0-9.]+) s", caption or "")
     return float(found[1]) if found else None
@@ -2373,6 +2607,8 @@ def ease_in(seg: dict) -> float:
     said, the keyframe already mid-strike, before the exchange ran at 10 to 16. The leading seconds measured slow (under
     checks.SLOW) are cut, at most EASE_IN_MAX_S, when a fast second follows them; a piece the plan opens slowly keeps them."""
 
+    if seg.get("fight"):
+        return 0.0  # a fight sequence is cut and ramped shot by shot already
     pace = ((seg.get("continuity") or {}).get("dense") or {}).get("pace") or {}
     motion, plan = pace.get("motion") or [], checks.pace_of(seg.get("pace"))
     if plan["kind"] not in checks.FAST_KINDS or not motion:

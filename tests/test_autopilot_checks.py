@@ -192,7 +192,7 @@ def answers_for(rules):
         keys = re.findall(r'^"(\w+)": (.*)$', prompt, re.M)
         out = {}
         for key, text in keys:
-            out[key] = "yes" if not re.search(r"change into a different|malformed|out of place|slow motion|second person who looks like", text) else "no"
+            out[key] = "yes" if not re.search(r"change into a different|malformed|out of place|slow motion|second person who looks like|float, hover|bend, stretch|merge into each other", text) else "no"
             for pattern, said in rules.items():
                 if re.search(pattern, text):
                     out[key] = said.pop(0) if isinstance(said, list) else said
@@ -282,7 +282,7 @@ def test_a_fight_comes_out_fast_with_the_key_move_timed_and_a_slow_one_is_retake
     monkeypatch.setattr(autopilot, "ask_vision", watcher)
     measured = iter([[0.5] * 10, [12.0] * 6 + [1.0] * 2 + [12.0] * 2])
     monkeypatch.setattr(autopilot.checks, "motion", lambda clip, env=None: next(measured))
-    run = go(new_run(1, continuity={"film_pass": False}))
+    run = go(new_run(1, fight={"sequence": "off"}, continuity={"film_pass": False}))
     seg = run["segments"][0]
     prompt = loop["queue"].bodies[0]["params"]["prompt"]
     assert "fast, real-time speed" in prompt and "slow motion only from 6 to 8 s on the centerline punch" in prompt
@@ -306,7 +306,7 @@ def test_a_fight_plan_that_is_slow_throughout_is_turned_back(loop, monkeypatch):
             return json.dumps(said)
     monkeypatch.setattr(autopilot, "ask_text", SlowFirst())
     monkeypatch.setattr(autopilot.checks, "motion", lambda clip, env=None: [6.0] * 10)
-    run = go(new_run(1, continuity={"film_pass": False}))
+    run = go(new_run(1, fight={"sequence": "off"}, continuity={"film_pass": False}))
     assert "camera" in run["segments"][0]["rejected"][0]
 
 
@@ -536,7 +536,7 @@ def test_a_fight_prompt_opens_in_motion_and_its_keyframe_is_asked_for_motion(loo
     monkeypatch.setattr(autopilot.checks, "motion", lambda clip, env=None: [12.0] * 10)
     watcher = Watcher(yesno=answers_for({}))
     monkeypatch.setattr(autopilot, "ask_vision", watcher)
-    run = go(new_run(1, keyframes="on", continuity={"film_pass": False}))
+    run = go(new_run(1, fight={"sequence": "off"}, keyframes="on", continuity={"film_pass": False}))
     video = next(b for b in loop["queue"].bodies if b["kind"] == "video")["params"]["prompt"]
     assert "From the very first frame, already in motion at full real-time speed: Vex fights" in video
     assert any("caught in the middle of a fast movement" in p for p, _ in watcher.yesno)
@@ -559,8 +559,92 @@ def test_a_joined_film_is_shorter_by_the_cut_ease_in(loop, monkeypatch):
             return json.dumps(said)
     monkeypatch.setattr(autopilot, "ask_text", Varied())
     monkeypatch.setattr(autopilot.checks, "motion", lambda clip, env=None: [2.0, 12.0, 12.0])
-    run = go(new_run(2, seconds=3, continuity={"film_pass": False}))
+    run = go(new_run(2, fight={"sequence": "off"}, seconds=3, continuity={"film_pass": False}))
     assert run["state"] == "done", run["log"][-3:]
     assert [autopilot.ease_in(s) for s in run["segments"]] == [1.0, 1.0]
     clip = sum(autopilot.qa.duration(autopilot.HOME / s["output"]) for s in run["segments"])
     assert run["film"]["seconds"] < clip - 0.9  # each 1 s test piece cut to its last half second (the floor), a dissolve between
+
+
+# ---------- a fight as a sequence of short shots (fight.py) ----------
+
+fight = autopilot.fight
+DOJO = [
+    {"opponents": [1], "technique": "Pak Sau and Yat Ji Kuen", "move": "slaps the first attacker's punch down and punches straight to his chest",
+     "effect": "vertical fist to the sternum -> he folds and drops onto his back", "camera": "low angle", "screen": "left-to-right",
+     "seconds": 2, "key": False, "down_after": [1]},
+    {"opponents": [2, 3], "technique": "Lap Sau", "move": "pulls the second man forward into the third man's swing",
+     "effect": "pulled off balance -> he collides with the third man and both stumble", "camera": "wide", "screen": "right-to-left",
+     "seconds": 2.5, "key": False, "down_after": [1, 2]},
+    {"opponents": [3], "technique": "Lap Sau into Lin Wan Kuen", "move": "pulls the third man in and drives him back with chain punches",
+     "effect": "a flurry to the chest -> he is driven backward across the floor and falls", "camera": "tracking", "screen": "left-to-right",
+     "seconds": 3, "key": True, "down_after": [1, 2, 3]},
+]
+
+
+def test_a_choreography_is_checked_in_code():
+    good = {"location": "a wooden dojo", "shots": DOJO}
+    assert fight.problem(good, 3, True) == ""
+    assert "already down" in fight.problem({"shots": DOJO[:1] + [{**DOJO[1], "opponents": [1]}] + DOJO[2:]}, 3, True)
+    assert "only grows" in fight.problem({"shots": DOJO[:1] + [{**DOJO[1], "down_after": [2]}] + DOJO[2:]}, 3, True)
+    assert "every opponent is down" in fight.problem({"shots": DOJO[:2] + [{**DOJO[2], "down_after": [1, 2]}]}, 3, True)
+    assert "Wing Chun" in fight.problem({"shots": [{**DOJO[0], "technique": "spinning hook kick"}] + DOJO[1:]}, 3, True)
+    assert "cause -> effect" in fight.problem({"shots": [{**DOJO[0], "effect": "he falls"}] + DOJO[1:]}, 3, True)
+    assert "1.5 to 4" in fight.problem({"shots": [{**DOJO[0], "seconds": 8}] + DOJO[1:]}, 3, True)
+    shots = fight.clean(good)
+    assert [s["frames"] for s in shots] == [56, 56, 73] and shots[2]["down_before"] == [1, 2]
+    assert [fight.ramp_of(s) for s in shots] == [fight.RAMP_FALL, fight.RAMP_EXCHANGE, fight.RAMP_KEY]
+    assert "slaps the attacker's arm down" not in fight.plain("Lin Wan Kuen") and "chain punches" in fight.plain("Lin Wan Kuen")
+
+
+class DojoDirector(FightDirector):
+    def __call__(self, run, system, prompt):
+        if system == fight.SYSTEM:
+            self.asked.append(prompt)
+            return json.dumps({"location": "a wooden-floored dojo with a ring of onlookers", "shots": DOJO})
+        return super().__call__(run, system, prompt)
+
+
+def test_a_fight_segment_is_choreographed_shot_by_shot_ramped_and_cut(loop, monkeypatch):
+    import subprocess
+    director = DojoDirector()
+    monkeypatch.setattr(autopilot, "ask_text", director)
+    monkeypatch.setattr(autopilot.checks, "motion", lambda clip, env=None: [12.0])
+    answers = {"n": 0}
+
+    def eyes(prompt, frames):
+        # shot 2's first take: the planned move did not happen (a major, voted on) -> that shot alone is rendered again
+        if "Shot 2 of a fight" in prompt and "then frames of the shot" in prompt and "Does this happen" in prompt:
+            answers["n"] += 1
+            if answers["n"] <= 3:
+                return answers_for({r"Does this happen": "no"})(prompt, frames)
+        return answers_for({})(prompt, frames)
+    watcher = Watcher(yesno=eyes)
+    monkeypatch.setattr(autopilot, "ask_vision", watcher)
+    for name in ("hero", "face-a"):
+        p = HOME / "uploads" / f"{name}.png"
+        p.parent.mkdir(parents=True, exist_ok=True)
+        subprocess.run(["ffmpeg", "-v", "error", "-y", "-f", "lavfi", "-i", "color=c=gray:size=160x96", "-frames:v", "1", str(p)], check=True)
+    from test_autopilot import SEED, client
+    seed = {**SEED, "characters": [{"name": "Vex", "look": "a wiry courier, shaved undercut", "wardrobe": "an orange reflective jacket", "image": "uploads/hero.png"},
+                                   {"name": "Opponent face A", "look": "a broad man with a shaved head", "wardrobe": "a white gi with a black belt",
+                                    "image": "uploads/face-a.png", "role": "opponent"}]}
+    said = client.post("/api/autopilot/runs", json={"name": "Dojo", "seed": seed, "settings": {"segments": 1, "preset": "sharp",
+                                                                                           "fight": {"opponents": 3}, "continuity": {"film_pass": False}}})
+    run = go(autopilot.load(said.json()["id"]))
+    seg = run["segments"][0]
+    assert run["state"] == "done" and seg["mode"] == "fight" and seg["fight"]["state"] == "done"
+    shots = seg["fight"]["shots"]
+    assert len(shots) == 3 and [len(s["takes"]) for s in shots] == [1, 2, 1] and shots[1]["kept"] == 2
+    bodies = loop["queue"].bodies
+    edits = [b for b in bodies if b["kind"] == "edit"]
+    videos = [b for b in bodies if b["kind"] == "video"]
+    assert len(edits) == 3 and edits[0]["params"]["image"] == "uploads/hero.png" and edits[0]["params"]["images"] == ["uploads/face-a.png"]
+    assert len(videos) == 4 and [v["params"]["frames"] for v in videos] == [56, 56, 56, 73]
+    first = videos[0]["params"]["prompt"]
+    assert "From the very first frame, already in motion" in first and "vertical fist" in first and "wears exactly an orange reflective jacket" in first
+    assert "Make sure: Does this happen" in videos[2]["params"]["prompt"]  # the retake says what was missing
+    assert "1 beaten opponent" in videos[2]["params"]["prompt"] and "2 beaten opponents" in videos[3]["params"]["prompt"]
+    assert [t["speed"] for t in (shots[0]["takes"][0], shots[2]["takes"][0])] == [fight.RAMP_FALL, fight.RAMP_KEY]
+    assert (HOME / seg["output"]).is_file() and seg["takes"][0]["passed"] in (True, False) and len(seg["takes"]) == 1
+    assert "Lin Wan Kuen" in director.asked[0] or "Wing Chun" not in json.dumps(run["seed"])

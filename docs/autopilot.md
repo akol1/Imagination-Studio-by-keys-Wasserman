@@ -269,6 +269,36 @@ Every Viking v2 piece came out slow. Its motion prompts gave one long sentence o
   seconds the plan has fast measure slow and the eyes said slow motion in most of those windows (85 % when the eyes
   did not answer). The Director rewrites the piece with the finding and a note that the video model made it slow.
 
+## Fights: a choreographed sequence of short shots
+
+One 10 s take of a fight did not work: the pace and wardrobe run's fight takes eased in at 2 to 5 a second, ended in a
+stand-off, gave the opponent another face from piece to piece and kept a payroll chest in his arms through the blows.
+A segment the Director plans as a fight (`fight.sequence`: `auto`, `always` or `off`) is now made like a fight
+(`app/fight.py`):
+
+1. **Choreography.** The Director (thinking on) writes the whole fight first: an ordered list of shots of 1.5 to 4 s, one
+   move each, which opponent(s), the hero's technique by name and in plain words, the cause and its effect ("vertical
+   fist to the sternum -> he folds and drops onto his back"), the camera, the screen direction, who is down after it.
+   Checked in code and asked again: a beaten man never fights again and stays down, everyone is down by the last shot,
+   one or two key moves at most, every effect is cause -> effect, and in Wing Chun every move of the hero's is one of
+   its techniques (`fight.WING_CHUN`: the names and the plain physical words the video model gets).
+2. **Fixed references.** The hero and the opponents' faces are seed sheets with a picture, a look and a wardrobe line
+   (`role: opponent` for the opponents; N opponents are drawn with the faces in turn, so ten men read as different
+   men). Each shot's keyframe is an edit of the hero's picture with the opponent's beside it; every prompt says their
+   looks and wardrobe word for word, and how many beaten men lie on the floor.
+3. **Shots.** Each renders at the shortest length that holds its move (`fight.SHOT_FRAMES`: 39 to 90 frames), from its
+   keyframe, the speed and the physical reaction in its action.
+4. **Checks a shot** (yes/no, failed majors voted on): the hero against his reference, his wardrobe, the opponent
+   against his, the beaten men still down, the place, the move itself, a blow landing, the reaction as planned, no
+   floating or sliding, no limb or weapon that bends or vanishes, no merged bodies; Wing Chun form (a vertical fist,
+   elbows in; block and strike at once) as notes. A failed major renders that shot alone again (twice at most), with
+   what was missing said plainly in its prompt; the best take is kept.
+5. **Ramp and cut.** Each shot's first quarter second (the keyframe held still) is left out; an exchange is sped up
+   1.75x (frames dropped, never repeated), a shot that ends in a fall 1.3x (a fall must keep its weight), a key move
+   slowed to 0.6x with motion-interpolated frames. The motion is measured before and after (`checks.motion`, and the
+   limb speed of `pace.limbs`). The shots join with hard cuts into the segment's clip; the segment's own checks then
+   run on it, and it is never rendered again as a whole.
+
 ## The Director reasons first
 
 When the film's brain is a local server (the Studio's Bolt above all), every Director question (the next piece, a
