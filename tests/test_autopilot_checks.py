@@ -192,7 +192,7 @@ def answers_for(rules):
         keys = re.findall(r'^"(\w+)": (.*)$', prompt, re.M)
         out = {}
         for key, text in keys:
-            out[key] = "yes" if not re.search(r"change into a different|malformed|out of place|slow motion|second person who looks like|float, hover|bend, stretch|merge into each other", text) else "no"
+            out[key] = "yes" if not re.search(r"change into a different|malformed|out of place|slow motion|second person who looks like|float, hover|bend, stretch|merge into each other|more than two arms", text) else "no"
             for pattern, said in rules.items():
                 if re.search(pattern, text):
                     out[key] = said.pop(0) if isinstance(said, list) else said
@@ -601,7 +601,7 @@ def test_a_choreography_is_checked_in_code():
     shots = fight.clean(good)
     assert [s["frames"] for s in shots] == [73, 90, 90] and shots[2]["down_before"] == [1, 2]  # each a second longer than its move
     assert [fight.ramp_of(s) for s in shots] == [fight.RAMP_FALL, fight.RAMP_EXCHANGE, fight.RAMP_KEY]
-    assert "slaps the attacker's arm down" not in fight.plain("Lin Wan Kuen") and "chain punches" in fight.plain("Lin Wan Kuen")
+    assert "slaps the attacker's arm down" not in fight.plain("Lin Wan Kuen") and "three fast straight punches" in fight.plain("Lin Wan Kuen")
 
 
 class DojoDirector(FightDirector):

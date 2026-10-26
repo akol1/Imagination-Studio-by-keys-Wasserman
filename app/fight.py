@@ -44,14 +44,15 @@ SHOT_FRAMES = {1.5: 39, 2.0: 56, 2.5: 56, 3.0: 73, 3.5: 90, 4.0: 90, 4.5: 107, 5
 LEAD_S = 1.0
 RAMP_EXCHANGE, RAMP_FALL, RAMP_KEY = 1.75, 1.3, 0.6  # exchanges sped up, a fall sped up less, a key move slowed
 KEYS_MAX = 2
-SHOT_RETAKES = 2
+SHOT_RETAKES = 1  # on the dojo run a second retake rarely fixed what the first did not, at about 3 minutes a take
 TRIM_S = 0.25  # the first frames hold the keyframe still: left out of every shot
 
 WING_CHUN = {
     "Yee Ji Kim Yeung Ma": "a narrow inward stance, knees in, facing the attacker square on",
     "Juen Ma": "a short turning step on the spot",
     "Yat Ji Kuen": "a straight punch from the center of the chest with a vertical fist, thumb up, elbow down and in",
-    "Lin Wan Kuen": "rapid chain punches, one vertical fist after another down the centerline, too fast to count",
+    # "too fast to count" drew a stack of smeared fists (the dojo run's shot 3 and its keyframe): a clean rhythm instead
+    "Lin Wan Kuen": "three fast straight punches in a row, one vertical fist at a time, each fist clearly seen, driving forward down the centerline",
     "Biu Jee": "a straight finger thrust to the throat",
     "Jing Jeung": "a straight palm strike to the chest, fingers up",
     "Wang Jeung": "a sideways palm strike to the ribs, fingers pointing across",
@@ -357,6 +358,7 @@ def questions(run: dict, shot: dict, wing: bool, keyframe: bool = False) -> list
     if shot["down_before"]:
         ask("story", "Is at least one beaten man lying on the floor?", "yes")
     ask("setting", f"Is this place {(run.get('fight_location') or '')[:120] or 'the place of the fight'}?", "yes")
+    ask("physics", "Does any person have more than two arms, hands or fists, or do fists smear into a stack of several fists?", "no")
     if keyframe:
         ask("pace", "Is someone caught in the middle of a fast movement, a blow or a block already in motion, rather than standing still?", "yes")
         return out
