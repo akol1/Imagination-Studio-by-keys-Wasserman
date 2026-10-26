@@ -27,7 +27,9 @@ import base64
 import contextlib
 import json
 import os
+import signal
 import subprocess
+import sys
 import threading
 import time
 import urllib.error
@@ -137,7 +139,7 @@ def guard(proc: subprocess.Popen) -> None:
     while proc.poll() is None:
         free = mem_available_gb()
         if 0 <= free < GUARD_GB:
-            proc.kill()
+            kill(proc)
             state["why"] = f"stopped by its memory guard at {free:.1f} GB available (floor {GUARD_GB:g} GB)"
             print(f"[cosmos] {state['why']}", flush=True)
             return
@@ -164,8 +166,10 @@ def load() -> str:
         command = [str(BIN), "serve", str(MODEL), "--name", SERVED, "--host", "127.0.0.1", "--port", str(PORT),
                    "--no-update-check", "--vision", "--vision-max-images", str(MAX_IMAGES), "--context", "16384",
                    "--parallel", "1", "--keep-warm", "0"]
-        proc = subprocess.Popen(command, stdout=log, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL,
-                                cwd=str(BIN.parent), start_new_session=True)
+        # under the leash Bolt runs under (bolt_leash.py): it ends with the app, so a crash leaves no Cosmos behind
+        # holding the Studio's port (found on a DGX Spark, 2026-10-26: an app killed mid-run left its Cosmos on 8362)
+        proc = subprocess.Popen([sys.executable, "-I", str(Path(__file__).with_name("bolt_leash.py")), "--", *command], stdout=log,
+                                stderr=subprocess.STDOUT, stdin=subprocess.PIPE, cwd=str(BIN.parent), start_new_session=True)
         state.update(proc=proc, log=log, why="", used=time.time())
         threading.Thread(target=guard, args=(proc,), daemon=True, name="cosmos-guard").start()
         for _ in range(240):
@@ -176,6 +180,18 @@ def load() -> str:
             time.sleep(0.5)
         stop("did not answer in 120 s")
         raise LookupError("Cosmos3-Edge did not answer in 120 s: " + tail(log_path))
+
+
+def kill(proc: subprocess.Popen) -> None:
+    """The leash and the server under it."""
+
+    try:
+        os.killpg(proc.pid, signal.SIGKILL)
+    except OSError:
+        try:
+            proc.kill()
+        except OSError:
+            pass
 
 
 def tail(path: Path) -> str:
@@ -191,11 +207,11 @@ def stop(why: str = "") -> bool:
         if not proc or proc.poll() is not None:
             state["proc"] = None
             return False
-        proc.terminate()
+        proc.terminate()  # the leash ends the server
         try:
-            proc.wait(10)
+            proc.wait(25)
         except subprocess.TimeoutExpired:
-            proc.kill()
+            kill(proc)
         state["proc"] = None
         if state["log"]:
             state["log"].close()
@@ -241,23 +257,37 @@ def data_url(picture: Path) -> str:
     return f"data:image/{kind};base64," + base64.b64encode(picture.read_bytes()).decode()
 
 
-def chat(endpoint: str, model: str, system: str, frames: list[tuple[str, Path]], text: str, max_tokens: int = 2000) -> str:
-    """One request: the frames in time order, each after its caption ("0.00 s"), then the question."""
+def chat(endpoint: str, model: str, system: str, frames: list[tuple[str, Path]], text: str, max_tokens: int = 2000,
+         think: bool = False) -> str:
+    """One request: the frames in time order, each after its caption ("0.00 s"), then the question.
+
+    Cosmos3-Edge reasons first by default (its chat template), and in 2000 tokens it often reasons to the end of the
+    budget and answers nothing (a DGX Spark, 2026-10-26: ``thinking=True ... tokens=2000 finish=length``, 53 s for an
+    empty answer). The eyes' questions are short and checked by votes and second looks, so they go with thinking off
+    (``chat_template_kwargs``), unless ``think``; a server that refuses the switch is asked without it."""
 
     content = []
     for caption, picture in frames:
         content.append({"type": "text", "text": caption})
         content.append({"type": "image_url", "image_url": {"url": data_url(picture)}})
     content.append({"type": "text", "text": text})
-    body = json.dumps({"model": model, "temperature": 0.2, "max_tokens": max_tokens,
-                       "messages": [{"role": "system", "content": system}, {"role": "user", "content": content}]}).encode()
-    call = urllib.request.Request(endpoint.rstrip("/") + "/chat/completions", body, {"Content-Type": "application/json"})
-    try:
+    plain = {"model": model, "temperature": 0.2, "max_tokens": max_tokens,
+             "messages": [{"role": "system", "content": system}, {"role": "user", "content": content}]}
+
+    def ask(body: dict) -> str:
+        call = urllib.request.Request(endpoint.rstrip("/") + "/chat/completions", json.dumps(body).encode(), {"Content-Type": "application/json"})
         with urllib.request.urlopen(call, timeout=TIMEOUT) as reply:
-            return json.loads(reply.read())["choices"][0]["message"]["content"] or ""
+            return json.loads(reply.read())["choices"][0]["message"].get("content") or ""
+    try:
+        return ask({**plain, "chat_template_kwargs": {"enable_thinking": bool(think)}})
     except urllib.error.HTTPError as error:
-        said = error.read().decode(errors="replace")[:300]
-        raise TooMany(said) if error.code in (400, 413, 422) and "image" in said.lower() else RuntimeError(f"{error.code}: {said}")
+        code, said = error.code, error.read().decode(errors="replace")[:300]
+    if code in (400, 422) and "image" not in said.lower():
+        try:
+            return ask(plain)  # a server that does not take the switch
+        except urllib.error.HTTPError as error:
+            code, said = error.code, error.read().decode(errors="replace")[:300]
+    raise TooMany(said) if code in (400, 413, 422) and "image" in said.lower() else RuntimeError(f"{code}: {said}")
 
 
 class TooMany(RuntimeError):

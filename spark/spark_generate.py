@@ -16,6 +16,7 @@ team for Qwen-Image-2.1-Turbo, Stability AI for Stable Audio Open, Ho Kei Cheng 
 ComfyUI nodes, ComfyUI for the runtime.
 """
 import argparse
+import atexit
 import asyncio
 import json
 import math
@@ -183,6 +184,8 @@ def fits_or_exit(args, lora: bool = False, references: bool = False, base: bool 
           f"{found['available_mb'] / 1000:.0f} GB, floor {found['floor_mb'] / 1000:.0f} GB", flush=True)
     if not found["fits"]:
         sys.exit("refused before anything was loaded: " + found["reason"])
+    memory_guard.expect(found)  # the guard beside the server tells this render's own loading from a machine running out
+    atexit.register(memory_guard.unexpect)
 
 
 def upload(image: str) -> str:

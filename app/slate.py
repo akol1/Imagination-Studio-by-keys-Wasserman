@@ -374,7 +374,8 @@ def find_local(given: str = "") -> tuple[str | None, list[str]]:
 def extract_json(text: str):
     """The first complete JSON value in a reply that may carry fences or a preamble (Slate's extractJson)."""
 
-    cleaned = re.sub(r"```(?:json)?", "", text).strip()
+    cleaned = re.sub(r"```(?:json)?", "", text)
+    cleaned = re.sub(r"<think>.*?</think>|^.*?</think>", "", cleaned, flags=re.S).strip()  # a reasoning model's thoughts
     for opener, closer in (("{", "}"), ("[", "]")):
         start = cleaned.find(opener)
         if start == -1:
@@ -396,8 +397,26 @@ def extract_json(text: str):
                     try:
                         return json.loads(cleaned[start:at + 1])
                     except ValueError:
+                        mended = mend_json(cleaned[start:at + 1])
+                        if mended is not None:
+                            return mended
                         break
     raise ValueError("no valid JSON in the reply")
+
+
+def mend_json(text: str):
+    """The slips small models make in JSON, put right (trailing commas, Python's True/False/None, single quotes,
+    // comments); None when it still does not parse. On the Viking test film Cosmos3-Edge's answers had such slips."""
+
+    fixed = re.sub(r"(?m)//[^\n\"]*$", "", text)
+    fixed = re.sub(r",\s*([}\]])", r"\1", fixed)
+    fixed = re.sub(r"\bTrue\b", "true", re.sub(r"\bFalse\b", "false", re.sub(r"\bNone\b", "null", fixed)))
+    for attempt in (fixed, re.sub(r"'([^'\n]*)'", r'"\1"', fixed)):
+        try:
+            return json.loads(attempt)
+        except ValueError:
+            continue
+    return None
 
 
 def resolve_brain(backend: str, endpoint: str = "", model: str = "") -> tuple[str, str, str]:
@@ -411,11 +430,12 @@ def resolve_brain(backend: str, endpoint: str = "", model: str = "") -> tuple[st
     return now["backend"], now["endpoint"] or "", now["model"] or ""
 
 
-def ask(backend: str, system: str, prompt: str, tier: str, endpoint: str = "", model: str = "") -> str:
+def ask(backend: str, system: str, prompt: str, tier: str, endpoint: str = "", model: str = "", think: int = 0) -> str:
+    """``think``: a reasoning budget in tokens for a local server (agents.ask), 0 for none."""
     import agents
 
     backend, endpoint, model = resolve_brain(backend, endpoint, model)
-    return agents.ask(backend, system, prompt, tier, endpoint, model)
+    return agents.ask(backend, system, prompt, tier, endpoint, model, **({"think": think} if think else {}))
 
 
 NEARBY = [ipaddress.ip_network(net) for net in ("127.0.0.0/8", "10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16",

@@ -81,3 +81,37 @@ def test_a_run_shows_its_film_segments_watcher_notes_and_branch():
                  "identity · filtered by the second look", "the Director's next correction", "drift in segment 2", "Check the whole film", "runs on its own"):
         assert said in view, said
     assert "/api/autopilot/runs/r1/branch" in got["calls"]
+
+
+def test_the_form_offers_infinity_reasoning_and_the_dense_checks():
+    got = run("""
+      answers["/api/autopilot/runs"] = []; AR.runs = [];
+      out.view = text(viewAutoPilot(el("div", {}, "switch")));
+      AR.form.seed.world = "A quay"; AR.form.settings.infinity = true;
+      answers["/api/autopilot/runs"] = { id: "r9" };
+      await arCreate(true);
+      out.sent = calls.find(c => c[0] === "/api/autopilot/runs" && c[1]).at(1);
+    """)
+    for said in ("Infinity: no fixed length", "The Director reasons first", "Dense yes/no checks", "Votes for a major", "Pace check (fights fast)"):
+        assert said in got["view"], said
+    s = got["sent"]["settings"]
+    assert s["infinity"] is True and s["think"] is True and s["checks"]["every"] == 2 and s["checks"]["votes"] == 3
+    assert "pace" in s["continuity"]["categories"]
+
+
+def test_a_live_infinity_run_shows_the_latest_piece_the_next_beat_and_the_checks():
+    live = {**RUN, "running": True, "state": "running", "settings": {**RUN["settings"], "infinity": True},
+            "check_stats": {"requests": 14, "questions": 61, "seconds": 52.4, "votes": 2, "failed_answers": 3},
+            "checkpoint": {"segments": 1, "next": "Eirik drives the second thief into the barrels"},
+            "story_so_far": {"text": "Eirik fights two thieves for the payroll."}}
+    live["segments"] = [{**RUN["segments"][0], "check_stats": {"requests": 14, "questions": 61, "seconds": 52.4, "votes": 2, "failed_answers": 3},
+                         "pace": {"kind": "fight", "beats": [{"from": 0, "to": 6, "speed": "fast", "what": ""}, {"from": 6, "to": 8, "speed": "slow", "what": "the blow"}]},
+                         "memory": [{"from": 243, "to": 192, "why": "memory first"}]}]
+    got = run(f"""
+      AR.runs = [{{ id: "r1", name: "Storm Courier", segments: 1 }}]; AR.id = "r1"; AR.run = {json.dumps(live)};
+      out.view = text(viewAutoPilot(el("div", {{}}, "switch")));
+    """)
+    view = got["view"]
+    for said in ("Infinity", "Checks so far: 14 requests", "61 yes/no questions", "Next beat: ", "Eirik drives the second thief", "Story so far: ",
+                 "Pace (fight): ", "6–8 s slow (the blow)", "10.1 → 8.0 s at the same size", "checkpoint after segment 1"):
+        assert said in view, said

@@ -2799,8 +2799,23 @@ import agents  # noqa: E402  (Brains and agents: the user's own CLI sign-ins and
 app.include_router(agents.attach(HOME))
 import cosmos  # noqa: E402  (the vision brain: NVIDIA Cosmos3-Edge on TensorFold, beside this file)
 import autopilot  # noqa: E402  (AutoPilot: an open-ended film that watches itself and directs the next segment)
+
+
+def autopilot_room(params: dict) -> dict | None:
+    """Whether an AutoPilot piece fits this machine's memory now, with the shorter lengths that do at its size
+    (memory_of: the memory guard's estimate, the Studio's own loaded models counted as room since a render unloads them)."""
+
+    if not SPARK:
+        return None
+    chosen, _ = custom(params) if params.get("preset") == "custom" else ({}, False)
+    sized = {**(PRESETS[params["preset"]][2] if params.get("preset") in PRESETS else {}), **chosen}
+    found = {"pictures": params["references"], "videos": []} if params.get("references") else None
+    return memory_of(params, sized, int(params["frames"]), bool(params.get("loras")), found)
+
+
 app.include_router(autopilot.attach(HOME, queue=queue_job, lookup=jobs.get, stop_job=cancel, plain=compose, referenced=compose_references,
-                                 references=ref2va_ready, references_turbo=ref2va_turbo_ready, quality="fh8" if SPARK else "standard"))
+                                 references=ref2va_ready, references_turbo=ref2va_turbo_ready, quality="fh8" if SPARK else "standard",
+                                 fits=autopilot_room))
 
 
 @app.get("/api/bolt/state")

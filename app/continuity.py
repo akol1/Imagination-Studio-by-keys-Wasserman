@@ -32,7 +32,9 @@ import copy
 import difflib
 import re
 
-CATEGORIES = ("identity", "wardrobe", "props", "location", "setting", "lighting", "era", "spatial", "action", "audio", "story")
+CATEGORIES = ("identity", "wardrobe", "props", "location", "setting", "lighting", "era", "spatial", "action", "audio", "story", "pace")
+# decided in code from measurements and yes/no answers (checks.py), never asked as a checklist verdict
+MEASURED = ("pace",)
 # what the frames can show; the audio is held in the prompts instead (each speaker's voice is the bible's, word for word)
 WATCHED = tuple(c for c in CATEGORIES if c != "audio")
 VERDICTS = ("ok", "minor", "major", "not_visible")
@@ -40,7 +42,7 @@ STRICTNESS = {
     # retake: the categories whose confirmed major finding renders the segment again; unsure: what a major finding
     # becomes when its second look cannot be made
     "lenient": {"retake": ("identity", "era"), "unsure": "drop"},
-    "standard": {"retake": ("identity", "era", "setting", "story", "action"), "unsure": "minor"},
+    "standard": {"retake": ("identity", "era", "setting", "story", "action", "pace"), "unsure": "minor"},
     "strict": {"retake": WATCHED, "unsure": "major"},
 }
 DEFAULT = {"strictness": "standard", "categories": list(CATEGORIES), "film_pass": True}
@@ -118,6 +120,12 @@ def clean(given, base: dict | None = None) -> dict:
 
 
 def checked(opts: dict) -> list[str]:
+    """The categories the checklist asks about (the measured ones are decided in code)."""
+    return [c for c in opts["categories"] if c in WATCHED and c not in MEASURED]
+
+
+def watched(opts: dict) -> list[str]:
+    """Every category the run checks from the pictures, the measured ones too."""
     return [c for c in opts["categories"] if c in WATCHED]
 
 

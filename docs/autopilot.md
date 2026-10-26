@@ -12,8 +12,9 @@ Rebirth's HyperFlow-Infinity (Apache-2.0; `LICENSES/HyperFlow-Infinity-LICENSE`)
 and their quality.
 
 Code: `app/autopilot.py` (the loop and its routes), `app/continuity.py` (the continuity bible and what its checks mean),
-`app/cosmos.py` (the vision brain), `app/static/autopilot.js` (the panel), `tests/test_autopilot.py`,
-`tests/test_autopilot_continuity.py`, `tests/test_autopilot_page.py`.
+`app/checks.py` (the dense yes/no checks and the pace), `app/cosmos.py` (the vision brain), `app/static/autopilot.js`
+(the panel), `tests/test_autopilot.py`, `tests/test_autopilot_continuity.py`, `tests/test_autopilot_checks.py`,
+`tests/test_autopilot_page.py`.
 
 **Fully autonomous.** A run needs nobody once it starts, as HyperFlow-Infinity's does: there is no approval anywhere.
 The Director chooses each next step of the story and the camera for each piece itself (framing, angle, movement;
@@ -178,7 +179,117 @@ report only (`film-check.json`): nothing is rendered again.
 [{style, segments: "1-7"}]`, `keyframes: auto|on|off`, and the seed's `rules`. Categories left out are not asked.
 
 **Cost**: one more question to the eyes a take (the checklist), one a major finding (the second look), and a keyframe
-a piece in keyframe mode (one picture and one check). Not yet measured on a real run.
+a piece in keyframe mode (one picture and one check), plus the dense checks below.
+
+## Dense checks
+
+One verdict a piece was not enough. On the Viking v2 film Cosmos3-Edge read a scar as a wound, a carved training-dummy
+face as an extra person, answered the same picture differently twice, and once answered in nested JSON that was read
+as "no answer" to every question, so a good piece was rendered again. Now (`app/checks.py`):
+
+- **Windows.** Each take is looked at in windows of about `checks.every` seconds (2), each `checks.frames` frames (3)
+  with their times, after the reference picture of each person the shot names. A 10 s piece is five windows.
+- **Yes/no, decided in code.** Each window gets short questions built from the bible: is Eirik the same person in
+  every frame and as in his reference, does he wear the brown coat, does he hold the musket, is this the place the
+  piece asked for, is anything out of place for the era, does a person turn into another, is a face or hand malformed,
+  is the light as the scene's. The eyes answer `yes`, `no` or `unclear`; pass or fail is decided against the answer the
+  bible expects. `unclear` and a missing answer are never a failure. An answer that is not JSON, or answers fewer than
+  70 % of the questions, is asked again once. The reader is tolerant: nested answers are flattened, Python's
+  `True`/`None`, trailing commas and single quotes are put right, reasoning in think tags is dropped.
+- **Votes.** A failed question of a major kind is asked again on its own until `checks.votes` (3) answers, and fails
+  only by a majority of the yes/no answers; a tie fails nothing. Then the second look (above) has the last word.
+- **The keyframe** gets the same questions (one still) before anything moves (`checks.keyframe`).
+- **The join.** A continuation's first frame is put beside the last frame of the piece before: the same person in the
+  same clothes, the same place in the same light? (`checks.join`)
+- **The checklist's single verdict is checked by the windows.** A major from the checklist in a category whose yes/no
+  questions passed in every window becomes a correction for the Director, not a retake.
+- **Rolling film-level pass.** In Infinity the last `film_window` (6) pieces are compared every `film_every` (4)
+  pieces: the same people, places and props across the joins (`film-check-to0012.json`, `film_checks` in run.json).
+- **Logged.** Every request is written to `segments/S0001/checks-take1.json`: the window, its times, each question, the
+  expected answer, the answer, the votes and the seconds. Each segment and the run keep counts (`check_stats`:
+  requests, questions, failed answers, votes, seconds); the panel shows them, and a link to every answer.
+
+Settings: `checks: {dense, every, frames, votes, join, keyframe, pace}`. More windows or votes cost more time; the
+time each piece's checks took is in `check_stats.seconds`.
+
+## Pace
+
+Every Viking v2 piece came out slow. Its motion prompts gave one long sentence of action and a camera that moved
+"slowly" ("the camera arcs slowly left", "pushes slowly forward"), with no word about speed. Now:
+
+- **The Director plans the pace** of each piece: `pace: {kind: fight|action|chase|calm|dialogue, beats: [{from, to,
+  speed: fast|real|slow, what}]}`. A fight, a chase or an action piece is mostly fast and in real time: quick strikes,
+  rapid exchanges, a snappy camera (whip pans, quick handheld reframes). Slow motion is for one or two key moves (the
+  decisive blow, a signature technique), a third of the piece at most, and its timing is written into the action:
+  "0-6 s rapid real-time exchange ...; 6-8 s slow motion on the centerline punch; 8-10 s back to full speed". An
+  answer is turned back when a fight has no beats, more than two slow spans or too much slow time, a camera that
+  says "slow" or "slowly", a slow span without its timing in the action, or an action that says slow motion with no
+  slow span planned.
+- **The video prompt says the speed.** MiniMax H3 has no speed control; the words are all it gets. A fight's action
+  ends with "Pace: fast, real-time speed throughout, quick strikes and rapid exchanges, sharp impacts, snappy whip pans
+  and quick handheld reframes, with slow motion only from 6 to 8 s on the centerline punch, then straight back to full
+  real-time speed." A calm piece gets no pace words.
+- **The pace is measured.** `checks.motion` takes the mean difference between consecutive frames (64x36 grey) a second
+  at a time. Measured on a DGX Spark (2026-10-26): the Viking v2 pieces the owner found too slow 1.9 to 11 a second
+  (the street fight 1.9 to 11, mostly under 8; the last stand 2.1 to 5.4), a sprint down a street 4.4 to 26, two
+  dancers at speed 9.0 to 15.0, a calm baker 0.8 to 2.7. Under 8 (`checks.SLOW`) a second reads as slow for a fight.
+  This line comes from ten clips: measure it again on more.
+- **The eyes are asked too**: "is the motion in these frames slow motion?" in each window of a fight.
+- **A fight that comes out slow is a major** (`pace`, a retake in `standard` and `strict`): 60 % or more of the
+  seconds the plan has fast measure slow and the eyes said slow motion in most of those windows (85 % when the eyes
+  did not answer). The Director rewrites the piece with the finding and a note that the video model made it slow.
+
+## The Director reasons first
+
+When the film's brain is a local server (the Studio's Bolt above all), every Director question (the next piece, a
+retake from the findings, a keyframe rewrite, the chapter fold, the story so far) asks it to reason before it answers:
+`chat_template_kwargs: {"enable_thinking": true}`, the switch NVIDIA's chat template for Nemotron 3.5 Bolt reads, with
+`max_tokens` the reasoning budget (`think_tokens`, 4096) plus 3000 for the answer. TensorFold's engine takes the
+switch per request even though the Studio starts it with `--no-thinking`, and returns the reasoning in
+`reasoning_content`; it is dropped, and so are think tags left in the answer. When the reasoning uses the whole budget
+(an empty answer) or a server refuses the switch, the question is asked again without it. A CLI brain (Claude Code,
+Codex) reasons by itself: nothing changes there. `think: false` turns it off.
+
+Measured on a DGX Spark (2026-10-26, Bolt with the Studio's settings, a 10 s fight plan): 2222 reasoning tokens and
+22 s with thinking against 1.7 s without; the answer parsed as JSON both times.
+
+## Infinity
+
+`infinity: true` (the panel's *Infinity* toggle): no fixed length. The Director keeps writing the next beat from the
+story so far, the continuity bible and the eyes' findings; each piece is keyframed (in keyframe mode), rendered,
+checked, retaken if it must be, and joined to the film. It ends when you press Stop, at `max_minutes` of work or
+`max_film_seconds` of film (0: no limit), or when the Director ends the story (`"end": true`, asked for only in
+Infinity).
+
+- **Checkpoints** after every piece: `checkpoint.json` and `checkpoints/S0001.json` hold the pieces kept (output,
+  seed, length, passed), the film so far, the bible and memory of that moment, the story so far, the check counts and,
+  once written, the next beat. `run.json`, `memory/` and `bible/` are written at every step too.
+- **No intervention.** The film is joined after every piece, always playable and downloadable on the panel. A run
+  that was live when the app stopped (a crash, a restart) is picked up by itself when the Studio starts again, at the
+  step it was at: a take that was rendered is checked, not rendered again. A problem in Infinity (a brain that does
+  not answer, a failed render) is waited out and tried again from the last checkpoint, five times in a row at most.
+- **Bounded context.** The Director reads the last 12 beats, the scene graph's bounded view (chapters for the older
+  events), the bible's slice for the people in play, and a running *story so far* of 120 words, written again every
+  `story_every` (6) pieces from the chapters and the latest beats.
+- **Live view.** While it runs the panel shows the latest piece, the next beat, the story so far and the check counts.
+
+## Memory first: 720p pieces without a crash
+
+AutoPilot renders at the Sharp Spec (1376x768) by default and keeps that size:
+
+- **Before each piece** the memory guard's estimate is asked with what the machine has now (`server.autopilot_room`,
+  `memory_of`): when the piece does not fit, it is made shorter at the same size (the longest length that fits),
+  never smaller, and not under `min_seconds` (4). The queue's own refusal ("What fits: 209 frames") is read the same
+  way. The Studio's Cosmos, Bolt, Drama 3 and Music are unloaded before every render by the queue itself
+  (`cosmos.release`, `bolt.admit` at the top of `server.perform`) and load again for the next question.
+- **A render the guard stopped** (or any out-of-memory end) is rendered again a fifth shorter, at the same size,
+  three times at most, and the run goes on. Each change is in the segment's `memory` list and the log.
+- **The load spike.** On the Viking v2 film the guard stopped six loads that would have fitted: "33825 MB available
+  and falling by 28270 MB a second" (the int8 engine loading its weights) and "50 % of the last 2 s waiting on memory,
+  with 34856 MB available". Now a render on the int8 routes says what it will take before it loads
+  (`memory_guard.expect`, from `spark_generate.py`'s check), and while it has taken no more than that and its error
+  margin, the guard projects the fall only two polls ahead onto the floor itself, and does not stop it for a stall.
+  The floor is unchanged and always stops it; past its own estimate the old rules apply.
 
 ## Measured
 

@@ -162,6 +162,7 @@ LOCAL_DRIVE = (" You run the Studio's tools yourself, through function calls: ca
 LOCAL_METHOD = ("rules", "hints", "compact", "report", "temp=0")
 LOCAL_STEPS = 40  # the local model's answers in one turn (each may call several tools)
 LOCAL_ANSWER_TIMEOUT = 600  # one answer from the local server
+THINK_ANSWER_TOKENS = 3000  # room for the answer itself after a reasoning budget (ask(think=...))
 LOCAL_TOOL_TIMEOUT = 15 * 60  # one tool call (wait_for_jobs waits up to 10 minutes)
 LOCAL_RESULT_CHARS = 6000  # what the model reads of one tool's answer
 TOOLS_TTL = 10 * 60  # whether a local server takes tool calls, asked again after this
@@ -932,9 +933,25 @@ def hermes_events(stdout: str) -> tuple[list[dict], str, str, str]:
     return events, reply, session, error
 
 
+THINK_TAGS = re.compile(r"<think>.*?</think>|^.*?</think>", re.S)
+
+
+def without_thinking(text: str) -> str:
+    """The answer without reasoning a server left in it (``<think>…</think>``, or everything up to a lone ``</think>``)."""
+
+    return THINK_TAGS.sub("", text or "").strip()
+
+
 def ask(backend: str, system: str, prompt: str, tier: str = "top", endpoint: str = "", model: str = "",
-        settings: dict | None = None, timeout: int | None = None) -> str:
-    """One answer from a brain: a CLI here or over ssh, or a local OpenAI-compatible server."""
+        settings: dict | None = None, timeout: int | None = None, think: int = 0) -> str:
+    """One answer from a brain: a CLI here or over ssh, or a local OpenAI-compatible server.
+
+    ``think`` (tokens) asks a local server to reason first: ``chat_template_kwargs {"enable_thinking": true}``, the
+    switch of Nemotron 3.5 Bolt's chat template, which TensorFold's engine honours per request even when it was started
+    with ``--no-thinking``. The reasoning comes back in ``reasoning_content`` (or between think tags) and is dropped;
+    ``max_tokens`` is the reasoning budget plus room for the answer, since both share it. An answer that is empty
+    because the reasoning used the budget, or a server that refuses the switch, is asked again without it. A CLI
+    brain (Claude Code, Codex, ...) does its own reasoning: ``think`` changes nothing there."""
 
     config, timeout = settings or saved_settings(), timeout or slate.TIMEOUT
     one = local_agent(backend, config)
@@ -946,16 +963,34 @@ def ask(backend: str, system: str, prompt: str, tier: str = "top", endpoint: str
             raise RuntimeError(f"{one['name']} does not answer at {one['endpoint']}: start its server, or change its address in Settings → Connections")
         if not base:
             raise RuntimeError("no local model server answers: start Ollama, LM Studio, vLLM or llama.cpp, or set its address in Settings → Connections")
-        body = json.dumps({"model": answering_model(models, model or config["local_model"]), "temperature": 0.7,
-                           "messages": [{"role": "system", "content": system}, {"role": "user", "content": prompt}]}).encode()
+        plain = {"model": answering_model(models, model or config["local_model"]), "temperature": 0.7,
+                 "messages": [{"role": "system", "content": system}, {"role": "user", "content": prompt}]}
+        thinking = {**plain, "chat_template_kwargs": {"enable_thinking": True}, "max_tokens": int(think) + THINK_ANSWER_TOKENS}
 
-        def asked(live: str) -> str:
-            request = urllib.request.Request(live + "/chat/completions", body, {"Content-Type": "application/json"})
-            with urllib.request.urlopen(request, timeout=timeout) as answer:
-                return json.loads(answer.read())["choices"][0]["message"]["content"]
-        if base == bolt.ENDPOINT:  # the Studio's engine: loaded on this first question; refused (with why) while a job holds its memory
-            return bolt.answered(asked, wait=False)
-        return asked(base)
+        def asked_with(body: dict):
+            def asked(live: str) -> str:
+                request = urllib.request.Request(live + "/chat/completions", json.dumps(body).encode(), {"Content-Type": "application/json"})
+                with urllib.request.urlopen(request, timeout=timeout) as answer:
+                    return without_thinking(json.loads(answer.read())["choices"][0]["message"].get("content") or "")
+            return asked
+
+        def one(body: dict) -> str:
+            if base == bolt.ENDPOINT:  # the Studio's engine: loaded on this first question; refused (with why) while a job holds its memory
+                return bolt.answered(asked_with(body), wait=False)
+            return asked_with(body)(base)
+        if think and think > 0:
+            try:
+                said = one(thinking)
+                if said.strip():
+                    return said
+            except urllib.error.HTTPError as error:
+                if error.code not in (400, 422):
+                    raise
+            except RuntimeError as error:
+                if not re.search(r"said 4(00|22)", str(error)):
+                    raise
+            # the reasoning used the whole budget, or the server does not take the switch: once more without it
+        return one(plain)
     if backend not in CLIS:
         raise RuntimeError("pick a brain: " + ", ".join(BACKENDS))
     host = where_of(backend, config)

@@ -58,12 +58,18 @@ class Watcher:
     It answers the continuity checklist too (``checks``/``facts``: {checklist call number: answer part}, all ok by
     default), the second look (``second``: what it says in turn, confirmed by default) and the film-level pass."""
 
-    def __init__(self, drift=(), same=False, confirms=True, checks=None, facts=None, second=(), film=None, world=None, present="Vex", keyframes=None):
+    def __init__(self, drift=(), same=False, confirms=True, checks=None, facts=None, second=(), film=None, world=None, present="Vex", keyframes=None,
+                 yesno=None):
         self.calls, self.drift, self.same, self.prompts, self.confirms, self.checked = 0, set(drift), same, [], confirms, 0
         self.checks, self.facts, self.second, self.film, self.world, self.present = checks or {}, facts or {}, list(second), film, world, present
         self.checklists, self.looks, self.films, self.keyframes, self.keyframe_checks = [], [], [], keyframes or {}, []
+        self.yesno, self.answer_yesno = [], yesno  # the dense checks: unanswered ("unclear") unless ``yesno`` says
 
     def __call__(self, system, frames, sheet, prompt, brain):
+        if prompt.startswith("YES/NO CHECK"):
+            self.yesno.append((prompt, [p for _, p in frames]))
+            assert all(Path(p).is_file() for _, p in frames)
+            return (self.answer_yesno(prompt, frames) if self.answer_yesno else "{}"), "stand-in"
         if "clearly the same person" in prompt:  # the narrower second look (confirm_drift)
             self.checked += 1
             assert len(frames) == 3
@@ -139,6 +145,7 @@ def loop(monkeypatch):
     monkeypatch.setattr(autopilot, "submit", queue.submit)
     monkeypatch.setattr(autopilot, "job_of", queue.lookup)
     monkeypatch.setattr(autopilot, "cancel", lambda job_id: None)
+    monkeypatch.setattr(autopilot, "room", lambda params: None)  # this machine's memory is not the test's
     monkeypatch.setattr(autopilot, "gate", lambda clip, prompt, sheet, brain: {"passed": True, "audio": {"result": "pass", "heard": "go go go"}, "identity": {"result": "pass"}})
     monkeypatch.setattr(autopilot.qa, "ready", lambda: {"runs": True, "transcript": True, "sheet": True, "missing": []})
     director, watcher = Director(), Watcher()

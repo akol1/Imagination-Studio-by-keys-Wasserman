@@ -536,24 +536,78 @@ def sound_check(kind: str, seconds: float, available_mb: int | None = None, tota
 
 # ---------- layer 2: the floor under a running server ----------
 
-def verdict(samples: list[tuple[float, int]], floor: int, stalled: float = 0.0) -> str:
+# The routes whose loading fall is measured (the int8 engine, with or without a LoRA): while a clip of theirs has
+# taken no more than its estimate, a fast fall is its own model loading (29.5 GB a second while the engine loads its
+# weights), not a machine running out. On the Viking v2 film (2026-10-25, a worker Spark, 1376x768, 243 frames, about
+# 71 GB estimated of 100) the guard stopped six loads that would have fitted: "33825 MB available and falling by 28270
+# MB a second" (floor 20 GB), and "50 % of the last 2 s waiting on memory, with 34856 MB available" (floor 26 GB).
+EXPECT_ROUTES = ("int8", "int8-lora")
+EXPECT_AHEAD_S = 2 * POLL_S  # within its estimate the fall is projected this far ahead, onto the floor itself
+
+
+def expect_file() -> str:
+    return state_file() + ".expect"
+
+
+def expect(found: dict, pid: int | None = None) -> None:
+    """A render that passed ``check`` says what it will take (spark_generate.py, before anything loads), for the
+    guard beside the server to tell its loading from a machine running out. Kept while ``pid`` lives."""
+
+    if found.get("route") not in EXPECT_ROUTES or not found.get("need_mb"):
+        return
+    try:
+        scratch = expect_file() + ".tmp"
+        with open(scratch, "w") as handle:
+            handle.write(f"{meminfo().get('MemAvailable', 0) // 1024} {int(found['need_mb'])} {int(found.get('error_mb') or ERROR_MB)} {pid or os.getpid()}\n")
+        os.replace(scratch, expect_file())
+    except (OSError, KeyError):
+        pass
+
+
+def unexpect() -> None:
+    try:
+        os.remove(expect_file())
+    except OSError:
+        pass
+
+
+def expected() -> dict | None:
+    """{"baseline", "need", "error"} (MB) of the render in progress that said what it will take; None otherwise."""
+
+    try:
+        with open(expect_file()) as handle:
+            base, need, error, pid = (int(x) for x in handle.read().split()[:4])
+    except (OSError, ValueError):
+        return None
+    return {"baseline": base, "need": need, "error": error} if alive(pid) else None
+
+
+def verdict(samples: list[tuple[float, int]], floor: int, stalled: float = 0.0, expecting: dict | None = None) -> str:
     """Why the server must stop now ("" while it may run). ``samples`` are (time, MB available), newest last;
     ``stalled`` is the share of the last STALL_WINDOW_S in which every task waited on memory. A stall stops the
     server only under twice the floor available: loading the models from a cold start (the text encoder, then
     42 GB of H3 staged from the page cache) has the kernel reclaim cache for seconds, which it counts as waiting
     on memory, with half the machine still available (a 2-minute clip was stopped so with 62 GB available, and
-    ran to the end without the stop). Running out is caught by the floor and the rate of the fall."""
+    ran to the end without the stop). Running out is caught by the floor and the rate of the fall.
+
+    ``expecting`` (``expected()``): a render on a measured route said what it will take. While it has taken no more
+    than that and its error, its fall is its own loading: the stall is not a reason, and the fall is projected only
+    EXPECT_AHEAD_S ahead, onto the floor itself. The floor stands as it is, always."""
 
     now, free = samples[-1]
     if free < floor:
         return f"{free} MB available, under the floor of {floor} MB"
+    within = bool(expecting) and expecting["baseline"] - free <= expecting["need"] + expecting["error"]
     before = next(((t, m) for t, m in samples if now - t <= RATE_WINDOW_S), samples[-1])
     if now - before[0] >= RATE_WINDOW_S * 0.6:
         fall = (before[1] - free) / (now - before[0])
-        if fall > 0 and free - fall < floor / 3:
+        if within and fall > 0 and free - fall * EXPECT_AHEAD_S < floor:
+            return (f"{free} MB available and falling by {fall:.0f} MB a second, under the floor of {floor} MB within "
+                    f"{EXPECT_AHEAD_S:g} s (within the render's own estimate)")
+        if not within and fall > 0 and free - fall < floor / 3:
             return (f"{free} MB available and falling by {fall:.0f} MB a second, which is under {floor // 3} MB within a second "
                     f"(the floor is {floor} MB)")
-    if STALL_SHARE and stalled >= STALL_SHARE and free < 2 * floor:
+    if STALL_SHARE and stalled >= STALL_SHARE and free < 2 * floor and not within:
         return f"the machine spent {100 * stalled:.0f} % of the last {STALL_WINDOW_S:g} s waiting on memory, with {free} MB available"
     return ""
 
@@ -682,8 +736,11 @@ def watch(pid: int, floor: int, say=print) -> int:
             say(f"[tensorfold] memory floor: {before} MB free with the rest in the page cache: gave back the cache of {count} "
                 f"model files, {meter.read()['free']} MB free now", flush=True)
 
+    expecting, looked = None, 0.0
     while alive(pid):
         now, mem = time.monotonic(), meter.read()
+        if now - looked > 0.5:  # what the render in progress said it will take (expect), read twice a second
+            expecting, looked = expected(), now
         samples.append((now, mem["available"]))
         while now - samples[0][0] > 1.0:
             samples.pop(0)
@@ -694,7 +751,7 @@ def watch(pid: int, floor: int, say=print) -> int:
                 stalls.pop(0)
             if now - stalls[0][0] >= STALL_WINDOW_S * 0.9:
                 stalled = (stall - stalls[0][1]) / 1e6 / (now - stalls[0][0])
-        why = verdict(samples, floor, stalled)
+        why = verdict(samples, floor, stalled, expecting)
         if why:
             try:
                 os.kill(pid, signal.SIGKILL)

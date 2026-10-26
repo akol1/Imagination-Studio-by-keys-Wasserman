@@ -8,7 +8,7 @@ const AR = { runs: null, id: null, run: null, creating: false, poll: null, visio
 try { AR.id = localStorage.getItem("autopilot-run") || null; } catch {}
 const AR_STATES = { idle: "ready", running: "running", paused: "paused", done: "done", failed: "failed" };
 // the continuity bible's categories (app/continuity.py CATEGORIES); audio is held in the prompts, the others are watched
-const AR_CATEGORIES = ["identity", "wardrobe", "props", "location", "setting", "lighting", "era", "spatial", "action", "audio", "story"];
+const AR_CATEGORIES = ["identity", "wardrobe", "props", "location", "setting", "lighting", "era", "spatial", "action", "audio", "story", "pace"];
 const AR_VERDICT = { ok: "ok", not_visible: "not visible", minor: "minor", major: "major", filtered: "filtered by the second look", no_evidence: "no evidence", benign: "said nothing wrong" };
 const arBlank = () => ({ name: "", from: "fresh", slate: "",
   seed: { inspiration: "", world: "", situation: "", characters: [{ name: "", look: "", image: "", segments: "" }], opening_image: "", rules: "" }, outline: "",
@@ -16,7 +16,20 @@ const arBlank = () => ({ name: "", from: "fresh", slate: "",
   settings: { style: "", styles: [], guidance: "", preset: S.presets.sharp ? "sharp" : S.presets.small ? "small" : Object.keys(S.presets)[0], quality: S.qualities.fh8 ? "fh8" : Object.keys(S.qualities)[0],
     seconds: S.durations && S.durations[10] ? 10 : 5, segments: 6, seed: 1, max_scene_segments: 8, qa: true, retakes: 2, preview_every: 3, keyframes: "auto", identity: "auto", ref_turbo: true, music: "", loras: [],
     continuity: { strictness: "standard", categories: AR_CATEGORIES.slice(), film_pass: true },
+    think: true, think_tokens: 4096, infinity: false, max_minutes: 0, max_film_seconds: 0, film_every: 4, min_seconds: 4,
+    checks: { dense: true, every: 2, frames: 3, votes: 3, join: true, keyframe: true, pace: true },
     brain: { backend: "auto", endpoint: "", model: "" } } });
+const arToggle = (o, key, label, title = "") => el("div", { class: "fit", title }, el("label", {}, label), el("button", { type: "button", class: "toggle" + (o[key] ? " on" : ""), "aria-pressed": o[key] ? "true" : "false", onclick: () => { o[key] = !o[key]; render(); } }, el("span", { class: "dotl" + (o[key] ? "" : " o") }), o[key] ? "On" : "Off"));
+// Infinity, the Director's reasoning and the dense checks (app/checks.py)
+function arMore(s) { const c = s.checks || (s.checks = { dense: true, every: 2, frames: 3, votes: 3, join: true, keyframe: true, pace: true });
+  const num = (o, key, label, min, max, step = 1, w = 130) => el("div", { class: "fit", style: "width:" + w + "px" }, el("label", {}, label), bind(o, key, el("input", { type: "number", min, max, step })));
+  return el("div", {}, el("div", { class: "row" }, arToggle(s, "infinity", "Infinity: no fixed length", "It goes on until you stop it, a limit below is reached, or the Director ends the story; the film is joined and a checkpoint written after every piece"),
+      s.infinity ? [num(s, "max_minutes", "Stop after minutes (0: never)", 0, 43200, 1, 190), num(s, "max_film_seconds", "Stop at film seconds (0: never)", 0, 1000000, 1, 200), num(s, "film_every", "Check the last joins every", 1, 100, 1, 190)] : null, el("span")),
+    el("div", { class: "row" }, arToggle(s, "think", "The Director reasons first", "Bolt's thinking switch, within a budget of tokens; a CLI brain reasons on its own"), num(s, "think_tokens", "Reasoning budget (tokens)", 0, 32768, 256, 190),
+      num(s, "min_seconds", "Shortest piece if memory is short (s)", 1, 15, 1, 230), el("span")),
+    el("div", { class: "row" }, arToggle(c, "dense", "Dense yes/no checks", "Each piece looked at in windows of a few frames, short yes/no questions from the bible, decided in code; failed majors voted on"),
+      num(c, "every", "A window every (s)", 1, 10, 0.5), num(c, "frames", "Frames a window", 1, 4), num(c, "votes", "Votes for a major", 1, 7),
+      arToggle(c, "join", "Check each join"), arToggle(c, "keyframe", "Yes/no on keyframes"), arToggle(c, "pace", "Pace check (fights fast)"), el("span"))); }
 async function arList() { try { const l = await api("/api/autopilot/runs"); AR.runs = Array.isArray(l) ? l : []; } catch (e) { AR.runs = []; toast(e.message); }
   if (!AR.id && AR.runs.length) AR.id = AR.runs[0].id; if (AR.id && !AR.runs.some(r => r.id === AR.id)) AR.id = AR.runs.length ? AR.runs[0].id : null;
   if (AR.id) await arLoad(AR.id); else render(); }
@@ -76,7 +89,7 @@ function arSettings(s, locked) { const num = (key, label, min, max, w = 120) => 
     el("div", { class: "row" }, field("A new scene keeps who is who with", select(s, "identity", { auto: "the cast's pictures where Ref2VA is installed, else words", references: "the cast's pictures (Ref2VA)", frame: "words only" })),
       field("Score under every segment (optional)", bind(s, "music", el("input", { placeholder: "a low pulsing synth bed, 100 bpm" }))),
       el("div", { class: "fit" }, el("label", {}, "QA gate"), el("button", { type: "button", class: "toggle" + (s.qa ? " on" : ""), "aria-pressed": s.qa ? "true" : "false", onclick: () => { s.qa = !s.qa; render(); } }, el("span", { class: "dotl" + (s.qa ? "" : " o") }), s.qa ? "On" : "Off"))),
-    arContinuitySettings(s), loraHub(s, () => {})]; }
+    arContinuitySettings(s), arMore(s), loraHub(s, () => {})]; }
 function arForm() { const f = AR.form || (AR.form = arBlank());
   if (AR.films === null) { AR.films = []; api("/api/slate/projects").then(l => { AR.films = Array.isArray(l) ? l : []; render(); }).catch(() => {}); }
   return el("div", { "data-clear": "autopilot-seed" }, el("h3", {}, "A new run"),
@@ -116,7 +129,7 @@ function arSegment(run, seg) { const w = seg.watch || {}, last = (seg.takes || [
     w.summary || w.ending ? el("div", { class: "note" }, el("b", {}, "Watcher" + (w.by ? " (" + w.by + ")" : "") + ": "), (w.summary || "") + (w.ending ? " Ends on: " + w.ending : "")) : null,
     (w.continuity || []).length ? el("div", { class: "tip" }, el("b", {}, "Continuity"), w.continuity.map(c => c.kind + (c.who ? " · " + c.who : "") + ": " + c.note).join(" · ")) : null,
     (seg.reasons || []).length ? el("div", { class: "tip" }, el("b", {}, "Did not pass"), seg.reasons.join(" · ")) : null,
-    arCheck(seg.continuity || (last && last.continuity), "Continuity"),
+    arCheck(seg.continuity || (last && last.continuity), "Continuity"), arDense(seg, last),
     slFold("autopilot-seg-" + run.id + "-" + seg.index, "The Director's segment, the memory notes and the checks", () => el("div", { class: "receipt" },
       el("div", {}, el("b", {}, "Action: "), (seg.fields || {}).action || ""), el("div", {}, el("b", {}, "Setting: "), (seg.fields || {}).setting || ""), el("div", {}, el("b", {}, "Camera: "), (seg.fields || {}).camera || ""),
       ((seg.fields || {}).dialogue || []).map(d => el("div", {}, el("b", {}, (d.speaker || "Someone") + ": "), d.text)),
@@ -129,6 +142,13 @@ function arSegment(run, seg) { const w = seg.watch || {}, last = (seg.takes || [
       (seg.fixed || []).map(x => el("div", {}, el("b", {}, "Rewritten after take " + x.take + ": "), (x.findings || []).map(f => f.category + ": " + f.evidence).join(" · "))),
       (seg.takes || []).map(t => el("div", {}, "Take " + t.take + " at seed " + t.seed + ": " + (t.passed ? "passed" : "failed · " + (t.reasons || []).join("; ")) + (t.qa && t.qa.audio ? " · line check " + t.qa.audio.result : "") + (t.qa && t.qa.identity ? " · identity " + t.qa.identity.result : ""))),
       seg.prompt ? el("pre", { style: "white-space:pre-wrap;margin-top:6px" }, seg.prompt) : null))); }
+function arDense(seg, last) { const c = (seg.continuity || (last && last.continuity) || {}).dense || {}, st = seg.check_stats || {}, p = c.pace || {}, pace = seg.pace || {};
+  if (!st.requests && !(seg.memory || []).length && !(pace.beats || []).length) return null;
+  return el("div", { class: "note" }, st.requests ? el("div", {}, el("b", {}, "Checks: "), st.requests + " requests, " + st.questions + " yes/no questions" + (st.votes ? ", " + st.votes + " votes" : "") + ", " + st.failed_answers + " failed answers, " + Math.round(st.seconds) + " s"
+      + (c.windows ? " · " + c.windows + " windows a take" : "") + (c.file ? " · " : ""), c.file ? el("a", { href: file(c.file), target: "_blank" }, "every answer") : null) : null,
+    (pace.beats || []).length ? el("div", {}, el("b", {}, "Pace (" + pace.kind + "): "), pace.beats.map(b => b.from + "–" + b.to + " s " + b.speed + (b.what ? " (" + b.what + ")" : "")).join(" · ")
+      + (p.motion ? " · measured " + p.motion.map(x => x.toFixed(1)).join(" ") + (p.status ? " → " + p.status : "") : "")) : null,
+    (seg.memory || []).map(m => el("div", {}, el("b", {}, "Memory: "), (m.from / 24).toFixed(1) + " → " + (m.to / 24).toFixed(1) + " s at the same size: " + m.why))); }
 function arCheck(c, title) { if (!c) return null;
   if (c.skipped) return el("div", { class: "note" }, el("b", {}, title + ": "), "not checked (" + c.skipped + ")");
   const checks = Object.entries(c.checks || {}), found = c.findings || [];
@@ -161,9 +181,14 @@ function arRun(run) { const done = (run.segments || []).filter(s => s.status ===
         run.branch ? el("span", { class: "pill" }, "branch of " + run.branch.from + " at " + run.branch.after) : null, el("span", { style: "flex:1" }),
         live ? [el("button", { class: "small", disabled: AR.busy || run.pause, onclick: () => arDo("/pause", {}, "Pausing after this segment") }, run.pause ? "Pausing…" : "Pause"),
           el("button", { class: "small", disabled: AR.busy, onclick: () => arDo("/stop", {}, "Stopping") }, "Stop")]
-          : el("button", { class: "primary small", disabled: AR.busy || (limit && done.length >= limit), onclick: () => arDo("/start", {}, done.length ? "Resumed" : "Started") }, done.length ? "Resume" : "Start"),
+          : el("button", { class: "primary small", disabled: AR.busy || (!s.infinity && limit && done.length >= limit), onclick: () => arDo("/start", {}, done.length ? "Resumed" : "Started") }, done.length ? "Resume" : "Start"),
         el("button", { class: "small", disabled: AR.busy || !done.length, onclick: () => arDo("/assemble", {}, "Joining the film") }, "Join the film now")),
-      el("div", { class: "note" }, done.length + (limit ? " of " + limit : "") + " segments · " + secs.toFixed(1) + " s" + (live && run.current && run.current.text ? " · " + run.current.text : "")),
+      el("div", { class: "note" }, done.length + (s.infinity ? " · Infinity" : limit ? " of " + limit : "") + " segments · " + secs.toFixed(1) + " s" + (live && run.current && run.current.text ? " · " + run.current.text : "")),
+      run.check_stats ? el("div", { class: "note" }, "Checks so far: " + run.check_stats.requests + " requests to the eyes, " + run.check_stats.questions + " yes/no questions, " + Math.round(run.check_stats.seconds) + " s"
+        + (done.length ? " (about " + Math.round(run.check_stats.seconds / done.length) + " s a piece)" : "") + (run.checkpoint ? " · checkpoint after segment " + run.checkpoint.segments : "")) : null,
+      live && (done.length || (run.checkpoint || {}).next) ? el("div", { class: "row" }, done.length && done.at(-1).output ? el("video", { src: file(done.at(-1).output), controls: true, muted: true, preload: "metadata", style: "width:100%;max-width:420px;border-radius:8px" }) : null,
+        el("div", { class: "note" }, el("b", {}, "Latest piece: "), done.length ? done.at(-1).index + " · " + (done.at(-1).beat || "") : "none yet", el("br"), el("b", {}, "Next beat: "), (run.checkpoint || {}).next || "being written",
+          run.story_so_far && run.story_so_far.text ? [el("br"), el("b", {}, "Story so far: "), run.story_so_far.text] : null)) : null,
       run.state === "failed" ? el("div", { class: "tip" }, el("b", {}, "Stopped on a problem"), (run.error || "") + " Resume tries again from here.") : null,
       film ? el("div", {}, el("h3", {}, "The film so far · " + film.segments + " segments, " + Number(film.seconds).toFixed(1) + " s"),
         el("video", { src: file(film.path) + "?v=" + encodeURIComponent(film.at || ""), controls: true, preload: "metadata", style: "width:100%;max-width:860px;border-radius:8px" }),

@@ -58,6 +58,7 @@ from pathlib import Path
 
 from fastapi import APIRouter, HTTPException, Request
 
+import checks  # the dense yes/no checks, decided in code, and the pace measured from the pixels
 import continuity  # the continuity bible and what its checks mean
 import cosmos  # the vision brain (NVIDIA Cosmos3-Edge on TensorFold), beside this file
 import lengths  # which frame counts the model takes
@@ -84,8 +85,20 @@ CONTINUE_FADE, CUT_FADE = 1 / FPS, 0.25  # the joins of the film: the repeated f
 DEFAULTS = {"style": "", "guidance": "", "preset": "sharp", "quality": "fh8", "width": None, "height": None, "seconds": 10,
             "loras": [], "segments": 6, "seed": 1, "max_scene_segments": 8, "beat_history": 12, "qa": True, "retakes": 2,
             "preview_every": 3, "styles": [], "keyframes": "auto", "identity": "auto", "ref_turbo": True, "music": "", "director": "brain",
-            "brain": {"backend": slate.AUTO, "endpoint": "", "model": ""}, "continuity": copy.deepcopy(continuity.DEFAULT)}
+            "brain": {"backend": slate.AUTO, "endpoint": "", "model": ""}, "continuity": copy.deepcopy(continuity.DEFAULT),
+            # the Director reasons before it answers (Bolt's thinking switch), within this many tokens of reasoning
+            "think": True, "think_tokens": 4096,
+            # the dense yes/no checks (checks.py)
+            "checks": copy.deepcopy(checks.DEFAULT),
+            # Infinity: no fixed length; it ends on Stop, a time or length limit (0: none), or an ending the Director chooses.
+            # Its film is joined and a checkpoint written after every piece, the last joins checked every film_every pieces
+            "infinity": False, "max_minutes": 0, "max_film_seconds": 0, "film_every": 4, "film_window": 6, "story_every": 6,
+            # memory first: a piece that does not fit is made shorter at the same size, never smaller; not under this
+            "min_seconds": 4}
 RETAKES = 4  # the most retakes a segment may be given
+MEMORY_RETRIES = 3  # a piece the memory guard stopped is made again shorter, at the same size, this many times at most
+INFINITY_RETRIES = 5  # an Infinity run that hits a problem waits and carries on, this many times in a row at most
+INFINITY_WAIT_S = 60
 KEYFRAMES = ("auto", "on", "off")  # a picture a piece to open on: auto is on for a run with an outline
 IDENTITY = ("auto", "frame", "references")  # how a new scene keeps who is who: Ref2VA pictures where installed, or words
 
@@ -97,6 +110,7 @@ compose = lambda fields, first_frame, frames=None: fields.get("action", "")
 compose_references = lambda fields, count: fields.get("action", "")
 ref2va = lambda: False
 ref2va_turbo = lambda: False
+room = lambda params: None  # memory_of for a piece's params with this machine's memory now (server.autopilot_room); None: no check
 
 runs: dict[str, dict] = {}
 guard = threading.RLock()
@@ -112,9 +126,10 @@ class Failed(Exception):
 
 
 def attach(home: Path, *, queue, lookup, stop_job, plain, referenced, references=None, references_turbo=None,
-           quality: str = "") -> APIRouter:
-    global HOME, submit, job_of, cancel, compose, compose_references, ref2va, ref2va_turbo
+           quality: str = "", fits=None) -> APIRouter:
+    global HOME, submit, job_of, cancel, compose, compose_references, ref2va, ref2va_turbo, room
     HOME, submit, job_of, cancel, compose, compose_references = home, queue, lookup, stop_job, plain, referenced
+    room = fits or room
     ref2va, ref2va_turbo = references or ref2va, references_turbo or ref2va_turbo
     if quality:
         DEFAULTS["quality"] = quality
@@ -324,7 +339,8 @@ Answer with a single JSON object and nothing else:
     "dialogue": [{"speaker": "<name>", "voice": "<how the voice sounds>", "text": "<a short spoken line>"}],
     "soundscape": "<the diegetic sound: ambience, impacts, movement>",
     "music": "<the score, or N/A>"
-  }
+  },
+  "pace": {"kind": "fight|action|chase|calm|dialogue", "beats": [{"from": <second>, "to": <second>, "speed": "fast|real|slow", "what": "<5 words>"}]}
 }
 
 "scene_change" is false while the story stays in the same place with the same people: the segment then continues \
@@ -355,6 +371,13 @@ until the story changes it on screen; an action in progress continues or resolve
 Name only the details that matter in this shot (the musket in his right hand), and make every correction it asks \
 for. A time-skip is a new scene with an "era" label.
 - Write in English.
+- Pace. A fight, a chase or an action segment is mostly FAST and in real time: quick strikes, rapid exchanges, \
+sharp impacts, a snappy camera (whip pans, quick handheld reframes). Slow motion is kept for one or two key moves \
+only (the decisive blow, a signature technique), a third of the segment at most, and its timing is written into \
+"action", like "0-6 s rapid real-time exchange of punches and blocks; 6-8 s slow motion on the centerline punch; \
+8-10 s back to full speed as he drives forward". "pace.beats" lists those seconds with their speed. Outside the key \
+move neither "action" nor "camera" says slow or slowly. A calm or dialogue segment moves at natural real-time speed; \
+its "beats" may be empty.
 
 You run the film on your own: nobody approves a segment. You choose the story's next step and the camera for every \
 segment yourself (framing, angle, movement: whatever shows the action best; there is no fixed camera mode). Favour \
@@ -445,12 +468,18 @@ def next_prompt(run: dict, index: int, seconds: float, memory_text: str, note: s
             + f"What the watcher saw it actually show: {watched.get('summary') or 'no report'}\n"
             + f"How it ends, on its last frame: {watched.get('ending') or 'no report'}\n"
             + (f"What was heard: {said}\n" if said else "")
+            + (f"\nThe story so far (a running summary):\n{run['story_so_far']['text']}\n" if (run.get("story_so_far") or {}).get("text") else "")
             + (f"\nMemory of the film so far:\n{memory_text}\n" if memory_text else "")
             + (f"\nThe continuity bible (canonical, built from everything the film has shown; never contradict it):\n{bible_text}\n" if bible_text else "")
             + (f"\n{note}\n" if note else "")
             + outline_text(run, index) + direction(s, run.get("branch"), index)
+            + (INFINITY_ASK if s.get("infinity") else "")
             + "\nContinue from what really came out, above all the state the last frame leaves things in. Use the memory to keep "
               "people, places and continuity consistent and to avoid repeating what already happened; do not describe the memory itself.")
+
+
+INFINITY_ASK = ("\nThis film has no fixed length: it goes on while the story does. Add \"end\": true to your answer only when this "
+                "segment brings the story to a real ending; otherwise leave it out.\n")
 
 
 def watch_prompt(run: dict, seg: dict, view: dict, older: int, transcript: str) -> str:
@@ -502,8 +531,13 @@ def stagnation_note(found: dict) -> str:
 # ---------- the brains ----------
 
 def ask_text(run: dict, system: str, prompt: str) -> str:
-    b = run["settings"].get("brain") or {}
-    return slate.ask(b.get("backend") or slate.AUTO, system, prompt, "top", b.get("endpoint") or "", b.get("model") or "")
+    """The film's brain, reasoning first when the run says so (``think``): on the Studio's Bolt, or any local server,
+    its thinking switch with a bounded budget (``think_tokens``); the reasoning is dropped from the answer. A CLI brain
+    reasons on its own."""
+
+    b, s = run["settings"].get("brain") or {}, run["settings"]
+    think = int(s.get("think_tokens") or 0) if s.get("think", True) else 0
+    return slate.ask(b.get("backend") or slate.AUTO, system, prompt, "top", b.get("endpoint") or "", b.get("model") or "", think=think)
 
 
 def ask_vision(system: str, frames: list, sheet: Path, prompt: str, brain: dict) -> tuple[str, str]:
@@ -707,15 +741,22 @@ def clean_settings(given: dict, base: dict | None = None) -> dict:
         if given.get(key):
             s[key] = str(given[key])
     for key, low, high in (("seconds", 1, 15), ("segments", 0, LIMIT), ("seed", 0, 2 ** 31 - 1), ("max_scene_segments", 2, 50),
-                           ("beat_history", 3, 50), ("retakes", 0, RETAKES), ("preview_every", 1, 50), ("width", 256, 1536), ("height", 256, 1536)):
+                           ("beat_history", 3, 50), ("retakes", 0, RETAKES), ("preview_every", 1, 50), ("width", 256, 1536), ("height", 256, 1536),
+                           ("think_tokens", 0, 32768), ("max_minutes", 0, 60 * 24 * 30), ("max_film_seconds", 0, 10 ** 6), ("film_every", 1, 100),
+                           ("film_window", 2, 50), ("story_every", 1, 100), ("min_seconds", 1, 15)):
         if given.get(key) not in (None, ""):
             try:
                 s[key] = max(low, min(high, int(given[key])))
             except (TypeError, ValueError):
                 raise HTTPException(400, f"{key} is a whole number from {low} to {high}")
-    for key in ("qa", "ref_turbo"):
+    for key in ("qa", "ref_turbo", "think", "infinity"):
         if given.get(key) is not None:
             s[key] = bool(given[key])
+    if given.get("checks") is not None:
+        try:
+            s["checks"] = checks.options({"checks": {**(s.get("checks") or {}), **(given["checks"] if isinstance(given["checks"], dict) else {})}})
+        except ValueError as error:
+            raise HTTPException(400, str(error))
     if given.get("keyframes") in KEYFRAMES:
         s["keyframes"] = given["keyframes"]
     if given.get("identity") in IDENTITY:
@@ -1003,39 +1044,109 @@ def wait(stop: threading.Event, seconds: float | None = None) -> None:
 
 
 def work(run: dict, stop: threading.Event) -> None:
+    misses, began = 0, time.time()
+    while True:
+        try:
+            if step(run, stop, began):
+                return
+            misses = 0
+        except Stopped:
+            pending = next((s for s in run.get("segments") or [] if s.get("status") == "queued"), None)
+            if pending and (job_of(pending.get("job") or "") or {}).get("status") == "queued":
+                cancel(pending["job"])
+                pending["status"], pending["job"] = "planned", None
+            run["state"] = "paused"
+            say(run, "Stopped. Resume to carry on from here: every finished segment and the memory are kept.")
+            return
+        except Exception as error:  # noqa: BLE001 - the reason goes to the page; resume tries again
+            why = str(getattr(error, "detail", error))[:600]
+            if run["settings"].get("infinity") and misses < INFINITY_RETRIES and not stop.is_set():
+                # Infinity goes on by itself: the piece at work is planned again from its checkpoint after a pause
+                misses += 1
+                for seg in run.get("segments") or []:
+                    if seg.get("status") == "failed":
+                        seg["status"], seg["job"], seg["error"] = "planned", None, ""
+                say(run, f"A problem: {why[:240]}. Infinity carries on from the last checkpoint in {INFINITY_WAIT_S} s "
+                         f"(try {misses} of {INFINITY_RETRIES}).")
+                if stop.wait(INFINITY_WAIT_S):
+                    run["state"] = "paused"
+                    say(run, "Stopped. Resume to carry on from here: every finished segment and the memory are kept.")
+                    return
+                continue
+            run["state"], run["error"] = "failed", why
+            say(run, "Stopped on a problem: " + run["error"])
+            return
+
+
+def finished(run: dict, began: float) -> str:
+    """Why the run is complete ("" while it goes on): its number of segments, or, in Infinity, a time or length limit
+    or an ending the Director chose."""
+
+    s, done = run["settings"], committed(run)
+    if not s.get("infinity"):
+        limit = int(s.get("segments") or 0)
+        return f"{limit} segments" if limit and len(done) >= limit else ""
+    if done and done[-1].get("end"):
+        return "the Director ended the story"
+    seconds = sum(float(x.get("seconds") or 0) for x in done)
+    if s.get("max_film_seconds") and seconds >= float(s["max_film_seconds"]):
+        return f"the film reached {seconds:.0f} s of its {float(s['max_film_seconds']):.0f}"
+    minutes = (float(run.get("worked_s") or 0) + time.time() - began) / 60
+    if s.get("max_minutes") and minutes >= float(s["max_minutes"]):
+        return f"{minutes:.0f} minutes of its {float(s['max_minutes']):.0f}"
+    return ""
+
+
+def step(run: dict, stop: threading.Event, began: float) -> bool:
+    """One turn of the loop; True when the run has paused or is complete."""
+
+    if stop.is_set():
+        raise Stopped()
+    if run.get("pause"):
+        run["state"], run["pause"] = "paused", False
+        run["worked_s"] = float(run.get("worked_s") or 0) + time.time() - began
+        if (run.get("film") or {}).get("segments") != len(committed(run)):
+            publish(run)
+        say(run, f"Paused after segment {len(committed(run))}. Resume to carry on.")
+        return True
+    why = finished(run, began)
+    if why:
+        if (run.get("film") or {}).get("segments") != len(committed(run)):
+            publish(run)
+        if continuity.options(run["settings"])["film_pass"] and len(committed(run)) >= 2 and not (run.get("film_check") or {}).get("segments") == len(committed(run)):
+            film_check_safely(run)
+        run["state"] = "done"
+        run["worked_s"] = float(run.get("worked_s") or 0) + time.time() - began
+        say(run, f"Done ({why}): {len(committed(run))} segments, {run['film']['seconds'] if run.get('film') else 0:.1f} s of film.")
+        return True
+    segment(run, stop)
+    s, n = run["settings"], len(committed(run))
+    if s.get("infinity") or n == 1 or n % int(s.get("preview_every") or 3) == 0:
+        publish(run)  # Infinity: the film so far is joined after every piece, always playable
+        checkpoint(run, committed(run)[-1])
+    if s.get("infinity") and continuity.options(s)["film_pass"] and n >= 2 and n % max(1, int(s.get("film_every") or 4)) == 0:
+        film_check_safely(run, int(s.get("film_window") or 6))
+    if s.get("infinity") and n % max(1, int(s.get("story_every") or 6)) == 0:
+        story_so_far(run)
+    return False
+
+
+def story_so_far(run: dict) -> None:
+    """The running summary the Director reads in Infinity (bounded: the memory's chapters and the last beats folded
+    into 120 words), written again every ``story_every`` pieces; a summary that cannot be made keeps the old one."""
+
+    memory, done = memory_of(run), committed(run)
+    beats = "\n".join(f"  {x['index']}. {x.get('beat', '')[:110]}" for x in done[-12:])
+    prompt = ((f"The story so far, as last summarised:\n{run['story_so_far']['text']}\n\n" if (run.get("story_so_far") or {}).get("text") else "")
+              + f"What the film remembers:\n{as_text(memory['graph'])}\n\nThe latest segments' beats:\n{beats}\n\n"
+              'Write the story so far in 120 words at most: who wants what, what has happened that still matters, where things stand now. '
+              'Answer: {"text": "<120 words max>"}')
     try:
-        while True:
-            if stop.is_set():
-                raise Stopped()
-            if run.get("pause"):
-                run["state"], run["pause"] = "paused", False
-                if (run.get("film") or {}).get("segments") != len(committed(run)):
-                    publish(run)
-                say(run, f"Paused after segment {len(committed(run))}. Resume to carry on.")
-                return
-            limit = int(run["settings"].get("segments") or 0)
-            if limit and len(committed(run)) >= limit:
-                if (run.get("film") or {}).get("segments") != len(committed(run)):
-                    publish(run)
-                if continuity.options(run["settings"])["film_pass"] and len(committed(run)) >= 2 and not (run.get("film_check") or {}).get("segments") == len(committed(run)):
-                    film_check_safely(run)
-                run["state"] = "done"
-                say(run, f"Done: {limit} segments, {run['film']['seconds'] if run.get('film') else 0:.1f} s of film.")
-                return
-            segment(run, stop)
-            n = len(committed(run))
-            if n == 1 or n % int(run["settings"].get("preview_every") or 3) == 0:
-                publish(run)
-    except Stopped:
-        pending = next((s for s in run.get("segments") or [] if s.get("status") == "queued"), None)
-        if pending and (job_of(pending.get("job") or "") or {}).get("status") == "queued":
-            cancel(pending["job"])
-            pending["status"], pending["job"] = "planned", None
-        run["state"] = "paused"
-        say(run, "Stopped. Resume to carry on from here: every finished segment and the memory are kept.")
-    except Exception as error:  # noqa: BLE001 - the reason goes to the page; resume tries again
-        run["state"], run["error"] = "failed", str(getattr(error, "detail", error))[:600]
-        say(run, "Stopped on a problem: " + run["error"])
+        data, _ = ask_json(lambda text: ask_text(run, COMPACT_SYSTEM, text), lambda d: "" if str(d.get("text") or "").strip() else '"text" is the summary', prompt, "story summary")
+        run["story_so_far"] = {"text": clip_words(data["text"], 130), "through": len(done), "at": slate.now()}
+        save(run)
+    except Failed as error:
+        say(run, "The story so far could not be summarised again: " + str(error)[:160])
 
 
 def segment(run: dict, stop: threading.Event) -> None:
@@ -1146,7 +1257,8 @@ def plan(run: dict) -> dict:
            "scene_change": bool(data["scene_change"]), "beat": str(data["beat"]).strip()[:200], "fields": fields,
            "rejected": rejected, "seed": int(s.get("seed") or 0) + index - 1, "frames": frames, "seconds": seconds,
            "start": round(sum(float(x.get("seconds") or 0) for x in done), 3), "takes": [], "job": None, "output": None,
-           "era": continuity.era_at(bible, index)["id"], "planned": slate.now()}
+           "era": continuity.era_at(bible, index)["id"], "planned": slate.now(), "pace": checks.pace_of(data.get("pace")),
+           **({"end": True} if data.get("end") is True and s.get("infinity") else {})}
     if keyframes_for(run, index):
         seg.update(status="keyframe", keyframe_prompt=clip_words(data.get("keyframe"), 70), keyframes=[])
     folder = run_dir(run["id"]) / "segments" / seg["id"]
@@ -1155,6 +1267,7 @@ def plan(run: dict) -> dict:
     if rejected:
         say(run, f"Segment {index}: {len(rejected)} answer{'s' if len(rejected) != 1 else ''} of the Director turned back ({rejected[-1][:120]}).", segment=index)
     say(run, f"Segment {index}: {seg['beat']}", stage="planned", segment=index)
+    checkpoint(run, next_seg=seg)
     return seg
 
 
@@ -1166,6 +1279,9 @@ def replan(run: dict, seg: dict) -> None:
     say(run, f"Segment {index}: the Director rewrites take {take} with the continuity findings.", stage="director", segment=index)
     prompt, stuck = director_prompt(run, index, float(seg["seconds"]))
     found = "\n".join(f"- {f['category']}" + (f" (frame {f['frame']})" if f.get("frame") else "") + f": {f['evidence']}" for f in seg.get("fix") or [])
+    if any(f.get("category") == "pace" for f in seg.get("fix") or []):
+        found += ("\nThe video model made it slow: write the fight as fast, real-time action (quick strikes, rapid exchanges, sharp "
+                  "impacts, whip pans), name the speed plainly, and keep slow motion to the one key move with its seconds.")
     prompt += (f"\n\nTHE TAKE YOU WROTE FOR SEGMENT {index} WAS RENDERED AND FAILED ITS CONTINUITY CHECK:\n{found}\n"
                f"Write segment {index} again: the same story step (\"{seg['beat']}\") in the same scene ({seg['scene']!r}), with the shot "
                "rewritten so that each of these comes out right; say the bible's details plainly where they matter. Keep \"scene\" and "
@@ -1181,7 +1297,7 @@ def replan(run: dict, seg: dict) -> None:
     save_bible(run, bible)
     if keyframes_for(run, index) and str(data.get("keyframe") or "").strip():
         seg["keyframe_prompt"] = clip_words(data["keyframe"], 70)
-    seg.update(fields=fields, beat=str(data["beat"]).strip()[:200] or seg["beat"], rejected=(seg.get("rejected") or []) + rejected,
+    seg.update(fields=fields, beat=str(data["beat"]).strip()[:200] or seg["beat"], rejected=(seg.get("rejected") or []) + rejected, pace=checks.pace_of(data.get("pace")),
                fixed=(seg.get("fixed") or []) + [{"take": take, "findings": seg.get("fix") or []}], fix=[])
     write_json(run_dir(run["id"]) / "segments" / seg["id"] / f"director-take{take + 1}.json", {"prompt": prompt, "answer": data, "rejected": rejected})
 
@@ -1214,6 +1330,11 @@ def director_problem(run: dict, data: dict, index: int, stuck) -> str:
             return f'"{"setting" if key == "scene" else key}" is {len(fields[key].split())} words: keep it to {most} at most, short and concrete'
     if keyframes_for(run, index) and not str(data.get("keyframe") or "").strip():
         return '"keyframe" is the still picture this segment opens on'
+    if data.get("end") is not None and not isinstance(data.get("end"), bool):
+        return '"end" is true or false'
+    paced = checks.pace_problem(checks.pace_of(data.get("pace")), fields["action"], fields["camera"], lengths.seconds_of(frames_of(run["settings"])))
+    if paced:
+        return paced
     named = negation.check_fields(fields)["negations"]
     if named:
         return (f"\"{named[0]['phrase']}\" names what must not be seen; the video model has no negative prompt and what is "
@@ -1280,7 +1401,10 @@ def look_lines(run: dict, fields: dict, index: int) -> str:
 
 
 def prompt_of(run: dict, seg: dict, mode: str) -> str:
-    s, f = run["settings"], seg["fields"]
+    s, f = run["settings"], dict(seg["fields"])
+    paced = checks.pace_line(checks.pace_of(seg.get("pace")), float(seg.get("seconds") or 10))
+    if paced:
+        f["action"] = (f.get("action", "").rstrip() + " " + paced).strip()
     style = style_at(s, seg["index"])  # only this segment's era or setting: a style for every era bled Boston into the sea
     music = f.get("music") or "N/A"
     if s.get("music") and music.upper() == "N/A":
@@ -1327,10 +1451,21 @@ def render(run: dict, seg: dict) -> None:
         params["image"] = seg["keyframe"]
     if mode == "image":
         params["image"] = (beat_of(run, seg["index"]) or {}).get("image") or run["seed"]["opening_image"]
-    try:
-        job = submit({"kind": "video", "title": f"AutoPilot · {run['name']} · {seg['index']}: {seg['beat'][:60]}", "params": params})
-    except HTTPException as error:
-        raise Failed(f"the queue refused segment {seg['index']}: {error.detail}") from None
+    fitted = fitting(run, params)
+    if fitted != params["frames"]:
+        shorten(run, seg, "memory first: at this size only a shorter piece fits this machine now", fitted)
+        params["frames"] = seg["frames"]
+        params["prompt"] = prompt = prompt_of(run, seg, mode)
+    while True:
+        try:
+            job = submit({"kind": "video", "title": f"AutoPilot · {run['name']} · {seg['index']}: {seg['beat'][:60]}", "params": params})
+            break
+        except HTTPException as error:
+            shorter = re.search(r"What fits: (\d+) frames", str(error.detail))
+            if not shorter or not shorten(run, seg, "the queue's memory check: " + str(error.detail)[:200], int(shorter[1])):
+                raise Failed(f"the queue refused segment {seg['index']}: {error.detail}") from None
+            params["frames"] = seg["frames"]
+            params["prompt"] = prompt = prompt_of(run, seg, mode)
     seg.update(status="queued", job=job["id"], mode=mode, prompt=prompt, output=output,
                settings={k: params.get(k) for k in ("preset", "quality", "frames", "width", "height", "loras", "ref_turbo") if params.get(k) is not None})
     say(run, f"Segment {seg['index']}: rendering" + (f", take {take} at seed {seg['seed']}" if take > 1 else "")
@@ -1357,10 +1492,62 @@ def follow(run: dict, seg: dict, stop: threading.Event) -> None:
             save(run)
             raise Stopped()
         if status == "failed":
-            seg["status"], seg["error"] = "failed", job.get("error") or "the render failed"
+            error = job.get("error") or "the render failed"
+            if MEMORY_STOP.search(error) and shorten(run, seg, "the render was stopped for memory: " + clip_words(error, 40)):
+                seg["status"], seg["job"] = "planned", None  # the same piece again, shorter, at the same size
+                save(run)
+                return
+            seg["status"], seg["error"] = "failed", error
             save(run)
             return
         wait(stop)
+
+
+# ---------- memory first ----------
+
+# what a render that ran out of room says (spark_generate.py, memory_guard.py, the queue)
+MEMORY_STOP = re.compile(r"memory|protect the machine|refused before anything was loaded|out of memory|\bOOM\b|NV_ERR_NO_MEMORY|killed", re.I)
+
+
+def shortest(run: dict) -> int:
+    return lengths.nearest(float(run["settings"].get("min_seconds") or DEFAULTS["min_seconds"]))
+
+
+def fitting(run: dict, params: dict) -> int:
+    """The longest length, up to the piece's own, that fits this machine's memory now at the piece's size (the memory
+    guard's estimate with what is available now); the piece's own when it fits, or when nothing shorter does (the
+    queue then says why)."""
+
+    try:
+        said = room(params)
+    except Exception:  # noqa: BLE001 - no estimate: the queue and the render's own checks still stand
+        said = None
+    if not said or said.get("fits", True):
+        return params["frames"]
+    shorter = (said.get("nearest") or {}).get("frames")
+    return shorter if shorter and shortest(run) <= shorter < params["frames"] else params["frames"]
+
+
+def shorten(run: dict, seg: dict, why: str, frames: int | None = None) -> bool:
+    """The piece made shorter at the same size: to ``frames``, or the next length the model takes (the memory guard
+    stopped it). False when it is at the run's shortest already or has been shortened MEMORY_RETRIES times."""
+
+    events = seg.setdefault("memory", [])
+    if sum(1 for e in events if e.get("retry")) >= MEMORY_RETRIES:
+        return False
+    counts = [c for c in lengths.counts() if shortest(run) <= c < int(seg["frames"])]
+    # a stop by the guard: a fifth shorter (one step of 17 frames is 0.7 s, too little to change the peak much)
+    goal = frames or int(int(seg["frames"]) * 0.8)
+    target = max([c for c in counts if c <= goal], default=None) or (min(counts) if counts and not frames else None)
+    if not target:
+        return False
+    events.append({"at": slate.now(), "from": seg["frames"], "to": target, "why": why[:300], "retry": not why.startswith("memory first")})
+    ratio = lengths.seconds_of(target) / max(0.1, float(seg.get("seconds") or lengths.seconds_of(int(seg["frames"]))))
+    for beat in (seg.get("pace") or {}).get("beats") or []:  # the pace plan's seconds, scaled to the new length
+        beat["from"], beat["to"] = round(beat["from"] * ratio, 2), round(beat["to"] * ratio, 2)
+    seg["frames"], seg["seconds"] = target, lengths.seconds_of(target)
+    say(run, f"Segment {seg['index']}: {why[:160]}; now {lengths.seconds_of(target):.1f} s ({target} frames) at the same size.", segment=seg["index"])
+    return True
 
 
 # ---------- keyframes ----------
@@ -1441,6 +1628,10 @@ def check_keyframe(run: dict, seg: dict) -> None:
             result.update(checks=checks, findings=[e for e in checks.values() if e["action"] != "none"])
         except Failed as error:
             result["skipped"] = str(error)[:300]
+    dense = dense_keyframe(run, seg, HOME / last["path"], run_dir(run["id"]) / "segments" / seg["id"])
+    result["findings"] = (result.get("findings") or []) + dense["findings"]
+    result["dense"] = {"stats": dense["stats"], "log": dense["log"]}
+    add_stats(run, seg, dense["stats"])
     last["continuity"] = result
     majors = [f for f in result["findings"] if f["status"] == "major"]
     this_round = [k for k in seg["keyframes"] if k.get("round", 0) == last.get("round", 0)]
@@ -1613,6 +1804,23 @@ def check(run: dict, seg: dict) -> None:
     write_json(folder / f"watch-take{take}.json", watched)
     say(run, f"Segment {seg['index']}: checking take {take} against the continuity bible.", stage="continuity", segment=seg["index"])
     checked = check_continuity(run, seg, frames, sheet, transcript, clip, folder, take, length)
+    say(run, f"Segment {seg['index']}: the dense checks of take {take} (windows, the join, the pace).", stage="checks", segment=seg["index"])
+    dense = dense_check(run, seg, clip, folder, take, length, bible_of(run))
+    passed = set(dense.get("passed") or [])
+    for found in checked.get("findings") or []:
+        # the checklist's one verdict against the yes/no answers of every window: a major the windows never saw is a
+        # correction for the Director, not a retake (the Viking v2 film's false retakes came from single verdicts)
+        if found.get("status") == "major" and found["category"] in passed and found.get("source") != "rule":
+            found.update(status="minor", demoted="the yes/no checks of every window saw no problem here")
+            found["action"] = continuity.act(found, continuity.options(s))
+    if watched["identity_drift"] and "identity" in passed:
+        # the same for the watcher's drift (its confirm is three frames and one question): on the first live Infinity
+        # run (2026-10-26) it rendered a piece again whose identity questions had passed in every window
+        watched.update(identity_drift=False, drift_overruled="the identity questions passed in every window")
+        write_json(folder / f"watch-take{take}.json", watched)
+    checked.setdefault("findings", []).extend(dense["findings"])
+    checked["dense"] = {k: dense.get(k) for k in ("stats", "pace", "windows", "passed", "filtered", "file", "by", "skipped") if dense.get(k) is not None}
+    add_stats(run, seg, dense["stats"])
     reasons, fix = [], []
     audio, identity = report.get("audio") or {}, report.get("identity") or {}
     if audio.get("result") == "fail" and continuity.heard_alike(audio.get("wanted"), audio.get("heard")):
@@ -1710,6 +1918,180 @@ def check_continuity(run: dict, seg: dict, frames: list, sheet: Path, transcript
             "light": clip_words(data.get("light"), 14), "rejected": rejected}
 
 
+# ---------- the dense checks (checks.py) ----------
+
+def window_asker(run: dict, folder: Path, who: list):
+    """ask(system, pictures, text) on the vision brain, each request with a sheet of its own pictures for the QA gate's
+    eyes when no vision server answers."""
+
+    count = [0]
+
+    def ask(system: str, pictures: list, text: str) -> str:
+        count[0] += 1
+        try:
+            sheet = contact_sheet([p for _, p in pictures], folder / f"sheet-{count[0]:03d}.png", across=min(4, len(pictures)))
+        except (subprocess.SubprocessError, OSError):
+            sheet = Path(pictures[-1][1])
+        answer, by = ask_vision(system, pictures, sheet, text, run["settings"].get("brain") or {})
+        who.append(by)
+        return answer
+    return ask
+
+
+def references(run: dict, bible: dict, index: int, seg: dict, folder: Path) -> list:
+    """The reference picture of each person the shot names (their cast picture, else their clearest earlier frame)."""
+
+    text = " ".join(str((seg.get("fields") or {}).get(k) or "") for k in ("setting", "action")).lower()
+    out = []
+    for name in [n for n in cast_at(run, index) if n.lower().split()[0] in text][:2]:
+        sid = continuity.subject_of(bible, name, "character", create=False)
+        ref = (bible["subjects"].get(sid) or {}).get("ref") if sid else None
+        if ref and on_disk(ref):
+            out.append((f"Reference picture of {name}", still(HOME / ref, folder / f"ref-{sid}.png", fit=(448, 448))))
+    return out
+
+
+def yes_no(run: dict, asker, pictures: list, header: str, asked: list, opts: dict, log: list, where: dict) -> tuple[list, dict]:
+    """One window's questions, each failed major one voted on: the failed questions, as {question, answer}."""
+
+    found = checks.ask_window(asker, pictures, header, asked, slate.extract_json, log, where)
+    failed = []
+    for q in asked:
+        answer = found.get(q["key"])
+        if q["category"] == "pace" or not answer or answer == q["expect"]:
+            continue
+        if q["major"] and opts["votes"] > 1:
+            answer = checks.vote(asker, pictures, header, q, answer, opts["votes"], slate.extract_json, log, {**where, "kind": "vote"})
+            if not answer or answer == q["expect"]:
+                continue
+        failed.append({"question": q, "answer": answer})
+    return failed, found
+
+
+def finding_of(q: dict, answer: str, where: str, frame: int, pictures: list) -> dict:
+    status = "major" if q["major"] else "minor"
+    return {"category": q["category"], "status": status, "verdict": status, "frame": frame, "subject": "", "source": "yes/no",
+            "evidence": clip_words(f"{where}: asked \"{q['text']}\", the answer was {answer}", 40), "_pictures": pictures}
+
+
+def dense_check(run: dict, seg: dict, clip: Path, folder: Path, take: int, length: float, bible: dict) -> dict:
+    """The take looked at in windows (checks.py): the bible's yes/no questions a window, the join with the piece before
+    on a continuation, and the pace, measured and asked. Failed major questions are voted on, then looked at again
+    (second_look). Returns {"findings", "passed" (categories asked and never failed), "log", "stats", "pace"}."""
+
+    s = run["settings"]
+    opts, copts = checks.options(s), continuity.options(s)
+    categories = continuity.watched(copts)
+    if not opts["dense"] or not categories:
+        return {"skipped": "the dense checks are off for this run", "findings": [], "passed": [], "log": [], "stats": checks.summary([])}
+    index = seg["index"]
+    work = folder / f"windows-take{take}"
+    work.mkdir(parents=True, exist_ok=True)
+    who, log, failed = [], [], []
+    asker = window_asker(run, work, who)
+    asked_about, failed_about = set(), set()
+    refs = references(run, bible, index, seg, work)
+    base = checks.questions(bible, index, seg, cast_at(run, index), categories, continuity)
+    pace = checks.pace_of(seg.get("pace"))
+    fast = opts["pace"] and "pace" in categories and pace["kind"] in checks.FAST_KINDS
+    slow_answers = []
+    spans = checks.windows(length, opts["every"], opts["frames"])
+    for w, times in enumerate(spans, 1):
+        pics = [(f"Frame at {t:.2f} s", work / f"w{w:02d}-{i + 1}.png") for i, t in enumerate(times)]
+        pics = [(c, p) for (c, p), t in zip(pics, times) if checks.grab(clip, t, p, cosmos.FRAME, qa.ENV)]
+        if not pics:
+            continue
+        mid = sum(times) / len(times)
+        asked = list(base) + ([checks.pace_question(checks.planned(pace, mid, length) == "slow")] if fast else [])
+        if not asked:
+            continue
+        header = (f"Window {w} of {len(spans)} of segment {index}: " + (f"the first {len(refs)} image(s) are reference pictures, then " if refs else "")
+                  + f"{len(pics)} frames from {times[0]:.1f} to {times[-1]:.1f} s, in time order.")
+        bad, found = yes_no(run, asker, refs + pics, header, asked, opts, log, {"kind": "window", "window": w, "at": times})
+        if fast:
+            slow_answers.append((mid, found.get("pace")))
+        asked_about |= {q["category"] for q in asked if found.get(q["key"])}
+        for b in bad:
+            failed_about.add(b["question"]["category"])
+            failed.append(finding_of(b["question"], b["answer"], f"window {w} ({times[0]:.1f}-{times[-1]:.1f} s)", len(pics) // 2 + 1, pics))
+    done = committed(run)
+    previous = seg_last_frame(done[-1]) if done and seg.get("mode") == "previous" else None
+    if opts["join"] and previous:
+        first = work / "join-first.png"
+        if checks.grab(clip, 0.0, first, cosmos.FRAME, qa.ENV):
+            pics = [(f"Picture 1: the last frame of segment {done[-1]['index']}", HOME / previous), ("Picture 2: the first frame of this segment, at 0.00 s", first)]
+            asked = checks.join_questions(categories)
+            if asked:
+                bad, found = yes_no(run, asker, pics, f"The join between segment {done[-1]['index']} and segment {index}: one continuous shot.", asked, opts, log,
+                                    {"kind": "join", "window": 0, "at": [0.0]})
+                asked_about |= {q["category"] for q in asked if found.get(q["key"])}
+                for b in bad:
+                    failed_about.add(b["question"]["category"])
+                    failed.append(finding_of(b["question"], b["answer"], "the join with the segment before", 2, pics))
+    paced = {}
+    if fast:
+        paced = checks.pace_verdict(pace, checks.motion(clip, qa.ENV), slow_answers, length)
+        asked_about.add("pace")
+        if paced["status"] == "major":
+            failed_about.add("pace")
+            failed.append({"category": "pace", "status": "major", "verdict": "major", "frame": 0, "subject": "", "source": "measured", "evidence": paced["evidence"]})
+    # one finding a question (the first window it failed in, with how many windows saw it)
+    findings, seen = [], {}
+    for f in failed:
+        key = (f["category"], f["evidence"].split(": asked", 1)[-1])
+        if key in seen:
+            seen[key]["windows"] = seen[key].get("windows", 1) + 1
+            continue
+        seen[key] = f
+        findings.append(f)
+    for f in findings:
+        pictures = f.pop("_pictures", None)
+        if f["status"] == "major" and f["category"] != "pace" and pictures:
+            continuity.settle(f, second_look(run, f, pictures, clip, work, take, bible, index), copts)
+        f["action"] = continuity.act(f, copts)
+    log_file = folder / f"checks-take{take}.json"
+    write_json(log_file, log)
+    return {"findings": [f for f in findings if f["action"] != "none"], "filtered": [f for f in findings if f["action"] == "none"],
+            "passed": sorted(asked_about - failed_about), "log": log, "stats": checks.summary(log), "pace": paced,
+            "windows": len(spans), "by": who[-1] if who else "", "file": relative(log_file)}
+
+
+def dense_keyframe(run: dict, seg: dict, picture: Path, folder: Path) -> dict:
+    """The keyframe's yes/no questions (one still: who, what they wear, the place, the era), failed majors voted on."""
+
+    s = run["settings"]
+    opts, copts = checks.options(s), continuity.options(s)
+    categories = [c for c in continuity.watched(copts) if c in KEYFRAME_CATEGORIES]
+    if not (opts["dense"] and opts["keyframe"] and categories):
+        return {"findings": [], "log": [], "stats": checks.summary([])}
+    bible, index = bible_of(run), seg["index"]
+    work = folder / f"keyframe-checks-{len(seg.get('keyframes') or [])}"
+    work.mkdir(parents=True, exist_ok=True)
+    asked = [q for q in checks.questions(bible, index, {**seg, "mode": "keyframe"}, cast_at(run, index), categories, continuity)
+             if "between these frames" not in q["text"]]
+    if not asked:
+        return {"findings": [], "log": [], "stats": checks.summary([])}
+    refs = references(run, bible, index, seg, work)
+    log = []
+    bad, _ = yes_no(run, window_asker(run, work, []), refs + [("The keyframe, the still this segment opens on", picture)],
+                    f"The keyframe of segment {index}" + (", after the reference picture(s)." if refs else "."), asked, opts, log, {"kind": "keyframe", "window": 0, "at": [0.0]})
+    findings = []
+    for b in bad:
+        f = finding_of(b["question"], b["answer"], "the keyframe", 1, None)
+        f.pop("_pictures", None)
+        f["action"] = continuity.act(f, copts)
+        findings.append(f)
+    return {"findings": findings, "log": log, "stats": checks.summary(log)}
+
+
+def add_stats(run: dict, seg: dict, stats: dict) -> None:
+    """The checks' counts added to the segment's and the run's (what the page and the report show)."""
+
+    for holder in (seg.setdefault("check_stats", {}), run.setdefault("check_stats", {})):
+        for key in ("requests", "questions", "failed_answers", "votes", "seconds"):
+            holder[key] = round(holder.get(key, 0) + (stats.get(key) or 0), 1)
+
+
 def frame_time(caption: str) -> float | None:
     found = re.search(r"at ([0-9.]+) s", caption or "")
     return float(found[1]) if found else None
@@ -1803,37 +2185,63 @@ def commit(run: dict, seg: dict, watched: dict, transcript: str, reasons: list, 
     checked = checked or {"skipped": "not checked", "findings": []}
     seen = continuity.absorb(bible, seg["index"], checked, events)
     save_bible(run, bible, seg["id"])
-    summary = {k: checked.get(k) for k in ("by", "strictness", "categories", "checks", "findings", "skipped") if checked.get(k) is not None}
+    summary = {k: checked.get(k) for k in ("by", "strictness", "categories", "checks", "findings", "skipped", "dense") if checked.get(k) is not None}
     seg.update(status="done", watch=watched, transcript=transcript, passed=not reasons, reasons=reasons, committed=slate.now(),
                continuity={**summary, "present_frames": seen}, fix=[])
     minors = [f for f in checked.get("findings") or [] if f.get("action") == "correct"]
     say(run, f"Segment {seg['index']} joins the film" + (f" (it did not pass: {'; '.join(reasons)[:160]})" if reasons else "")
-        + (f"; {len(minors)} continuity correction{'s' if len(minors) != 1 else ''} for the next segment" if minors else "") + ".",
+        + (f"; {len(minors)} continuity correction{'s' if len(minors) != 1 else ''} for the next segment" if minors else "")
+        + (f"; {seg['check_stats'].get('requests', 0):.0f} check requests, {seg['check_stats'].get('questions', 0):.0f} questions, "
+           f"{seg['check_stats'].get('seconds', 0):.0f} s" if seg.get("check_stats") else "") + ".",
         stage="committed", segment=seg["index"])
+    checkpoint(run, seg)
+
+
+def checkpoint(run: dict, seg: dict | None = None, next_seg: dict | None = None) -> None:
+    """What a run needs to go on after a crash, a stop by the memory guard or a restart, on disk after every piece
+    (``checkpoint.json``, and ``checkpoints/S0001.json`` for each): the pieces kept with their seeds and lengths, the
+    film so far, where the bible and the memory of that moment are, the story so far, and the next beat once planned.
+    run.json carries the same state; resume_all picks up a run that was live, without anyone asking."""
+
+    done = committed(run)
+    point = {"at": slate.now(), "run": run["id"], "segments": len(done), "seconds": round(sum(float(x.get("seconds") or 0) for x in done), 3),
+             "pieces": [{"index": x["index"], "output": x.get("output"), "seed": x.get("seed"), "frames": x.get("frames"), "seconds": x.get("seconds"),
+                         "passed": x.get("passed"), "scene": x.get("scene"), "beat": x.get("beat")} for x in done],
+             "film": run.get("film"), "story_so_far": (run.get("story_so_far") or {}).get("text", ""),
+             "bible": f"bible/{seg['id']}.json" if seg else "bible.json", "memory": f"memory/{seg['id']}.json" if seg else "memory.json",
+             "check_stats": run.get("check_stats") or {},
+             "next": {k: next_seg.get(k) for k in ("index", "scene", "beat", "fields", "pace", "seed", "frames")} if next_seg else None}
+    write_json(run_dir(run["id"]) / "checkpoint.json", point)
+    if seg:
+        write_json(run_dir(run["id"]) / "checkpoints" / f"{seg['id']}.json", point)
+    run["checkpoint"] = {"at": point["at"], "segments": point["segments"], "next": (next_seg or {}).get("beat")}
 
 
 # ---------- the film-level pass ----------
 
-def film_check_safely(run: dict) -> None:
-    """The film-level pass, whose failure is reported and never stops the run."""
+def film_check_safely(run: dict, last: int = 0) -> None:
+    """The film-level pass (over the last ``last`` segments, or all), whose failure is reported and never stops the run."""
 
     try:
-        film_check(run)
+        film_check(run, last)
     except Exception as error:  # noqa: BLE001 - a report only
         run["film_check"] = {"state": "failed", "at": slate.now(), "error": str(error)[:300]}
         say(run, "The film's continuity pass could not be made: " + str(error)[:200])
 
 
-def film_check(run: dict) -> dict:
+def film_check(run: dict, last: int = 0) -> dict:
     """Cosmos samples across the whole film: each person's clearest frame of each segment they were seen in, an era
     at a time, asked whether any segment shows someone else (the man's face in segment 12 against segment 8), and one
     frame of each segment, asked for drift in places, props and era. A report only: nothing is rendered again."""
 
     bible, done = bible_of(run), committed(run)
+    if last:
+        done = done[-last:]  # an Infinity run's rolling pass: the last joins only
     brain = run["settings"].get("brain") or {}
-    folder = run_dir(run["id"]) / "film-check"
+    folder = run_dir(run["id"]) / ("film-check" + (f"-to{len(committed(run)):04d}" if last else ""))
     folder.mkdir(parents=True, exist_ok=True)
-    report = {"state": "done", "at": slate.now(), "segments": len(done), "identity": [], "world": [], "errors": []}
+    report = {"state": "done", "at": slate.now(), "segments": len(committed(run)), "identity": [], "world": [], "errors": [],
+              **({"window": [done[0]["index"], done[-1]["index"]]} if last and done else {})}
 
     def ask(prompt: str, pictures: list, name: str, check) -> dict | None:
         try:
@@ -1844,7 +2252,7 @@ def film_check(run: dict) -> dict:
             report["errors"].append(f"{name}: {str(error)[:200]}")
             return None
 
-    for sid, eras in continuity.film_samples(bible, done).items():
+    for sid, eras in continuity.film_samples(bible, done).items():  # noqa: B007
         for era, picked in eras.items():
             picked = [(i, path) for i, path in picked if on_disk(path)]
             if len(picked) < 2:
@@ -1869,8 +2277,13 @@ def film_check(run: dict) -> dict:
             if isinstance(issue, dict) and str(issue.get("evidence") or "").strip() and not continuity.BENIGN.search(str(issue["evidence"])):
                 report["world"].append({"category": str(issue.get("category") or "other")[:20], "evidence": clip_words(issue["evidence"], 24),
                                         "segments": [int(x) for x in issue.get("segments") or [] if str(x).isdigit()][:8]})
-    write_json(run_dir(run["id"]) / "film-check.json", report)
-    run["film_check"] = report
+    write_json(run_dir(run["id"]) / ("film-check.json" if not last else f"film-check-to{len(committed(run)):04d}.json"), report)
+    if not last:
+        run["film_check"] = report
+    if last:
+        run.setdefault("film_checks", []).append({k: report.get(k) for k in ("at", "window", "segments")}
+                                                 | {"drift": [r for r in report["identity"] if not r["same"]], "issues": report["world"]})
+        del run["film_checks"][:-20]
     drift = [r for r in report["identity"] if not r["same"]]
     say(run, "The film's continuity pass: " + (f"{len(drift)} person/era with drift, " if drift else "no face drift, ")
         + f"{len(report['world'])} other issue{'s' if len(report['world']) != 1 else ''}" + (f", {len(report['errors'])} question(s) not answered" if report["errors"] else "") + ".",
