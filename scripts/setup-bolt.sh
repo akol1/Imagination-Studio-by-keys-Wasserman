@@ -13,7 +13,7 @@
 # agreement and NVIDIA's notices; no warranty.
 # DGX Spark: the engine is TensorFold's native server with Mia's Bolt backend (MiaAI-Lab's recipe, MIT), installed into
 #   $PREFIX/bolt by spark/build-bolt.sh. It needs about 43 GB free to load and holds about 28 GB.
-# Mac: TensorFold's Metal Bolt engine (branch nemotron-bolt-metal), prebuilt, a checksummed release download into
+# Mac: TensorFold's Metal Bolt engine (branch bolt-metal-115, on TensorFold 1.1.5), prebuilt, a checksummed release download into
 #   $PREFIX/bolt-metal (5 MB). Without it, BOLT_BACKEND=llamacpp runs Bolt through llama.cpp's server with NVIDIA's GGUF
 #   (BOLT_LLAMACPP_BIN, BOLT_GGUF), which this script checks but does not install.
 # Environment: PREFIX, BOLT_MODELS (default $SPARK_MODELS on a Spark, ~/bolt-models on a Mac).
@@ -24,9 +24,9 @@ MODEL_REPO=nvidia/NVIDIA-Nemotron-3.5-Bolt-74B-A9B-24GB; MODEL_REVISION=a326822a
 DRAFT_REPO=nvidia/NVIDIA-Nemotron-3.5-Bolt-74B-A9B-24GB-LiLiCorr; DRAFT_REVISION=4c6a5613b6d887194a3a5493e3a18a5b3930bb86
 if [ "$(uname -s)" = Linux ]; then MODELS="${BOLT_MODELS:-${SPARK_MODELS:-$HOME/spark-studio-models}}"; else MODELS="${BOLT_MODELS:-$HOME/bolt-models}"; fi
 # Mac: TensorFold's Metal Bolt engine (tensorfold-native with libbolt for Apple GPUs), prebuilt as a release asset
-METAL_COMMIT="b4edaea53e3c0624e9fce06f0c9f33150e58cde3"
-METAL_URL="https://github.com/drowzeys/Imagination-Studio-by-keys-Wasserman/releases/download/v3.2.0/bolt-metal-b4edaea5-macos-arm64.tar.gz"
-METAL_SHA256="58203b65ec8d7dce6c87b06c7889967583d6148ecb13fcada2da754c384e8a49"
+METAL_COMMIT="be300c4d4437d60113471163819eddefc384ea96"
+METAL_URL="https://github.com/drowzeys/Imagination-Studio-by-keys-Wasserman/releases/download/v3.3.1/bolt-metal-be300c4d-macos-arm64.tar.gz"
+METAL_SHA256="db85f3e8764dd0bec0b7a189d35431241362deac64930e447a2cd7bb224343f3"
 CKPT="$MODELS/Nemotron-3.5-Bolt-24GB"; DRAFT="$MODELS/Nemotron-3.5-Bolt-24GB-LiLiCorr"
 VERIFY=0
 for arg in "$@"; do
@@ -82,7 +82,7 @@ if [ "$(uname -s)" = Linux ]; then
   echo "  The Studio runs it as its brain when Settings → Connections leaves the local server's address empty (or picks"
   echo "  \"Studio engine · Bolt\"). BOLT_MODELS=$MODELS if you moved the weights; BOLT_IDLE_S=never on a head that never renders."
 else
-  step "The Bolt engine on this Mac: TensorFold's Metal engine (branch nemotron-bolt-metal at ${METAL_COMMIT:0:8}) -> $PREFIX/bolt-metal"
+  step "The Bolt engine on this Mac: TensorFold's Metal engine (branch bolt-metal-115 at ${METAL_COMMIT:0:8}, TensorFold 1.1.5) -> $PREFIX/bolt-metal"
   metal_ok() { [ -x "$PREFIX/bolt-metal/native/bin/tensorfold-native" ] && [ "$(cat "$PREFIX/bolt-metal/COMMIT" 2>/dev/null)" = "$METAL_COMMIT" ] \
                && ( cd "$PREFIX/bolt-metal" && shasum -a 256 -c SHA256SUMS >/dev/null 2>&1 ); }
   if ! metal_ok && [ "$VERIFY" = 0 ]; then  # the prebuilt engine, a checksummed release download (5 MB)

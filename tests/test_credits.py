@@ -20,7 +20,7 @@ PAGE = (ROOT / "app/static/settings.js").read_text(encoding="utf-8")
 
 # the makers of what the studio runs: named in CREDITS.md and in the page's short list
 CORE = ["Keys (drowzeys)", "Sam Wasserman", "Wasserman Productions", "Qwen", "Black Forest Labs", "OpenMOSS", "MiniMax",
-        "Fish Audio", "Stability AI", "MMAudio", "kijai", "Ash Hart", "TensorFold", "NVIDIA", "MiaAI-Lab", "antirez",
+        "Fish Audio", "Stability AI", "MMAudio", "kijai", "Ash Hart", "TensorFold", "NVIDIA", "MiaAI-Lab", "ChriZzn", "antirez",
         "RobZombAI", "mrbizarro", "Filip Strand", "felix-ab", "Comfy Org", "MLX", "FastVideo", "LightX2V", "Viggle",
         "speach1sdef178", "rookiestar28", "ddalcu", "larryvrh", "TaoLiveAIGC", "MATLOWAI", "dntpi", "LBH-123-AI",
         "bbaudio-2025", "Alissonerdx", "Akatz Labs", "SAM 3.1", "MediaPipe", "Depth Anything", "OpenCV", "ONNX Runtime",

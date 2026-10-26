@@ -6,7 +6,7 @@ job in the app's queue, so it never runs beside a MiniMax H3 render or a Drama 3
 app's own process:
 
 - ``metal`` (a Mac with an M5 or later, preferred there when built): TensorFold's Metal port (fork branch
-  ``upstream/music3-metal``, ``$PREFIX/music3/bin/music3-generate --serve 1``, Zig + Metal, no Python), the CUDA
+  ``music3-metal-115`` on TensorFold 1.1.5, ``$PREFIX/music3/bin/music3-generate --serve 1``, Zig + Metal, no Python), the CUDA
   route's binary protocol and lifecycle; int8 weights by default (``MUSIC3_WEIGHTS=bf16``). It does not stream yet.
   Without the binary or the weights, or on an M1 to M4, a Mac falls back to ``mlx``.
 - ``mlx`` (a Mac): TensorFold's MLX port (fork branch ``music3-mlx``, ``python -m tensorfold.music3 --serve`` in its
@@ -648,7 +648,7 @@ class Cuda(voice.Served):
 
 class Metal(Cuda):
     """TensorFold's Metal port of MiniMax Music 3 on a Mac (``music3-generate --serve 1``, Zig + Metal, no Python;
-    fork branch ``upstream/music3-metal``, built by ``scripts/build-music3-metal.sh`` into ``$PREFIX/music3``). The
+    fork branch ``music3-metal-115`` on TensorFold 1.1.5, built by ``scripts/build-music3-metal.sh`` into ``$PREFIX/music3``). The
     same binary's protocol and lifecycle as the CUDA route; it needs an M5 or later (the DiT, prompt rows and DAV run on
     its tensor units), so an older Mac stays on ``mlx``. Not streamed. Measured on a Mac Studio M5 Ultra
     (docs/recipes/minimax-music3-metal.md on the engine branch): see ``load_s``, ``RTF`` and ``NEED_GB``."""

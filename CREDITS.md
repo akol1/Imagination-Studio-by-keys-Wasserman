@@ -272,7 +272,9 @@ Phosphene publishes. (Apache-2.0.)
 lives in, and the practice of reaching the M5 tensor units from `mx.fast.metal_kernel` that the int8 kernels
 are built on (`kernels/qwen/dense/v1/lane_qmm.py`). This pack pins TensorFold 0.6.5 with three commits on top.
 (Apache-2.0.) Since 3.3.0 the DGX Spark's music engine is built on the **TensorFold 1.1.5** release (its Zig + CUDA
-runtime, build and loaders; the music3 family on top is this pack's).
+runtime, build and loaders; the music3 family on top is this pack's), and since 3.3.1 the Mac's Metal music engine
+(`music3-metal-115`) and the Mac's Metal Bolt engine (`bolt-metal-115`, `libbolt.dylib` on TensorFold's Bolt lane
+backend) are too.
 
 ## Sol-Engine, Sol-Attn and Sol-H3: NVIDIA Research
 
@@ -327,8 +329,12 @@ notices). No weights are in this pack.
 
 **Mia (MiaAI-Lab)** made **Nemotron-3.5-Bolt-TensorFold-DGX-Spark** (MIT), the recipe that serves Bolt on one DGX Spark
 with TensorFold's native engine: the Bolt lane backend (`libbolt.so`, the packed-weight kernels, the LiLiCorr drafter
-run inside it) and the patches to TensorFold 46a08c18. The studio's CUDA engine is that build, copied out of Mia's
-image or the carrier by `spark/build-bolt.sh`; the trimmed settings it runs with (4 streams, 65,536 tokens, 2 GiB of
+run inside it) and the patches that register it in TensorFold. **ChriZzn** contributed the recipe's speed work (the
+TensorFold 1.1.0 rebase, the routed-expert ring, programmatic dependent launch, one Mamba state copy, the fp4 prompt
+projections). Since 3.3.3 the studio's CUDA engine is that recipe at 89e1c8a rebased onto TensorFold 1.1.5 (drowzeys/TensorFold
+branch `bolt-lilicorr-115`, with its first token sent before the drafter's first proposal and a turn's last cache mark
+kept at the prompt's end), installed by `spark/build-bolt.sh` from the release archive, the carrier or a source build
+with FFmpeg, libjpeg-turbo and **xgrammar**; the trimmed settings it runs with (4 streams, 65,536 tokens, 2 GiB of
 prompt cache) are the studio's. TensorFold is Ash Hart's and the contributors'; **llama.cpp** (Georgi Gerganov and the
 ggml contributors) runs Bolt on a Mac until TensorFold's Metal port of the engine lands.
 
