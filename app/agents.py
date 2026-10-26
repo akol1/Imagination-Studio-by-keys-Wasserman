@@ -162,7 +162,7 @@ LOCAL_DRIVE = (" You run the Studio's tools yourself, through function calls: ca
 LOCAL_METHOD = ("rules", "hints", "compact", "report", "temp=0")
 LOCAL_STEPS = 40  # the local model's answers in one turn (each may call several tools)
 LOCAL_ANSWER_TIMEOUT = 600  # one answer from the local server
-THINK_ANSWER_TOKENS = 3000  # room for the answer itself after a reasoning budget (ask(think=...))
+THINK_ANSWER_TOKENS = 8000  # room for the answer itself after a reasoning budget (ask(think=...)); a 25-shot fight choreography ran out at 3000
 LOCAL_TOOL_TIMEOUT = 15 * 60  # one tool call (wait_for_jobs waits up to 10 minutes)
 LOCAL_RESULT_CHARS = 6000  # what the model reads of one tool's answer
 TOOLS_TTL = 10 * 60  # whether a local server takes tool calls, asked again after this

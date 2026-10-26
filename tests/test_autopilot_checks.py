@@ -589,12 +589,11 @@ def test_a_choreography_is_checked_in_code():
     assert "only grows" in fight.problem({"shots": DOJO[:1] + [{**DOJO[1], "down_after": [2]}] + DOJO[2:]}, 3, True)
     assert "every opponent is down" in fight.problem({"shots": DOJO[:2] + [{**DOJO[2], "down_after": [1, 2]}]}, 3, True)
     assert "Wing Chun" in fight.problem({"shots": [{**DOJO[0], "technique": "spinning hook kick"}] + DOJO[1:]}, 3, True)
-    assert "cause -> effect" in fight.problem({"shots": [{**DOJO[0], "effect": "he falls"}] + DOJO[1:]}, 3, True)
     assert "1.5 to 4" in fight.problem({"shots": [{**DOJO[0], "seconds": 8}] + DOJO[1:]}, 3, True)
     # long enough for its target: on the first dojo run the Director wrote 9 shots, 20 s, for a 50 s fight
-    assert fight.raw_seconds(50) == (84, 25) and "84 s of shots" in fight.problem(good, 3, True, 50)
+    assert fight.raw_seconds(50) == (45, 19) and "45 s of shots" in fight.problem(good, 3, True, 50)
     shots = fight.clean(good)
-    assert [s["frames"] for s in shots] == [56, 56, 73] and shots[2]["down_before"] == [1, 2]
+    assert [s["frames"] for s in shots] == [73, 90, 90] and shots[2]["down_before"] == [1, 2]  # each a second longer than its move
     assert [fight.ramp_of(s) for s in shots] == [fight.RAMP_FALL, fight.RAMP_EXCHANGE, fight.RAMP_KEY]
     assert "slaps the attacker's arm down" not in fight.plain("Lin Wan Kuen") and "chain punches" in fight.plain("Lin Wan Kuen")
 
@@ -643,7 +642,7 @@ def test_a_fight_segment_is_choreographed_shot_by_shot_ramped_and_cut(loop, monk
     edits = [b for b in bodies if b["kind"] == "edit"]
     videos = [b for b in bodies if b["kind"] == "video"]
     assert len(edits) == 3 and edits[0]["params"]["image"] == "uploads/hero.png" and edits[0]["params"]["images"] == ["uploads/face-a.png"]
-    assert len(videos) == 4 and [v["params"]["frames"] for v in videos] == [56, 56, 56, 73]
+    assert len(videos) == 4 and [v["params"]["frames"] for v in videos] == [73, 90, 90, 90]
     first = videos[0]["params"]["prompt"]
     assert "From the very first frame, already in motion" in first and "vertical fist" in first and "wears exactly an orange reflective jacket" in first
     assert "Make sure: Does this happen" in videos[2]["params"]["prompt"]  # the retake says what was missing

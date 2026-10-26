@@ -305,7 +305,7 @@ When the film's brain is a local server (the Studio's Bolt above all), every Dir
 retake from the findings, a keyframe rewrite, the chapter fold, the story so far) asks it to reason before it answers:
 `chat_template_kwargs: {"enable_thinking": true}`, the switch NVIDIA's chat template for Nemotron 3.5 Bolt reads, with
 `thinking_budget` (`think_tokens`, 4096: the engine closes the reasoning there and the answer follows) and `max_tokens`
-that budget plus 3000 for the answer. Without `thinking_budget` Bolt reasoned to the end of `max_tokens` on a long
+that budget plus 8000 for the answer (3000 cut off a 25-shot fight choreography). Without `thinking_budget` Bolt reasoned to the end of `max_tokens` on a long
 Director prompt, answered nothing, and the plain retry, unbounded, ran to the server's 32,768 tokens: seven minutes for
 one piece. The retry without thinking is now bounded too (4000 tokens). TensorFold's engine takes the
 switch per request even though the Studio starts it with `--no-thinking`, and returns the reasoning in

@@ -39,7 +39,9 @@ import checks
 import lengths
 
 # the shortest clip lengths the engine renders well, a frame count a move length (17n + 5)
-SHOT_FRAMES = {1.5: 39, 2.0: 56, 2.5: 56, 3.0: 73, 3.5: 90, 4.0: 90}
+SHOT_FRAMES = {1.5: 39, 2.0: 56, 2.5: 56, 3.0: 73, 3.5: 90, 4.0: 90, 4.5: 107, 5.0: 107}
+# a shot renders this much longer than its move: the first moments ease out of the keyframe and the ramp shortens it
+LEAD_S = 1.0
 RAMP_EXCHANGE, RAMP_FALL, RAMP_KEY = 1.75, 1.3, 0.6  # exchanges sped up, a fall sped up less, a key move slowed
 KEYS_MAX = 2
 SHOT_RETAKES = 2
@@ -96,15 +98,18 @@ shown in detail.
 
 
 def raw_seconds(target: float) -> tuple[float, int]:
-    """(seconds of shots to render, shots) for a fight of ``target`` seconds once ramped and trimmed: the shots run about
-    1.5x faster on average and lose TRIM_S each. On the first dojo run the Director wrote 9 shots, 20 s, for a 50 s fight."""
+    """(seconds of moves, shots) the choreography needs for a fight of about ``target`` seconds: each shot renders
+    LEAD_S longer than its move and is then sped up about 1.5x. On the first dojo run the Director wrote 9 shots, 20 s,
+    for a 50 s fight; asked for 84 s it wrote 18 to 22 shots of 43 to 56 s, which this asks for."""
 
-    shots = max(6, round(target / 2.0))
-    return round(1.5 * (target + TRIM_S * shots)), shots
+    return round(0.9 * target), max(6, round(target / 2.7))
 
 
 def frames_for(seconds: float) -> int:
-    return SHOT_FRAMES.get(min(SHOT_FRAMES, key=lambda s: abs(s - float(seconds or 2))), 56)
+    """The frames a shot renders: its move's seconds and LEAD_S, at a length the engine takes."""
+
+    wanted = float(seconds or 2) + LEAD_S
+    return SHOT_FRAMES[min(SHOT_FRAMES, key=lambda s: abs(s - wanted))]
 
 
 def opponents_of(seed: dict) -> list[dict]:
@@ -173,8 +178,6 @@ def problem(data: dict, count: int, wing: bool, target: float = 0) -> str:
         for key in ("move", "effect", "camera"):
             if not str(shot.get(key) or "").strip():
                 return f'shot {i}: "{key}" is needed'
-        if "->" not in str(shot.get("effect")) and "→" not in str(shot.get("effect")):
-            return f'shot {i}: "effect" is cause -> effect, like "palm strike to the chest -> thrown backward onto his back"'
         if wing and not any(name.lower() in str(shot.get("technique") or "").lower() for name in WING_CHUN):
             return f"shot {i}: the hero's technique is one of the Wing Chun techniques listed, by name"
         keys += bool(shot.get("key"))
@@ -182,7 +185,7 @@ def problem(data: dict, count: int, wing: bool, target: float = 0) -> str:
     if target:
         raw, wanted = raw_seconds(target)
         total = sum(float(x.get("seconds") or 0) for x in shots)
-        if total < 0.8 * raw or len(shots) < 0.75 * wanted:
+        if total < 0.85 * raw or len(shots) < 0.8 * wanted:
             return (f"{len(shots)} shots, {total:g} s: the fight needs about {raw:.0f} s of shots, {wanted} shots or more. Most opponents "
                     "take two or three shots before they go down (an exchange, a block, the finish); later several attack at once")
         if count >= 5 and sum(1 for x in shots if len(x.get("opponents") or []) >= 2) < 2:
