@@ -241,7 +241,7 @@ def data_url(picture: Path) -> str:
     return f"data:image/{kind};base64," + base64.b64encode(picture.read_bytes()).decode()
 
 
-def chat(endpoint: str, model: str, system: str, frames: list[tuple[str, Path]], text: str, max_tokens: int = 1500) -> str:
+def chat(endpoint: str, model: str, system: str, frames: list[tuple[str, Path]], text: str, max_tokens: int = 2000) -> str:
     """One request: the frames in time order, each after its caption ("0.00 s"), then the question."""
 
     content = []
@@ -271,6 +271,8 @@ def look(system: str, frames: list[tuple[str, Path]], sheet: Path | None, text: 
     with request() as (endpoint, model):
         who = "Cosmos3-Edge" if model == SERVED else model or "the vision server"
         try:
+            if len(frames) > MAX_IMAGES:  # more than the Studio's Cosmos is started to take (--vision-max-images)
+                raise TooMany(f"{len(frames)} images, {MAX_IMAGES} at most")
             return chat(endpoint, model, system, frames, text), who
         except TooMany:
             if sheet is None:

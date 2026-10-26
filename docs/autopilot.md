@@ -11,8 +11,28 @@ Rebirth's HyperFlow-Infinity (Apache-2.0; `LICENSES/HyperFlow-Infinity-LICENSE`)
 8-step adapter: segments render with the Studio's presets (FastH3 fh4, fh8, fh20, the Sharp Spec, Ref2VA, the LoRA hub)
 and their quality.
 
-Code: `app/autopilot.py` (the loop and its routes), `app/cosmos.py` (the vision brain), `app/static/autopilot.js` (the
-panel), `tests/test_autopilot.py`.
+Code: `app/autopilot.py` (the loop and its routes), `app/continuity.py` (the continuity bible and what its checks mean),
+`app/cosmos.py` (the vision brain), `app/static/autopilot.js` (the panel), `tests/test_autopilot.py`,
+`tests/test_autopilot_continuity.py`, `tests/test_autopilot_page.py`.
+
+**Fully autonomous.** A run needs nobody once it starts, as HyperFlow-Infinity's does: there is no approval anywhere.
+The Director chooses each next step of the story and the camera for each piece itself (framing, angle, movement;
+there is no fixed camera mode), every piece is checked against everything the film has established, and a piece that
+breaks it is written again and rendered again by itself. You can watch it, pause it or branch it; it never waits for
+you.
+
+**Defaults, from the first long run** (the 60 s Viking test film, whose first version came out badly):
+
+- the Studio's **Sharp Spec** (1376x768, FastH3 8 passes), not `small`;
+- **fewer, longer pieces**: 10 s each;
+- with an outline, **a keyframe a piece** (`keyframes: auto`): the Director writes the opening still, the picture
+  model makes it, the eyes check it against the bible and it is drawn again when it is wrong, and the piece opens on
+  it instead of on the last frame of the piece before (`on` for every run, `off` to chain from the last frame);
+- **short prompts**: an action of at most 40 words (turned back over 60), a camera of at most 15 (25), a setting of at
+  most 30 (45); the bible feeds the Director and the checks, it is not pasted into the render prompt;
+- **a style for each era or setting** (`styles`, segment spans like the cast sheets): one style that named the sea,
+  the island and 1770s Boston pasted Boston's streets into the storm at sea;
+- **action first**: each piece shows a physical action with a visible result.
 
 ![A finished run: the film so far, the controls and a segment's watcher notes](screenshots/autopilot-run.jpg)
 
@@ -21,9 +41,10 @@ panel), `tests/test_autopilot.py`.
 ## The loop
 
 ```
-seed ──► Director ──► render (the queue) ──► QA gate + watcher ──► commit ──► (every N) join the film
-            ▲                                       │ fail: next seed                │
-            └──────── scene graph + last frame ◄────┴────────────────────────────────┘
+seed ──► Director ──► (keyframe ──► check) ──► render (the queue) ──► QA gate + watcher + continuity check ──► commit ──► (every N) join the film
+            ▲  ▲                                                                 │ major: findings to the Director, next seed │
+            │  └─────────────────────────────────────────────────────────────────┘                                          │
+            └──────── scene graph + continuity bible (+ last frame) ◄────────────────────────────────────────────────────────┘
 ```
 
 1. **Seed.** A world, where the film starts, an optional inspiration, characters (a name, a look repeated in every
@@ -57,9 +78,13 @@ seed ──► Director ──► render (the queue) ──► QA gate + watcher
    it counts: on the first real run Cosmos3-Edge's scene-graph answer called the courier mounting her vehicle "identity
    drift". A failed gate or confirmed drift renders the segment again at the next seed (`retakes`, one by default); the
    last take stands otherwise, with its reasons beside it.
-5. **Commit.** The delta is merged; above 22 events the oldest 10 fold into a chapter written by the text brain.
-   `memory/S0001.json` keeps the memory after each segment (a branch starts from one).
-6. **Join.** Every `preview_every` segments (3) and on pause or finish, `film.mp4` is made again: a continuation
+5. **Continuity.** The same frames go to the eyes again with the continuity bible's slice and a checklist, and a
+   finding that breaks the bible renders the segment again with the finding in the Director's hands (see
+   *Continuity* below).
+6. **Commit.** The delta is merged; above 22 events the oldest 10 fold into a chapter written by the text brain.
+   `memory/S0001.json` keeps the memory after each segment (a branch starts from one). The kept take's check is
+   written into the bible (`bible/S0001.json` after each segment); the bible is never folded.
+7. **Join.** Every `preview_every` segments (3) and on pause or finish, `film.mp4` is made again: a continuation
    drops the one frame it repeats and its sound cross-fades over the same 1/24 s, so picture and sound stay in step (a
    one-frame `xfade` is not used: ffmpeg 6.1 dropped the rest of the film with it); a new scene dissolves in over 0.25 s. The soundtrack runs through the joins; a *Score* line in the settings is laid into
    every segment's music.
@@ -69,6 +94,91 @@ rendering finishes and is picked up on resume. **Resume** carries on from the la
 restart picks running runs up by itself. **Branch from here** makes a new run that shares segments 1..N (their clips
 stay where they are) and the memory after N, and tells the Director the new direction for everything after N, as
 direction rather than something that already happened.
+
+## Continuity
+
+Every segment is checked against everything the film has established, not only the segment before. The memory
+behind it is the **continuity bible** (`bible.json`), built from the seed, the Director's answers and what the eyes
+saw in each kept take:
+
+| Category | What it holds | How long a fact holds |
+|---|---|---|
+| identity | each person's look (the cast sheet), face, hair, eyes, age, build, scars and marks | face, eyes, marks: the film; look, age, hair, build: the era |
+| wardrobe | clothing and its state (wet, torn) | the era (a new state replaces the old one) |
+| props | what each person holds, where objects are | the era |
+| location | a place's layout and landmarks | the film |
+| setting | the place a piece asked for, and its style | checked a piece at a time |
+| lighting | time of day, light, weather | the scene |
+| era | the era's label and its rules (material culture; the seed's *Era and setting rules*) | the era |
+| spatial | who is on which side of the frame, which way they face and move | the scene |
+| action | actions in progress on the last frame | until the next segment (continue or resolve) |
+| audio | each speaker's voice, the scene's music and ambience | voice: the film; the rest: the scene |
+| story | what has happened (every event the watcher reported, and story facts) | the film, never folded |
+
+**Versioned, not overwritten.** A new value closes the old fact the segment before (`from`/`to`); the history stays.
+An **era** starts when a cast sheet begins later (the boy of segments 1-7 and the man of 8-: two sheets of one first
+name whose spans do not overlap are one person) or when the Director labels a time-skip (`era`, only with a new
+scene). At an era change the era-scoped facts close (age, hair, wardrobe, props, the era's rules) and the film-scoped
+ones carry on (the crescent scar, the eye colour, the voice). A new scene closes the scene-scoped ones. A cast sheet's
+look is canonical: what the eyes see never rewrites it, it can only add marks and eye colour. Identity seen by the
+eyes is set once an era: a later look is checked against it, not written over it.
+
+**The Director's slice.** For each segment the Director gets the era and its rules, every current fact of who and what
+is in play (this segment's cast, anyone seen in the last three segments, the places and things of this scene), the
+scene's light, music and ambience, where people stood and what they were doing on the last frame, the story facts that
+concern them (and the latest ones), and the open corrections. Folding the scene graph's events into chapters never
+touches it.
+
+**The check.** After the watcher, the eyes get the same eight frames, the transcript, the setting and style the piece
+asked for, the bible's slice and one checklist line a category, and answer per category with a verdict (`ok`,
+`minor`, `major`, `not_visible`), the frame number and the evidence, plus new facts, who is in shot (and their
+clearest frame), positions and actions in progress, and the light. Robust to the eyes' noise:
+
+- a verdict without a frame number or without words is dropped (`no_evidence`), and words that say nothing is wrong
+  ("remains", "consistent", "matches") are dropped (`benign`);
+- a category whose subject cannot be seen is `not_visible`, never a problem; mounting a vehicle, turning, a new angle,
+  blur, light, a coat taken off on screen are named as not breaks;
+- every `major` gets a **second look**: the frame it names at full size (cropped to the region when the first look gave
+  one, `box`) beside what it should match (the person's cast picture, else the clearest frame of the segment they were
+  first seen in; for other categories the last frame of the segment before), with one narrow question. Not seen there:
+  `filtered` (a false positive). A second look that cannot be made follows the strictness;
+- the **180-degree rule** is measured, not asked: on a continuation, two people who swap sides of the frame across the
+  join, or a move that reverses its screen direction, is a minor `spatial` finding;
+- the audio is held in the prompts: each speaker's voice is the bible's description, word for word, in every line; a
+  QA gate's line check that failed only on a word that sounds the same ("Eirik!" heard as "Eric!", one Soundex key) is a
+  minor note, never a retake.
+
+**What a finding does** (`continuity.strictness`):
+
+| Strictness | A confirmed major renders again in | A major whose second look could not be made |
+|---|---|---|
+| lenient | identity, era | is dropped |
+| standard (default) | identity, era, setting, story, action | becomes minor |
+| strict | every watched category | stays major |
+
+- **Major**: the segment is rendered again. The Director gets each finding (category, frame, evidence) and rewrites the
+  same story step in the same scene, and the new take renders at the next seed (with a new keyframe in keyframe mode).
+  A failed QA identity gate and confirmed drift go to the Director the same way (on the Viking film the identity gate's
+  reason was a coat that turned from brown to red). `retakes` is the budget, **2** by default (0 to 4). When it runs
+  out, the take with the fewest problems is kept (gate failures and drift, then retake findings, then minor ones; the
+  latest of equals) and the segment says so.
+- **Minor** (and a major outside the strictness): a correction in the Director's next prompt ("props: keep the core in
+  her right hand"). It stays until that category checks ok again; eight at most.
+- Everything is in the segment's files (`continuity-take1.json`, `director-take2.json`, `look-take1-identity.png`) and
+  on the panel: each segment's continuity line (a verdict a category, the findings and what they did, the second
+  look, what was filtered), its keyframes, and the bible view.
+
+**The film-level pass** (`continuity.film_pass`, on by default; *Check the whole film* on the panel). When a run
+finishes, the eyes look across the whole film: each person's clearest frame from each segment they were seen in, an
+era at a time (eight at most, spread through it), asked which segments show someone else (the man's face in segment
+12 against segment 8), and one frame from each of eight segments, asked for drift in places, props, light and era. A
+report only (`film-check.json`): nothing is rendered again.
+
+**Settings**: `continuity: {strictness: lenient|standard|strict, categories: [...], film_pass}`, `retakes`, `styles:
+[{style, segments: "1-7"}]`, `keyframes: auto|on|off`, and the seed's `rules`. Categories left out are not asked.
+
+**Cost**: one more question to the eyes a take (the checklist), one a major finding (the second look), and a keyframe
+a piece in keyframe mode (one picture and one check). Not yet measured on a real run.
 
 ## Measured
 
@@ -105,8 +215,10 @@ The Director stays on the text brain by default; `director: "vision"` asks the v
 | `memory.json` | the scene graph now, the archive of folded events, `observed_through` |
 | `scene-graph.schema.json` | the scene graph's JSON schema (below) |
 | `memory/S0001.json` | the memory after segment 1, with its delta and the cast |
-| `segments/S0001/` | `take1.mp4`, `director.json`, `watch-take1.json`, `frames-take1/`, `qa-take1.png` |
+| `bible.json`, `bible/S0001.json` | the continuity bible now, and after each segment |
+| `segments/S0001/` | `take1.mp4`, `director.json`, `director-take2.json` (a rewrite), `watch-take1.json`, `continuity-take1.json`, `look-take1-*.png` (second looks), `frames-take1/`, `qa-take1.png` |
 | `film.mp4` | the film so far |
+| `film-check.json` | the film-level continuity pass |
 | `vision.json` (in `autopilot/`) | the vision brain's address, model and frame count |
 
 The scene graph:
@@ -126,12 +238,15 @@ story; a node id the watcher misspells is folded into the existing one (`guard_2
 ```
 GET  /api/autopilot/runs                          the runs
 POST /api/autopilot/runs                          {name, seed: {world, situation, inspiration, characters: [{name, look, image}], opening_image},
-                                                settings: {style, guidance, preset, quality, seconds, segments (0 = until stopped), seed,
-                                                max_scene_segments, qa, retakes, preview_every, identity, music, loras, brain}, start}
-GET  /api/autopilot/runs/{id}                     the run and its memory
+                                                rules, outline},
+                                                settings: {style, styles, guidance, preset, quality, seconds, segments (0 = until stopped), seed,
+                                                max_scene_segments, qa, retakes, preview_every, keyframes, identity, music, loras, brain,
+                                                continuity: {strictness, categories, film_pass}}, start}
+GET  /api/autopilot/runs/{id}                     the run, its memory and its continuity bible
 PUT  /api/autopilot/runs/{id}                     {settings, name}: applies from the next segment
 POST /api/autopilot/runs/{id}/start | pause | stop | assemble
 POST /api/autopilot/runs/{id}/branch              {after, guidance, segments?, seed?, start?}
+POST /api/autopilot/runs/{id}/film-check          the film-level continuity pass, in the background (report only)
 GET  /api/autopilot/seed/slate/{project}          a seed from a Slate film's bible
 GET  /api/autopilot/vision, POST /api/autopilot/vision  {endpoint, model, frames}
 ```

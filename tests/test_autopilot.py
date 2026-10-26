@@ -31,7 +31,7 @@ BEATS = ["Vex launches off the tram platform", "Vex threads between hover-trams"
 
 
 def shot(beat: str, scene: str = "Flooded avenue", change: bool = False) -> dict:
-    return {"scene": scene, "scene_change": change, "beat": beat, "new_characters": [],
+    return {"scene": scene, "scene_change": change, "beat": beat, "new_characters": [], "keyframe": f"Vex mid-move: {beat}, wide shot, neon night",
             "shot": {"setting": "A flooded neon avenue at night, magenta and cyan reflections", "camera": "Tracking shot alongside the mono-wheel",
                      "action": f"{beat}, spray fanning from the wheel.", "dialogue": [], "soundscape": "Rain, a whining electric motor", "music": "N/A"}}
 
@@ -54,16 +54,43 @@ class Director:
 
 
 class Watcher:
-    """The vision brain stood in: one fixed observation per call; ``drift`` lists the calls that see identity drift."""
+    """The vision brain stood in: one fixed observation per call; ``drift`` lists the calls that see identity drift.
+    It answers the continuity checklist too (``checks``/``facts``: {checklist call number: answer part}, all ok by
+    default), the second look (``second``: what it says in turn, confirmed by default) and the film-level pass."""
 
-    def __init__(self, drift=(), same=False, confirms=True):
+    def __init__(self, drift=(), same=False, confirms=True, checks=None, facts=None, second=(), film=None, world=None, present="Vex", keyframes=None):
         self.calls, self.drift, self.same, self.prompts, self.confirms, self.checked = 0, set(drift), same, [], confirms, 0
+        self.checks, self.facts, self.second, self.film, self.world, self.present = checks or {}, facts or {}, list(second), film, world, present
+        self.checklists, self.looks, self.films, self.keyframes, self.keyframe_checks = [], [], [], keyframes or {}, []
 
     def __call__(self, system, frames, sheet, prompt, brain):
         if "clearly the same person" in prompt:  # the narrower second look (confirm_drift)
             self.checked += 1
             assert len(frames) == 3
             return json.dumps({"same": not self.confirms, "why": "another face"}), "stand-in"
+        if "CONTINUITY CHECKLIST" in prompt:
+            self.checklists.append(prompt)
+            n = len(self.checklists)
+            assert len(frames) >= 4 and all(Path(p).is_file() for _, p in frames)
+            checks = {c: {"verdict": "ok", "frame": 0, "evidence": ""} for c in autopilot.continuity.WATCHED}
+            checks.update(self.checks.get(n) or {})
+            return json.dumps({"checks": checks, "facts": self.facts.get(n) or [],
+                               "present": [{"who": self.present, "frame": 2}] if self.present else [], "positions": [], "open_actions": [],
+                               "light": "night, rain, neon"}), "stand-in"
+        if "KEYFRAME CHECK" in prompt:
+            self.keyframe_checks.append(prompt)
+            assert len(frames) == 1 and Path(frames[0][1]).is_file()
+            return json.dumps({"checks": self.keyframes.get(len(self.keyframe_checks)) or {}}), "stand-in"
+        if "A FIRST LOOK REPORTED" in prompt:
+            self.looks.append((prompt, [p for _, p in frames]))
+            assert all(Path(p).is_file() for _, p in frames) and sheet.is_file()
+            return json.dumps({"confirmed": self.second.pop(0) if self.second else True, "why": "looked closer"}), "stand-in"
+        if "SAME CHARACTER ACROSS THE FILM" in prompt:
+            self.films.append(prompt)
+            return json.dumps(self.film or {"same": True, "different": [], "why": "one person"}), "stand-in"
+        if "ACROSS THE WHOLE FILM" in prompt:
+            self.films.append(prompt)
+            return json.dumps(self.world or {"issues": []}), "stand-in"
         self.calls += 1
         self.prompts.append(prompt)
         assert len(frames) >= 4 and all(Path(p).is_file() for _, p in frames) and sheet.is_file()
@@ -81,6 +108,15 @@ class Queue:
 
     def submit(self, body):
         params = body["params"]
+        if body["kind"] == "scout":  # a keyframe: one still, where the server's scout job puts it
+            job_id = f"j{len(self.jobs) + 1}"
+            picture = HOME / "scouts" / job_id / f"scout_s{params['seed']}.png"
+            picture.parent.mkdir(parents=True, exist_ok=True)
+            subprocess.run(["ffmpeg", "-v", "error", "-y", "-f", "lavfi", "-i", "color=c=teal:size=160x96", "-frames:v", "1", str(picture)], check=True)
+            job = {"id": job_id, "status": "done", "outputs": [str(picture), str(picture.parent / "sheet.jpg")], "params": params}
+            self.jobs[job_id] = job
+            self.bodies.append(body)
+            return job
         target = HOME / params["output"]
         target.parent.mkdir(parents=True, exist_ok=True)
         subprocess.run(["ffmpeg", "-v", "error", "-y", "-f", "lavfi", "-i", "testsrc=size=160x96:rate=24:duration=1",
@@ -326,7 +362,7 @@ def test_an_outline_is_followed_beat_by_beat_with_each_era_its_own_cast(loop):
     seed = {**SEED, "characters": [{"name": "Eirik the boy", "look": "a ten-year-old with copper braids", "segments": "1-2"},
                                    {"name": "Eirik the man", "look": "a man of twenty-five with copper braids", "segments": "3-"}],
             "outline": ["The storm", {"text": "Overboard"}, {"text": "Years later, in Boston", "image": "uploads/grown.png"}]}
-    said = client.post("/api/autopilot/runs", json={"name": "Saga", "seed": seed, "settings": {"segments": 4}})
+    said = client.post("/api/autopilot/runs", json={"name": "Saga", "seed": seed, "settings": {"segments": 4, "keyframes": "off"}})
     assert said.status_code == 200, said.text
     run = go(autopilot.load(said.json()["id"]))
     asked = loop["director"].asked

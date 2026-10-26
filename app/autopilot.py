@@ -14,8 +14,14 @@ direction) becomes a film that keeps going until it is stopped. Each turn of the
   watch     the vision brain (cosmos.py: NVIDIA Cosmos3-Edge by default) looks at eight frames of the segment in time
             order with the Whisper transcript and reports only what changed: the scene graph's delta, the state the
             segment ends in, and continuity problems. Identity drift, confirmed by a second look at the face alone,
-            fails the segment like the QA gate does, and it is rendered again at the next seed (``retakes``)
-  commit    the delta is merged into the scene graph; past ``COMPACT_AT`` events the oldest are folded into a chapter
+            fails the segment like the QA gate does
+  continuity  the same frames are checked against the continuity bible (continuity.py: everything the film has
+            established, versioned by era and scene) with a checklist a category; a major finding is looked at again,
+            closer, and a confirmed one renders the segment again with the finding in the Director's hands and a new
+            seed (``retakes``, two by default; the best take is kept when they run out); a minor one becomes a
+            correction in the Director's next prompt
+  commit    the delta is merged into the scene graph; past ``COMPACT_AT`` events the oldest are folded into a chapter;
+            the kept take's check is written into the bible, which is never folded
   preview   every ``preview_every`` segments the film is joined again (``film.mp4``): a continuation drops the frame it
             repeats and its sound cross-fades over the same 1/24 s, a new scene dissolves in a quarter second
 
@@ -32,7 +38,9 @@ Studio's prompt fields and content rules, a vision brain of the user's choice, a
 
 Run files live in ``<studio folder>/autopilot/<run id>/``: ``run.json`` (settings, seed, segments, state), ``memory.json``
 (the scene graph, schema in ``scene-graph.schema.json`` beside it), ``memory/S0001.json`` (the memory after each
-segment), ``segments/S0001/`` (takes, frames, the Director's and the watcher's answers) and ``film.mp4``.
+segment), ``bible.json`` and ``bible/S0001.json`` (the continuity bible now and after each segment), ``segments/S0001/``
+(takes, frames, the Director's and the watcher's answers, the continuity checks), ``film.mp4`` and ``film-check.json``
+(the film-level pass).
 """
 
 from __future__ import annotations
@@ -50,6 +58,7 @@ from pathlib import Path
 
 from fastapi import APIRouter, HTTPException, Request
 
+import continuity  # the continuity bible and what its checks mean
 import cosmos  # the vision brain (NVIDIA Cosmos3-Edge on TensorFold), beside this file
 import lengths  # which frame counts the model takes
 import negation  # what a prompt forbids by name
@@ -70,10 +79,14 @@ LIMIT = 500  # segments a run may have when it is asked for a number (0 runs unt
 ACTIVE = ("running",)
 CONTINUE_FADE, CUT_FADE = 1 / FPS, 0.25  # the joins of the film: the repeated frame dropped, and a dissolve on a new scene
 
-DEFAULTS = {"style": "", "guidance": "", "preset": "small", "quality": "fh8", "width": None, "height": None, "seconds": 5,
-            "loras": [], "segments": 6, "seed": 1, "max_scene_segments": 8, "beat_history": 12, "qa": True, "retakes": 1,
-            "preview_every": 3, "identity": "auto", "ref_turbo": True, "music": "", "director": "brain",
-            "brain": {"backend": slate.AUTO, "endpoint": "", "model": ""}}
+# the defaults hold the lessons of the first long run (the 60 s Viking film): the Sharp Spec (1376x768, FastH3 8
+# passes), fewer and longer pieces (10 s), and a keyframe a piece on a run with an outline
+DEFAULTS = {"style": "", "guidance": "", "preset": "sharp", "quality": "fh8", "width": None, "height": None, "seconds": 10,
+            "loras": [], "segments": 6, "seed": 1, "max_scene_segments": 8, "beat_history": 12, "qa": True, "retakes": 2,
+            "preview_every": 3, "styles": [], "keyframes": "auto", "identity": "auto", "ref_turbo": True, "music": "", "director": "brain",
+            "brain": {"backend": slate.AUTO, "endpoint": "", "model": ""}, "continuity": copy.deepcopy(continuity.DEFAULT)}
+RETAKES = 4  # the most retakes a segment may be given
+KEYFRAMES = ("auto", "on", "off")  # a picture a piece to open on: auto is on for a run with an outline
 IDENTITY = ("auto", "frame", "references")  # how a new scene keeps who is who: Ref2VA pictures where installed, or words
 
 # what the server hands in (attach); tests stand in for them
@@ -301,6 +314,9 @@ Answer with a single JSON object and nothing else:
   "scene_change": true | false,
   "beat": "<one short line: what this segment accomplishes in the story>",
   "new_characters": [{"name": "...", "look": "<concrete visual description: age, face, hair, clothing>"}],
+  "era": "<empty, unless this segment opens the film or jumps to another time or era: then a short label like 'Boston, 1773'>",
+  "era_rules": ["<with an era label only: what belongs to that era's material culture and what would be out of place, each 12 words max>"],
+  "keyframe": "<only when the prompt asks for it: the still picture this segment opens on, 60 words max: who is where, the framing, the place, the light>",
   "shot": {
     "setting": "<the place, the time of day and the light, concrete and visual>",
     "camera": "<framing and camera movement>",
@@ -334,7 +350,16 @@ prompt and what is named tends to appear.
 segment without speech.
 - Continue from what the film actually showed (the watcher's report and the scene graph), not from what an earlier \
 segment asked for. Previous beats are requests, not facts.
+- The continuity bible is canonical: every person keeps their face, marks, wardrobe and its state and what they hold \
+until the story changes it on screen; an action in progress continues or resolves; what has happened stays happened. \
+Name only the details that matter in this shot (the musket in his right hand), and make every correction it asks \
+for. A time-skip is a new scene with an "era" label.
 - Write in English.
+
+You run the film on your own: nobody approves a segment. You choose the story's next step and the camera for every \
+segment yourself (framing, angle, movement: whatever shows the action best; there is no fixed camera mode). Favour \
+action: each segment shows a physical action with a visible result. Keep the prompt short: "action" at most 40 words, \
+"camera" at most 15, "setting" at most 30. The continuity bible is for you to keep things right, not to be copied out.
 
 This is open-ended: there is no prescribed plot, act schedule, ending or total length. Decide the next short step \
 from the evidence."""
@@ -383,14 +408,25 @@ def direction(settings: dict, branch: dict | None, index: int) -> str:
     return text
 
 
+def style_at(settings: dict, index: int) -> str:
+    """The visual style of segment ``index``: the run's style (what every segment shares) and the scoped styles whose
+    segments include it ({style, from, to}, like the cast sheets). On the 60 s Viking test film one style named the
+    sea, the island and 1770s Boston at once, and Boston's streets came into the storm at sea: give each its span."""
+
+    scoped = [str(x.get("style") or "").strip() for x in settings.get("styles") or []
+              if isinstance(x, dict) and (x.get("from") or 1) <= index <= (x.get("to") or 10 ** 6)]
+    return " ".join(bit for bit in (str(settings.get("style") or "").strip(), *scoped) if bit)
+
+
 def first_prompt(run: dict, seconds: float) -> str:
     s = run["settings"]
-    return (seed_text(run["seed"], s.get("style", "")) + "\n" + outline_text(run, 1) + direction(s, run.get("branch"), 1)
+    return (seed_text(run["seed"], style_at(s, 1)) + "\n" + outline_text(run, 1) + direction(s, run.get("branch"), 1)
             + f"\nWrite segment 1, about {seconds:.0f} seconds. It is the opening: establish the world, the look and the "
-              "mood, and start the situation. Name its scene and set \"scene_change\" to true.")
+              "mood, and start the situation. Name its scene and set \"scene_change\" to true. Fill \"era\" and \"era_rules\" "
+              "for the film's opening era.")
 
 
-def next_prompt(run: dict, index: int, seconds: float, memory_text: str, note: str) -> str:
+def next_prompt(run: dict, index: int, seconds: float, memory_text: str, note: str, bible_text: str = "") -> str:
     s, segments = run["settings"], committed(run)
     previous = segments[-1]
     beats = "\n".join(f"  {seg['index']}. {seg.get('beat', '')[:110]}" for seg in segments[-int(s.get("beat_history") or 12):]) or "  (none yet)"
@@ -401,7 +437,7 @@ def next_prompt(run: dict, index: int, seconds: float, memory_text: str, note: s
     cast = "\n".join(f"- {name}: {look}" for name, look in cast_at(run, index).items())
     watched = previous.get("watch") or {}
     said = (previous.get("transcript") or "").strip()
-    return (seed_text(run["seed"], s.get("style", "")) + "\n"
+    return (seed_text(run["seed"], style_at(s, index)) + "\n"
             + (f"\nCast -- repeat these looks word for word:\n{cast}\n" if cast else "")
             + f"\nBeats asked for so far (requests, not verified events; do not repeat them):\n{beats}\n"
             + f"\nYou are writing segment {index}, about {seconds:.0f} seconds. {pacing}\n"
@@ -410,6 +446,7 @@ def next_prompt(run: dict, index: int, seconds: float, memory_text: str, note: s
             + f"How it ends, on its last frame: {watched.get('ending') or 'no report'}\n"
             + (f"What was heard: {said}\n" if said else "")
             + (f"\nMemory of the film so far:\n{memory_text}\n" if memory_text else "")
+            + (f"\nThe continuity bible (canonical, built from everything the film has shown; never contradict it):\n{bible_text}\n" if bible_text else "")
             + (f"\n{note}\n" if note else "")
             + outline_text(run, index) + direction(s, run.get("branch"), index)
             + "\nContinue from what really came out, above all the state the last frame leaves things in. Use the memory to keep "
@@ -547,6 +584,19 @@ def memory_of(run: dict) -> dict:
     return read_json(run_dir(run["id"]) / "memory.json", copy.deepcopy(EMPTY))
 
 
+def bible_of(run: dict) -> dict:
+    """The continuity bible of the run; a run made before it existed gets one from its seed and cast."""
+
+    found = read_json(run_dir(run["id"]) / "bible.json")
+    return found if isinstance(found, dict) and found.get("version") else continuity.new(run["seed"], run.get("cast"))
+
+
+def save_bible(run: dict, bible: dict, segment_id: str = "") -> None:
+    write_json(run_dir(run["id"]) / "bible.json", bible)
+    if segment_id:
+        write_json(run_dir(run["id"]) / "bible" / f"{segment_id}.json", bible)
+
+
 def committed(run: dict) -> list:
     return [s for s in run.get("segments") or [] if s.get("status") == "done"]
 
@@ -592,7 +642,7 @@ def cast_at(run: dict, index: int) -> dict:
 
 
 def beat_of(run: dict, index: int) -> dict | None:
-    outline = run["seed"].get("outline") or []
+    outline = (run.get("seed") or {}).get("outline") or []
     return outline[index - 1] if 0 < index <= len(outline) else None
 
 
@@ -618,10 +668,12 @@ def clean_seed(given: dict) -> dict:
             raise HTTPException(400, f"the opening picture of beat {i + 1} is not a file in the studio's folder: {image}")
         if text or image:
             outline.append({"text": text, **({"image": image} if image else {})})
+    rules = given.get("rules") or []
+    rules = [line.strip() for line in (rules.splitlines() if isinstance(rules, str) else rules) if isinstance(line, str) and line.strip()][:8]
     seed = {"inspiration": str(given.get("inspiration") or "").strip()[:600], "world": str(given.get("world") or "").strip()[:1500],
             "situation": str(given.get("situation") or "").strip()[:1500], "characters": characters[:9],
             "opening_image": str(given.get("opening_image") or "").strip() or None, "slate": given.get("slate") or None,
-            **({"outline": outline} if outline else {})}
+            **({"outline": outline} if outline else {}), **({"rules": [r[:300] for r in rules]} if rules else {})}
     if seed["opening_image"] and not on_disk(seed["opening_image"]):
         raise HTTPException(400, "the opening picture is not a file in the studio's folder")
     if not (seed["world"] or seed["situation"] or seed["inspiration"]):
@@ -655,7 +707,7 @@ def clean_settings(given: dict, base: dict | None = None) -> dict:
         if given.get(key):
             s[key] = str(given[key])
     for key, low, high in (("seconds", 1, 15), ("segments", 0, LIMIT), ("seed", 0, 2 ** 31 - 1), ("max_scene_segments", 2, 50),
-                           ("beat_history", 3, 50), ("retakes", 0, 3), ("preview_every", 1, 50), ("width", 256, 1536), ("height", 256, 1536)):
+                           ("beat_history", 3, 50), ("retakes", 0, RETAKES), ("preview_every", 1, 50), ("width", 256, 1536), ("height", 256, 1536)):
         if given.get(key) not in (None, ""):
             try:
                 s[key] = max(low, min(high, int(given[key])))
@@ -664,12 +716,27 @@ def clean_settings(given: dict, base: dict | None = None) -> dict:
     for key in ("qa", "ref_turbo"):
         if given.get(key) is not None:
             s[key] = bool(given[key])
+    if given.get("keyframes") in KEYFRAMES:
+        s["keyframes"] = given["keyframes"]
     if given.get("identity") in IDENTITY:
         s["identity"] = given["identity"]
     if given.get("director") in ("brain", "vision"):
         s["director"] = given["director"]
+    if isinstance(given.get("styles"), list):
+        styles = []
+        for x in given["styles"][:12]:
+            text = str((x or {}).get("style") or "").strip()[:1000] if isinstance(x, dict) else ""
+            if text:
+                first, last = span(x.get("segments")) if x.get("segments") not in (None, "") else (x.get("from"), x.get("to"))
+                styles.append({"style": text, **({"from": int(first)} if first else {}), **({"to": int(last)} if last else {})})
+        s["styles"] = styles
     if isinstance(given.get("loras"), list):
         s["loras"] = slate.lora_list(given["loras"])[:4]
+    if given.get("continuity") is not None:
+        try:
+            s["continuity"] = continuity.clean(given["continuity"], s.get("continuity"))
+        except ValueError as error:
+            raise HTTPException(400, str(error))
     if isinstance(given.get("brain"), dict):
         b = given["brain"]
         s["brain"] = {"backend": str(b.get("backend") or slate.AUTO), "endpoint": slate.nearby_endpoint(str(b.get("endpoint") or "")),
@@ -716,6 +783,7 @@ def create_run(body: dict, request: Request) -> dict:
     folder.mkdir(parents=True)
     write_json(folder / "memory.json", copy.deepcopy(EMPTY))
     write_json(folder / "scene-graph.schema.json", SCHEMA)
+    save_bible(run, continuity.new(seed, run["cast"]))
     say(run, "Created.")
     if body.get("start"):
         return public(begin(run))
@@ -725,7 +793,7 @@ def create_run(body: dict, request: Request) -> dict:
 @router.get("/api/autopilot/runs/{run_id}")
 def get_run(run_id: str) -> dict:
     run = load(run_id)
-    return {**public(run), "memory": memory_of(run)}
+    return {**public(run), "memory": memory_of(run), "bible": bible_of(run)}
 
 
 @router.put("/api/autopilot/runs/{run_id}")
@@ -849,6 +917,12 @@ def branch_run(run_id: str, body: dict, request: Request) -> dict:
         if mark:
             write_json(folder / "memory" / f"S{seg['index']:04d}.json", mark)
     write_json(folder / "scene-graph.schema.json", SCHEMA)
+    bible = read_json(run_dir(run_id) / "bible" / f"S{after:04d}.json")
+    save_bible(run, bible if isinstance(bible, dict) and bible.get("version") else continuity.new(run["seed"], run["cast"]))
+    for seg in shared:
+        mark = read_json(run_dir(run_id) / "bible" / f"S{seg['index']:04d}.json")
+        if mark:
+            write_json(folder / "bible" / f"S{seg['index']:04d}.json", mark)
     say(run, f"Branched from {source.get('name')} after segment {after}: {guidance[:200]}")
     if body.get("start"):
         return public(begin(run))
@@ -865,6 +939,25 @@ def assemble_now(run_id: str, request: Request) -> dict:
     if not committed(run):
         raise HTTPException(400, "no segment is finished yet")
     publish(run)
+    return public(run)
+
+
+@router.post("/api/autopilot/runs/{run_id}/film-check")
+def film_check_now(run_id: str, request: Request) -> dict:
+    """The film-level continuity pass (report only), in the background: the run must not be at work."""
+
+    import agents
+
+    agents.local(request, True)
+    live = runs.get(run_id)
+    if live and live["thread"].is_alive():
+        raise HTTPException(409, "the run is at work: the film is checked when it finishes, or pause it first")
+    run = load(run_id)
+    if len(committed(run)) < 2:
+        raise HTTPException(400, "the film needs two segments or more to be compared")
+    run["film_check"] = {"state": "running", "at": slate.now()}
+    say(run, "Checking the whole film's continuity.", stage="film-check")
+    threading.Thread(target=film_check_safely, args=(run,), daemon=True, name="autopilot-film-" + run_id).start()
     return public(run)
 
 
@@ -924,6 +1017,8 @@ def work(run: dict, stop: threading.Event) -> None:
             if limit and len(committed(run)) >= limit:
                 if (run.get("film") or {}).get("segments") != len(committed(run)):
                     publish(run)
+                if continuity.options(run["settings"])["film_pass"] and len(committed(run)) >= 2 and not (run.get("film_check") or {}).get("segments") == len(committed(run)):
+                    film_check_safely(run)
                 run["state"] = "done"
                 say(run, f"Done: {limit} segments, {run['film']['seconds'] if run.get('film') else 0:.1f} s of film.")
                 return
@@ -956,9 +1051,20 @@ def segment(run: dict, stop: threading.Event) -> None:
             follow(run, seg, stop)
         elif seg["status"] == "rendered":
             check(run, seg)
+        elif seg["status"] == "keyframe":
+            render_keyframe(run, seg)
+        elif seg["status"] == "keyframe_queued":
+            follow_keyframe(run, seg, stop)
+        elif seg["status"] == "keyframe_ready":
+            check_keyframe(run, seg)
         elif seg["status"] == "retake":
+            fixing = bool(seg.get("fix"))
+            if fixing:
+                replan(run, seg)  # the Director rewrites the shot with the findings in hand
             seg["seed"] = int(seg["seed"]) + 1
-            seg["status"] = "planned"
+            seg["status"] = "keyframe" if fixing and keyframes_for(run, seg["index"]) else "planned"  # a new keyframe from the new shot
+            if seg["status"] == "keyframe":
+                seg["keyframe"] = None
             save(run)
         elif seg["status"] == "failed":
             raise Failed(f"segment {seg['index']} could not be rendered: {seg.get('error') or 'no reason'}")
@@ -970,6 +1076,45 @@ def frames_of(settings: dict) -> int:
     return lengths.nearest(float(settings.get("seconds") or 5))
 
 
+def director_prompt(run: dict, index: int, seconds: float) -> tuple[str, dict | None]:
+    """What the Director reads for segment ``index``, and the stagnation it must break (None when there is none)."""
+
+    ask = KEYFRAME_ASK if keyframes_for(run, index) else ""
+    if index == 1:
+        bible = continuity.director_text(bible_of(run), 1, list(cast_at(run, 1)))
+        return first_prompt(run, seconds) + f"\n\nThe continuity bible so far (canonical):\n{bible}" + ask, None
+    done = committed(run)
+    memory = memory_of(run)
+    stuck = stagnation(done)
+    bible = continuity.director_text(bible_of(run), index, list(cast_at(run, index)))
+    return next_prompt(run, index, seconds, as_text(memory["graph"]), stagnation_note(stuck) if stuck else "", bible) + ask, stuck
+
+
+def keyframes_for(run: dict, index: int) -> bool:
+    """Whether segment ``index`` opens on a keyframe of its own: the run's choice (auto: when it has an outline), and
+    never for a beat that brings its own picture."""
+
+    choice = run["settings"].get("keyframes", "auto")
+    wanted = choice == "on" or (choice == "auto" and bool((run.get("seed") or {}).get("outline")))
+    return wanted and not (beat_of(run, index) or {}).get("image")
+
+
+KEYFRAME_ASK = ("\nThis segment opens on a keyframe made first by the picture model: fill \"keyframe\" with that opening still "
+                "(who is where, the framing, the place, the light; 60 words at most), and write the action from that picture on.")
+
+
+def director_asker(run: dict):
+    if run["settings"].get("director") == "vision":
+        return lambda text: ask_vision_text(run, prompt_with_system(text))
+    return lambda text: ask_text(run, DIRECTOR_SYSTEM, text)
+
+
+def fields_of(shot: dict) -> dict:
+    return {"setting": str(shot.get("setting") or ""), "camera": str(shot.get("camera") or ""), "action": str(shot.get("action") or ""),
+            "dialogue": [d for d in shot.get("dialogue") or [] if isinstance(d, dict) and str(d.get("text") or "").strip()][:3],
+            "soundscape": str(shot.get("soundscape") or ""), "music": str(shot.get("music") or "N/A")}
+
+
 def plan(run: dict) -> dict:
     s, done = run["settings"], committed(run)
     index = len(done) + 1
@@ -977,33 +1122,33 @@ def plan(run: dict) -> dict:
     seconds = lengths.seconds_of(frames)
     run["state"] = "running"
     say(run, f"Segment {index}: the Director writes it.", stage="director", segment=index)
-    if index == 1:
-        prompt = first_prompt(run, seconds)
-        stuck = None
-    else:
-        memory = memory_of(run)
-        stuck = stagnation(done)
-        prompt = next_prompt(run, index, seconds, as_text(memory["graph"]), stagnation_note(stuck) if stuck else "")
+    bible = bible_of(run)
+    continuity.arrive(bible, index, run["seed"])  # a cast sheet that starts here opens an era before the Director reads it
+    save_bible(run, bible)
+    prompt, stuck = director_prompt(run, index, seconds)
 
     def check_answer(data: dict) -> str:
         return director_problem(run, data, index, stuck)
 
-    asker = (lambda text: ask_vision_text(run, prompt_with_system(text))) if s.get("director") == "vision" else (lambda text: ask_text(run, DIRECTOR_SYSTEM, text))
-    data, rejected = ask_json(asker, check_answer, prompt, "Director")
+    data, rejected = ask_json(director_asker(run), check_answer, prompt, "Director")
     shot = data["shot"]
     if index == 1 or (beat_of(run, index) or {}).get("image"):
         data["scene_change"] = True  # the opening, or a beat that opens on a picture of its own
     for person in data.get("new_characters") or []:
         if isinstance(person, dict) and person.get("name") and person.get("look"):
             run.setdefault("cast", {}).setdefault(str(person["name"]).strip(), str(person["look"]).strip())
+    bible = bible_of(run)
+    continuity.planned(bible, index, data, run.get("cast") or {})
+    fields = fields_of(shot)
+    continuity.voices(bible, index, fields["dialogue"])  # each speaker keeps the voice the bible first heard
+    save_bible(run, bible)
     seg = {"index": index, "id": f"S{index:04d}", "status": "planned", "scene": str(data["scene"]).strip()[:80],
-           "scene_change": bool(data["scene_change"]), "beat": str(data["beat"]).strip()[:200],
-           "fields": {"setting": str(shot.get("setting") or ""), "camera": str(shot.get("camera") or ""), "action": str(shot.get("action") or ""),
-                      "dialogue": [d for d in shot.get("dialogue") or [] if isinstance(d, dict) and str(d.get("text") or "").strip()][:3],
-                      "soundscape": str(shot.get("soundscape") or ""), "music": str(shot.get("music") or "N/A")},
+           "scene_change": bool(data["scene_change"]), "beat": str(data["beat"]).strip()[:200], "fields": fields,
            "rejected": rejected, "seed": int(s.get("seed") or 0) + index - 1, "frames": frames, "seconds": seconds,
            "start": round(sum(float(x.get("seconds") or 0) for x in done), 3), "takes": [], "job": None, "output": None,
-           "planned": slate.now()}
+           "era": continuity.era_at(bible, index)["id"], "planned": slate.now()}
+    if keyframes_for(run, index):
+        seg.update(status="keyframe", keyframe_prompt=clip_words(data.get("keyframe"), 70), keyframes=[])
     folder = run_dir(run["id"]) / "segments" / seg["id"]
     write_json(folder / "director.json", {"prompt": prompt, "answer": data, "rejected": rejected})
     run["segments"].append(seg)
@@ -1011,6 +1156,34 @@ def plan(run: dict) -> dict:
         say(run, f"Segment {index}: {len(rejected)} answer{'s' if len(rejected) != 1 else ''} of the Director turned back ({rejected[-1][:120]}).", segment=index)
     say(run, f"Segment {index}: {seg['beat']}", stage="planned", segment=index)
     return seg
+
+
+def replan(run: dict, seg: dict) -> None:
+    """A take that failed its continuity check written again by the Director, with each finding: the same story step
+    in the same scene, the shot corrected. The next take renders it at a new seed."""
+
+    index, take = seg["index"], len(seg["takes"])
+    say(run, f"Segment {index}: the Director rewrites take {take} with the continuity findings.", stage="director", segment=index)
+    prompt, stuck = director_prompt(run, index, float(seg["seconds"]))
+    found = "\n".join(f"- {f['category']}" + (f" (frame {f['frame']})" if f.get("frame") else "") + f": {f['evidence']}" for f in seg.get("fix") or [])
+    prompt += (f"\n\nTHE TAKE YOU WROTE FOR SEGMENT {index} WAS RENDERED AND FAILED ITS CONTINUITY CHECK:\n{found}\n"
+               f"Write segment {index} again: the same story step (\"{seg['beat']}\") in the same scene ({seg['scene']!r}), with the shot "
+               "rewritten so that each of these comes out right; say the bible's details plainly where they matter. Keep \"scene\" and "
+               "\"scene_change\" as they were.")
+
+    def check_answer(data: dict) -> str:
+        return director_problem(run, data, index, stuck if seg["scene_change"] else None)
+
+    data, rejected = ask_json(director_asker(run), check_answer, prompt, "Director")
+    fields = fields_of(data["shot"])
+    bible = bible_of(run)
+    continuity.voices(bible, index, fields["dialogue"])
+    save_bible(run, bible)
+    if keyframes_for(run, index) and str(data.get("keyframe") or "").strip():
+        seg["keyframe_prompt"] = clip_words(data["keyframe"], 70)
+    seg.update(fields=fields, beat=str(data["beat"]).strip()[:200] or seg["beat"], rejected=(seg.get("rejected") or []) + rejected,
+               fixed=(seg.get("fixed") or []) + [{"take": take, "findings": seg.get("fix") or []}], fix=[])
+    write_json(run_dir(run["id"]) / "segments" / seg["id"] / f"director-take{take + 1}.json", {"prompt": prompt, "answer": data, "rejected": rejected})
 
 
 def prompt_with_system(text: str) -> str:
@@ -1036,6 +1209,11 @@ def director_problem(run: dict, data: dict, index: int, stuck) -> str:
         return '"scene_change" is true or false'
     fields = {"scene": str(shot.get("setting") or ""), "camera": str(shot.get("camera") or ""), "action": str(shot.get("action") or ""),
               "soundscape": str(shot.get("soundscape") or ""), "dialogue": [d for d in shot.get("dialogue") or [] if isinstance(d, dict)]}
+    for key, most in (("action", 60), ("camera", 25), ("scene", 45)):
+        if len(fields[key].split()) > most:
+            return f'"{"setting" if key == "scene" else key}" is {len(fields[key].split())} words: keep it to {most} at most, short and concrete'
+    if keyframes_for(run, index) and not str(data.get("keyframe") or "").strip():
+        return '"keyframe" is the still picture this segment opens on'
     named = negation.check_fields(fields)["negations"]
     if named:
         return (f"\"{named[0]['phrase']}\" names what must not be seen; the video model has no negative prompt and what is "
@@ -1078,6 +1256,8 @@ def mode_of(run: dict, seg: dict) -> str:
     """How a segment opens: on the segment before (``previous``), the cast's pictures (``references``), the opening
     picture (``image``) or from text."""
 
+    if seg.get("keyframe") and on_disk(seg["keyframe"]):
+        return "keyframe"  # the piece's own keyframe, made and checked first
     identity = run["settings"].get("identity", "auto")
     pictures = bool(references_for(run, seg["index"])) and identity != "frame" and ref2va()
     if (beat_of(run, seg["index"]) or {}).get("image"):
@@ -1101,7 +1281,7 @@ def look_lines(run: dict, fields: dict, index: int) -> str:
 
 def prompt_of(run: dict, seg: dict, mode: str) -> str:
     s, f = run["settings"], seg["fields"]
-    style = s.get("style", "").strip()
+    style = style_at(s, seg["index"])  # only this segment's era or setting: a style for every era bled Boston into the sea
     music = f.get("music") or "N/A"
     if s.get("music") and music.upper() == "N/A":
         music = s["music"]
@@ -1118,7 +1298,7 @@ def prompt_of(run: dict, seg: dict, mode: str) -> str:
     scene = " ".join(bit for bit in (style, look_lines(run, f, seg["index"]), f.get("setting", "")) if bit)
     fields = {"scene": scene, "camera": f.get("camera", ""), "action": f.get("action", ""), "dialogue": dialogue,
               "soundscape": f.get("soundscape", ""), "music": music}
-    return compose(fields, mode in ("previous", "image"), frames=seg["frames"])
+    return compose(fields, mode in ("previous", "image", "keyframe"), frames=seg["frames"])
 
 
 def render(run: dict, seg: dict) -> None:
@@ -1143,6 +1323,8 @@ def render(run: dict, seg: dict) -> None:
             params["loras"] = s["loras"]
     if mode == "previous":
         params["first_frame_from"] = done[-1]["output"]
+    if mode == "keyframe":
+        params["image"] = seg["keyframe"]
     if mode == "image":
         params["image"] = (beat_of(run, seg["index"]) or {}).get("image") or run["seed"]["opening_image"]
     try:
@@ -1153,7 +1335,7 @@ def render(run: dict, seg: dict) -> None:
                settings={k: params.get(k) for k in ("preset", "quality", "frames", "width", "height", "loras", "ref_turbo") if params.get(k) is not None})
     say(run, f"Segment {seg['index']}: rendering" + (f", take {take} at seed {seg['seed']}" if take > 1 else "")
         + {"previous": ", from the last frame of the segment before", "references": ", from the cast's pictures (a new scene)",
-           "image": ", from the opening picture", "text": ", from text (a new scene)"}[mode] + ".", stage="render", segment=seg["index"], job=job["id"])
+           "image": ", from the opening picture", "keyframe": ", from its keyframe", "text": ", from text (a new scene)"}[mode] + ".", stage="render", segment=seg["index"], job=job["id"])
 
 
 def follow(run: dict, seg: dict, stop: threading.Event) -> None:
@@ -1181,6 +1363,111 @@ def follow(run: dict, seg: dict, stop: threading.Event) -> None:
         wait(stop)
 
 
+# ---------- keyframes ----------
+
+def render_keyframe(run: dict, seg: dict) -> None:
+    """The piece's opening still: the Director's keyframe prompt, with this segment's style and the pinned looks of
+    whoever it names, as one picture of the queue (a ``scout`` job of one) at the video's size."""
+
+    s, n = run["settings"], len(seg.get("keyframes") or []) + 1
+    round_ = len(seg.get("takes") or [])  # the keyframes of this video take (a rewritten shot gets new ones)
+    looks = look_lines(run, {"setting": seg.get("keyframe_prompt", ""), "action": seg["fields"].get("action", "")}, seg["index"])
+    prompt = " ".join(bit for bit in (style_at(s, seg["index"]), looks, seg.get("keyframe_prompt") or seg["fields"].get("setting", "")) if bit)
+    params = {"prompt": prompt, "count": 1, "seed": int(seg["seed"]) + 7919 * (n - 1), "preset": s["preset"], "autopilot": {"run": run["id"], "segment": seg["index"], "keyframe": n}}
+    if s["preset"] == "custom" and s.get("width") and s.get("height"):
+        params.update(width=int(s["width"]) // 16 * 16, height=int(s["height"]) // 16 * 16)
+    try:
+        job = submit({"kind": "scout", "title": f"AutoPilot · {run['name']} · {seg['index']}: keyframe {n}", "params": params})
+    except HTTPException as error:
+        raise Failed(f"the queue refused the keyframe of segment {seg['index']}: {error.detail}") from None
+    seg.setdefault("keyframes", []).append({"take": n, "round": round_, "job": job["id"], "prompt": prompt, "seed": params["seed"], "path": None})
+    seg.update(status="keyframe_queued", job=job["id"])
+    say(run, f"Segment {seg['index']}: its keyframe" + (f", take {n}" if n > 1 else "") + ".", stage="keyframe", segment=seg["index"], job=job["id"])
+
+
+def follow_keyframe(run: dict, seg: dict, stop: threading.Event) -> None:
+    last = seg["keyframes"][-1]
+    while True:
+        job = job_of(last["job"])
+        if job is None:  # the app restarted: made again
+            seg["keyframes"].pop()
+            seg["status"] = "keyframe"
+            save(run)
+            return
+        if job.get("status") == "done":
+            picture = next((o for o in job.get("outputs") or [] if str(o).endswith(".png")), None)
+            picture = str(Path(picture).relative_to(HOME)) if picture and Path(picture).is_absolute() and HOME.resolve() in Path(picture).resolve().parents else picture
+            if not on_disk(picture):
+                seg["status"], seg["error"] = "failed", "the keyframe job finished without its picture"
+            else:
+                last["path"], seg["status"] = picture, "keyframe_ready"
+            save(run)
+            return
+        if job.get("status") == "cancelled":
+            seg["keyframes"].pop()
+            seg["status"], seg["job"] = "keyframe", None
+            save(run)
+            raise Stopped()
+        if job.get("status") == "failed":
+            seg["status"], seg["error"] = "failed", job.get("error") or "the keyframe failed"
+            save(run)
+            return
+        wait(stop)
+
+
+KEYFRAME_CATEGORIES = ("identity", "wardrobe", "props", "setting", "era", "location", "lighting")
+
+
+def check_keyframe(run: dict, seg: dict) -> None:
+    """The keyframe checked by the eyes against the bible before anything moves: a major finding draws it again
+    (the Director rewrites the keyframe prompt from it, at a new seed) while ``retakes`` allow; the take with the
+    fewest problems opens the piece otherwise."""
+
+    last = seg["keyframes"][-1]
+    opts = continuity.options(run["settings"])
+    categories = [c for c in continuity.checked(opts) if c in KEYFRAME_CATEGORIES]
+    result = {"findings": [], "categories": categories}
+    if categories:
+        bible = bible_of(run)
+        picture = HOME / last["path"]
+        prompt = continuity.keyframe_prompt(bible, seg["index"], seg, last["prompt"], categories, list(cast_at(run, seg["index"])))
+        try:
+            data, _ = ask_json(lambda text: ask_vision(continuity.CHECK_SYSTEM, [("Frame 1, the keyframe", picture)], picture, text,
+                                                       run["settings"].get("brain") or {})[0], continuity.check_problem, prompt, "keyframe check")
+            checks = continuity.triage(data, 1, categories)
+            for category, entry in checks.items():
+                entry["category"] = category
+                entry["action"] = continuity.act(entry, opts)
+            result.update(checks=checks, findings=[e for e in checks.values() if e["action"] != "none"])
+        except Failed as error:
+            result["skipped"] = str(error)[:300]
+    last["continuity"] = result
+    majors = [f for f in result["findings"] if f["status"] == "major"]
+    this_round = [k for k in seg["keyframes"] if k.get("round", 0) == last.get("round", 0)]
+    if majors and len(this_round) <= int(run["settings"].get("retakes") or 0):
+        rewrite_keyframe(run, seg, majors)
+        seg["status"] = "keyframe"
+        say(run, f"Segment {seg['index']}: keyframe {last['take']} failed ({'; '.join(f['category'] + ': ' + f['evidence'] for f in majors)[:200]}); drawn again.", segment=seg["index"])
+        return
+    kept = min(reversed(this_round), key=lambda k: (sum(1 for f in (k.get("continuity") or {}).get("findings") or [] if f["status"] == "major"),
+                                                          len((k.get("continuity") or {}).get("findings") or [])))
+    seg.update(keyframe=kept["path"], status="planned")
+    save(run)
+
+
+def rewrite_keyframe(run: dict, seg: dict, findings: list) -> None:
+    found = "\n".join(f"- {f['category']}: {f['evidence']}" for f in findings)
+    prompt = (f"You wrote this keyframe prompt for segment {seg['index']} of a film: {seg.get('keyframe_prompt')}\n"
+              f"The picture made from it failed its continuity check:\n{found}\n"
+              f"The continuity bible (canonical):\n{continuity.director_text(bible_of(run), seg['index'], list(cast_at(run, seg['index'])))}\n"
+              'Write the keyframe prompt again so that each of these comes out right. Answer: {"keyframe": "<60 words max>"}')
+    try:
+        data, _ = ask_json(director_asker(run), lambda d: "" if str(d.get("keyframe") or "").strip() else '"keyframe" is text', prompt, "Director")
+        seg["keyframe_prompt"] = clip_words(data["keyframe"], 70)
+    except Failed:
+        pass  # the same prompt again, at the next keyframe seed
+
+
 # ---------- check and watch ----------
 
 def sample(clip: Path, folder: Path, count: int) -> tuple[list[tuple[str, Path]], Path, float]:
@@ -1199,18 +1486,27 @@ def sample(clip: Path, folder: Path, count: int) -> tuple[list[tuple[str, Path]]
     subprocess.run(["ffmpeg", "-v", "error", "-y", "-sseof", "-0.1", "-i", str(clip), "-update", "1", "-vf",
                     f"scale={cosmos.FRAME[0]}:{cosmos.FRAME[1]}", str(last)], check=True, env=qa.ENV, timeout=60)
     frames.append((f"Final frame, at {length:.2f} s", last))
-    sheet = folder / "sheet.png"
-    paths = [p for _, p in frames]
-    while len(paths) % 4:
+    sheet = contact_sheet([p for _, p in frames], folder / "sheet.png")
+    return frames, sheet, length
+
+
+def contact_sheet(paths: list, sheet: Path, across: int = 4) -> Path:
+    """The pictures in rows of ``across``, left to right then top to bottom, each scaled to one frame's size."""
+
+    paths = list(paths)
+    across = max(1, min(across, len(paths)))
+    while len(paths) % across:
         paths.append(paths[-1])
     command = ["ffmpeg", "-v", "error", "-y"]
     for p in paths:
         command += ["-i", str(p)]
-    rows = len(paths) // 4
-    graph = "".join(f"{''.join(f'[{r * 4 + c}:v]' for c in range(4))}hstack=4[r{r}];" for r in range(rows))
+    rows = len(paths) // across
+    size = f"scale={cosmos.FRAME[0]}:{cosmos.FRAME[1]}:force_original_aspect_ratio=decrease,pad={cosmos.FRAME[0]}:{cosmos.FRAME[1]}:(ow-iw)/2:(oh-ih)/2,setsar=1"
+    graph = "".join(f"[{i}:v]{size}[p{i}];" for i in range(len(paths)))
+    graph += "".join(f"{''.join(f'[p{r * across + c}]' for c in range(across))}" + (f"hstack={across}" if across > 1 else "copy") + f"[r{r}];" for r in range(rows))
     graph += "".join(f"[r{r}]" for r in range(rows)) + (f"vstack={rows}[out]" if rows > 1 else "copy[out]")
     subprocess.run(command + ["-filter_complex", graph, "-map", "[out]", "-frames:v", "1", str(sheet)], check=True, env=qa.ENV, timeout=120)
-    return frames, sheet, length
+    return sheet
 
 
 def watcher_brain(run: dict) -> dict:
@@ -1271,9 +1567,10 @@ def confirm_drift(run: dict, frames: list, watched: dict, index: int) -> tuple[b
 
 
 def check(run: dict, seg: dict) -> None:
-    """The take judged: the QA gate (Whisper line check, identity sheet) and the watcher (scene-graph delta,
-    continuity). A take that fails either is rendered again at the next seed while ``retakes`` allow; the last take
-    stands otherwise, the reason said beside it."""
+    """The take judged: the QA gate (Whisper line check, identity sheet), the watcher (scene-graph delta, drift) and
+    the continuity check against the bible. A take that fails is rendered again while ``retakes`` allow: at the next
+    seed, and, when the continuity check or the drift check found it, with the shot rewritten by the Director from the
+    findings. When they run out the best take is kept, the reasons beside it."""
 
     s = run["settings"]
     clip = HOME / seg["output"]
@@ -1308,49 +1605,277 @@ def check(run: dict, seg: dict) -> None:
     watched = {"delta": {k: watched.get(k) or [] for k in ("add_nodes", "update_nodes", "add_events")},
                "summary": clip_words(watched.get("summary"), 40), "ending": clip_words(watched.get("ending"), 60),
                # a note that something stayed the same is not a problem (Cosmos3-Edge wrote such notes on the first real run)
-               "continuity": [c for c in watched.get("continuity") or [] if isinstance(c, dict)
-                              and not re.search(r"(?<!in)consistent|unchanged|remains the same", str(c.get("note") or ""), re.I)][:6],
+               "continuity": [c for c in watched.get("continuity") or [] if isinstance(c, dict) and not continuity.BENIGN.search(str(c.get("note") or ""))][:6],
                "identity_drift": watched["identity_drift"], "by": who[-1] if who else "", "rejected": rejected,
                "sheet": relative(sheet), "frames": [relative(p) for _, p in frames]}
     if watched["identity_drift"]:
         watched["identity_drift"], watched["drift_check"] = confirm_drift(run, frames, watched, seg["index"])
     write_json(folder / f"watch-take{take}.json", watched)
-    reasons = []
-    if report.get("passed") is False:
-        reasons += [f"{k} gate: {(report.get(k) or {}).get('note', '')}" for k in ("audio", "identity") if (report.get(k) or {}).get("result") == "fail"]
+    say(run, f"Segment {seg['index']}: checking take {take} against the continuity bible.", stage="continuity", segment=seg["index"])
+    checked = check_continuity(run, seg, frames, sheet, transcript, clip, folder, take, length)
+    reasons, fix = [], []
+    audio, identity = report.get("audio") or {}, report.get("identity") or {}
+    if audio.get("result") == "fail" and continuity.heard_alike(audio.get("wanted"), audio.get("heard")):
+        # a name heard as a word that sounds the same ("Eirik!" as "Eric!") is a minor note, never a retake
+        audio["alike"] = True
+        if "audio" in (checked.get("categories") or []) or "audio" in continuity.options(s)["categories"]:
+            checked.setdefault("findings", []).append({"category": "audio", "status": "minor", "verdict": "minor", "frame": 0, "source": "gate", "action": "note",
+                                                       "subject": "", "evidence": f"the line \"{audio.get('wanted')}\" was heard as \"{audio.get('heard')}\": it sounds alike, kept"})
+    if audio.get("result") == "fail" and not audio.get("alike"):
+        reasons.append(f"audio gate: {audio.get('note', '')}")
+    if identity.get("result") == "fail":
+        reasons.append(f"identity gate: {identity.get('note', '')}")
+        fix.append({"category": continuity.gate_category(identity.get("note")), "frame": 0, "evidence": clip_words(identity.get("note"), 30)})
     if watched["identity_drift"]:
-        reasons.append("the watcher saw identity drift: " + "; ".join(c.get("note", "") for c in watched["continuity"] if c.get("kind") == "identity")[:200])
+        drift = "; ".join(c.get("note", "") for c in watched["continuity"] if c.get("kind") == "identity")[:200]
+        reasons.append("the watcher saw identity drift: " + drift)
+        fix.append({"category": "identity", "frame": 0, "evidence": drift or "the main character's face changes into someone else's"})
+    for found in checked.get("findings") or []:
+        if found.get("action") == "retake":
+            reasons.append(f"continuity, {found['category']}: {found['evidence']}"[:240])
+            fix.append(found)
     seg["takes"].append({"take": take, "seed": seg["seed"], "output": seg["output"], "job": seg.get("job"), "passed": not reasons,
                          "reasons": reasons, "qa": {k: report.get(k) for k in ("passed", "audio", "identity", "note", "error") if report.get(k) is not None},
-                         "watch": watched})
+                         "watch": watched, "continuity": checked, "transcript": transcript, "fields": copy.deepcopy(seg["fields"]),
+                         "beat": seg["beat"], "prompt": seg.get("prompt"), "mode": seg.get("mode")})
+    write_json(folder / f"continuity-take{take}.json", checked)
     if reasons and take <= int(s.get("retakes") or 0):
-        seg["status"] = "retake"
-        say(run, f"Segment {seg['index']}: take {take} failed ({'; '.join(reasons)[:200]}); again at the next seed.", segment=seg["index"])
+        seg["status"], seg["fix"] = "retake", fix
+        say(run, f"Segment {seg['index']}: take {take} failed ({'; '.join(reasons)[:200]}); again at the next seed"
+            + (", the shot rewritten from the findings." if fix else "."), segment=seg["index"])
         return
-    commit(run, seg, watched, transcript, reasons)
+    kept = seg["takes"][-1]
+    if reasons and len(seg["takes"]) > 1:
+        kept = continuity.best(seg["takes"])
+        if kept is not seg["takes"][-1]:
+            seg.update(output=kept["output"], job=kept["job"], fields=kept["fields"], beat=kept["beat"], prompt=kept["prompt"], mode=kept["mode"], seed=kept["seed"])
+        kept["reasons"] = kept["reasons"] + [f"no take passed: kept take {kept['take']} of {len(seg['takes'])}, the one with the fewest problems"]
+    commit(run, seg, kept["watch"], kept["transcript"], kept["reasons"], kept["continuity"])
 
 
-def commit(run: dict, seg: dict, watched: dict, transcript: str, reasons: list) -> None:
+# ---------- the continuity check ----------
+
+def check_continuity(run: dict, seg: dict, frames: list, sheet: Path, transcript: str, clip: Path, folder: Path, take: int,
+                     length: float) -> dict:
+    """The take against the continuity bible: one checklist question to the eyes (the frames, the transcript, the
+    bible's slice, a category a line), the answer triaged (continuity.triage), each major finding looked at again
+    closer (second_look), and the 180-degree rule measured on a continuation. A check that cannot be made does not
+    lose the take: it is marked skipped."""
+
+    opts = continuity.options(run["settings"])
+    categories = continuity.checked(opts)
+    if not categories:
+        return {"skipped": "no category is checked in this run's settings", "categories": [], "findings": []}
+    bible = bible_of(run)
+    index, names = seg["index"], list(cast_at(run, seg["index"]))
+    continuation = seg.get("mode") == "previous"
+    start = float(seg.get("start") or 0)
+    prompt = continuity.check_prompt(bible, index, seg, len(frames), transcript, categories, f"{mmss(start)} to {mmss(start + length)}",
+                                     names, continuation, style_at(run["settings"], index))
+    who = []
+
+    def asker(text: str) -> str:
+        answer, by = ask_vision(continuity.CHECK_SYSTEM, frames, sheet, text, run["settings"].get("brain") or {})
+        who.append(by)
+        return answer
+    try:
+        data, rejected = ask_json(asker, continuity.check_problem, prompt, "continuity check")
+    except Failed as error:
+        return {"skipped": str(error)[:300], "categories": categories, "findings": []}
+    checks = continuity.triage(data, len(frames), categories)
+    findings = []
+    for category, entry in checks.items():
+        entry["category"] = category
+        if entry["status"] == "major":
+            continuity.settle(entry, second_look(run, entry, frames, clip, folder, take, bible, index), opts)
+        entry["action"] = continuity.act(entry, opts)
+        if entry["action"] != "none":
+            findings.append(entry)
+    if continuation and "spatial" in categories:
+        for entry in continuity.screen_flip(bible, index, data.get("positions")):
+            entry["action"] = continuity.act(entry, opts)
+            findings.append(entry)
+    present = []
+    for p in data.get("present") or []:
+        try:
+            n = int(p.get("frame") or 0) if isinstance(p, dict) else 0
+        except (TypeError, ValueError):
+            n = 0
+        if isinstance(p, dict) and p.get("who"):
+            present.append({"who": clip_words(p["who"], 4), "frame": relative(frames[n - 1][1]) if 1 <= n <= len(frames) else ""})
+    return {"by": who[-1] if who else "", "strictness": opts["strictness"], "categories": categories, "checks": checks, "findings": findings,
+            "facts": [f for f in data.get("facts") or [] if isinstance(f, dict)][:6], "present": present[:9],
+            "positions": [p for p in data.get("positions") or [] if isinstance(p, dict)][:9],
+            "open_actions": [a for a in data.get("open_actions") or [] if isinstance(a, dict)][:6],
+            "light": clip_words(data.get("light"), 14), "rejected": rejected}
+
+
+def frame_time(caption: str) -> float | None:
+    found = re.search(r"at ([0-9.]+) s", caption or "")
+    return float(found[1]) if found else None
+
+
+def still(source: Path, target: Path, at: float | None = None, box=None, fit=(896, 512)) -> Path:
+    """One picture for a closer look: the clip's frame at ``at`` at full size (or a picture), cropped to ``box``
+    (fractions of the picture) and scaled to fit ``fit``; the source itself when ffmpeg cannot make it."""
+
+    chain = []
+    if box:
+        x0, y0, x1, y1 = box
+        chain.append(f"crop=iw*{x1 - x0:.4f}:ih*{y1 - y0:.4f}:iw*{x0:.4f}:ih*{y0:.4f}")
+        fit = (448, 448)
+    chain.append(f"scale={fit[0]}:{fit[1]}:force_original_aspect_ratio=decrease")
+    command = ["ffmpeg", "-v", "error", "-y"] + (["-ss", f"{at:.3f}"] if at is not None else []) + ["-i", str(source), "-frames:v", "1", "-vf", ",".join(chain), str(target)]
+    try:
+        subprocess.run(command, check=True, env=qa.ENV, timeout=60, capture_output=True)
+        return target if target.is_file() else source
+    except (subprocess.SubprocessError, OSError):
+        return source
+
+
+def reference_for(run: dict, entry: dict, bible: dict, index: int, folder: Path, take: int) -> tuple[str, Path] | None:
+    """What a second look compares with: the person's reference (their cast picture, else the clearest frame of the
+    segment they were first seen in) for identity and wardrobe; the last frame of the segment before otherwise."""
+
+    if entry["category"] in ("identity", "wardrobe"):
+        who = entry.get("subject") or next(iter(cast_at(run, index)), "")
+        sid = continuity.subject_of(bible, who, "character", create=False) if who else None
+        ref = (bible["subjects"].get(sid) or {}).get("ref") if sid else None
+        if ref and on_disk(ref):
+            return (f"{continuity.name_of(bible, sid)} as established", still(HOME / ref, folder / f"ref-take{take}-{sid}.png", fit=(448, 448)))
+    done = committed(run)
+    if done and seg_last_frame(done[-1]):
+        return (f"the last frame of segment {done[-1]['index']}, the segment before", HOME / seg_last_frame(done[-1]))
+    return None
+
+
+def seg_last_frame(seg: dict) -> str | None:
+    frames = (seg.get("watch") or {}).get("frames") or []
+    return frames[-1] if frames and on_disk(frames[-1]) else None
+
+
+SECOND_SYSTEM = continuity.SECOND_SYSTEM
+
+
+def second_look(run: dict, entry: dict, frames: list, clip: Path, folder: Path, take: int, bible: dict, index: int) -> dict:
+    """A major finding looked at again before it counts: the frame it names, closer (cropped to where it is when the
+    first look said), beside what it should match, and one question. Measured on the first real run: Cosmos3-Edge
+    called a courier who got on her vehicle "identity drift"; asked only about the face it answered the question asked."""
+
+    n = entry["frame"]
+    caption, picture = frames[n - 1]
+    closer = still(clip, folder / f"look-take{take}-{entry['category']}.png", frame_time(caption), entry.get("box"))
+    pictures = [ref for ref in [reference_for(run, entry, bible, index, folder, take)] if ref]
+    pictures.append((f"the new segment, frame {n}" + (", the part named, closer" if entry.get("box") else ""), closer))
+    try:
+        sheet = contact_sheet([p for _, p in pictures], folder / f"look-take{take}-{entry['category']}-sheet.png", across=len(pictures))
+    except (subprocess.SubprocessError, OSError):
+        sheet = closer
+    prompt = continuity.second_prompt(bible, index, entry, pictures)
+    try:
+        data, _ = ask_json(lambda text: ask_vision(SECOND_SYSTEM, pictures, sheet, text, run["settings"].get("brain") or {})[0],
+                           lambda d: "" if isinstance(d.get("confirmed"), bool) else '"confirmed" is true or false', prompt, "second look")
+    except Failed as error:
+        return {"error": str(error)[:200]}
+    return {"confirmed": data["confirmed"], "why": clip_words(data.get("why"), 20), "pictures": [relative(p) if HOME.resolve() in p.resolve().parents else str(p.name) for _, p in pictures]}
+
+
+def commit(run: dict, seg: dict, watched: dict, transcript: str, reasons: list, checked: dict | None = None) -> None:
     memory = memory_of(run)
     graph = merge(memory["graph"], watched["delta"], seg["index"])
     for event in graph["events"]:
         if event.get("segment") == seg["index"] and not re.fullmatch(r"\d{1,3}:\d{2}", str(event.get("t") or "")):
             event["t"] = mmss(float(seg["start"]))
+    events = [copy.deepcopy(e) for e in graph["events"] if e.get("segment") == seg["index"]]
     archive = memory.get("archive") or []
     if len(graph["events"]) > COMPACT_AT:
         folded = copy.deepcopy(graph["events"][:FOLD])
         chapter, _ = ask_json(lambda text: ask_text(run, COMPACT_SYSTEM, text),
                               lambda d: "" if str(d.get("title") or "").strip() and str(d.get("summary") or "").strip() else '"title" and "summary" are text',
                               compact_prompt(folded, graph.get("chapters") or []), "memory's chapter fold")
-        archive = archive + fold(graph, chapter, folded)
+        archive = archive + fold(graph, chapter, folded)  # only event detail folds: the bible keeps every canonical fact
     memory = {"graph": graph, "archive": archive, "observed_through": seg["index"]}
     folder = run_dir(run["id"])
     write_json(folder / "memory" / f"{seg['id']}.json", {**memory, "delta": watched["delta"], "cast": run.get("cast") or {},
                                                           "video": seg["output"]})
     write_json(folder / "memory.json", memory)
-    seg.update(status="done", watch=watched, transcript=transcript, passed=not reasons, reasons=reasons, committed=slate.now())
-    say(run, f"Segment {seg['index']} joins the film" + (f" (it did not pass: {'; '.join(reasons)[:160]})" if reasons else "") + ".",
+    bible = bible_of(run)
+    checked = checked or {"skipped": "not checked", "findings": []}
+    seen = continuity.absorb(bible, seg["index"], checked, events)
+    save_bible(run, bible, seg["id"])
+    summary = {k: checked.get(k) for k in ("by", "strictness", "categories", "checks", "findings", "skipped") if checked.get(k) is not None}
+    seg.update(status="done", watch=watched, transcript=transcript, passed=not reasons, reasons=reasons, committed=slate.now(),
+               continuity={**summary, "present_frames": seen}, fix=[])
+    minors = [f for f in checked.get("findings") or [] if f.get("action") == "correct"]
+    say(run, f"Segment {seg['index']} joins the film" + (f" (it did not pass: {'; '.join(reasons)[:160]})" if reasons else "")
+        + (f"; {len(minors)} continuity correction{'s' if len(minors) != 1 else ''} for the next segment" if minors else "") + ".",
         stage="committed", segment=seg["index"])
+
+
+# ---------- the film-level pass ----------
+
+def film_check_safely(run: dict) -> None:
+    """The film-level pass, whose failure is reported and never stops the run."""
+
+    try:
+        film_check(run)
+    except Exception as error:  # noqa: BLE001 - a report only
+        run["film_check"] = {"state": "failed", "at": slate.now(), "error": str(error)[:300]}
+        say(run, "The film's continuity pass could not be made: " + str(error)[:200])
+
+
+def film_check(run: dict) -> dict:
+    """Cosmos samples across the whole film: each person's clearest frame of each segment they were seen in, an era
+    at a time, asked whether any segment shows someone else (the man's face in segment 12 against segment 8), and one
+    frame of each segment, asked for drift in places, props and era. A report only: nothing is rendered again."""
+
+    bible, done = bible_of(run), committed(run)
+    brain = run["settings"].get("brain") or {}
+    folder = run_dir(run["id"]) / "film-check"
+    folder.mkdir(parents=True, exist_ok=True)
+    report = {"state": "done", "at": slate.now(), "segments": len(done), "identity": [], "world": [], "errors": []}
+
+    def ask(prompt: str, pictures: list, name: str, check) -> dict | None:
+        try:
+            sheet = contact_sheet([p for _, p in pictures], folder / f"{name}.png")
+            data, _ = ask_json(lambda text: ask_vision(continuity.FILM_SYSTEM, pictures, sheet, text, brain)[0], check, prompt, "film check")
+            return data
+        except (Failed, subprocess.SubprocessError, OSError) as error:
+            report["errors"].append(f"{name}: {str(error)[:200]}")
+            return None
+
+    for sid, eras in continuity.film_samples(bible, done).items():
+        for era, picked in eras.items():
+            picked = [(i, path) for i, path in picked if on_disk(path)]
+            if len(picked) < 2:
+                continue
+            look = "; ".join(f["value"] for f in bible["facts"] if f["subject"] == sid and f["category"] == "identity" and f["era"] == era)
+            pictures = [(f"Segment {i}", HOME / path) for i, path in picked]
+            data = ask(continuity.film_identity_prompt(continuity.name_of(bible, sid), look, picked), pictures, f"identity-{sid}-era{era}",
+                       lambda d: "" if isinstance(d.get("same"), bool) else '"same" is true or false')
+            if data is not None:
+                different = [int(x) for x in data.get("different") or [] if str(x).isdigit() and int(x) in {i for i, _ in picked}]
+                report["identity"].append({"subject": continuity.name_of(bible, sid), "era": era, "segments": [i for i, _ in picked],
+                                           "same": data["same"] and not different, "different": different, "why": clip_words(data.get("why"), 24)})
+    frames = [(seg["index"], (seg.get("watch") or {}).get("frames") or []) for seg in done]
+    frames = [(i, f[len(f) // 2]) for i, f in frames if f and on_disk(f[len(f) // 2])]
+    if len(frames) > 8:
+        step = (len(frames) - 1) / 7
+        frames = [frames[round(k * step)] for k in range(8)]
+    if len(frames) >= 2:
+        data = ask(continuity.film_world_prompt(bible, frames), [(f"Segment {i}", HOME / path) for i, path in frames], "world",
+                   lambda d: "" if isinstance(d.get("issues"), list) else '"issues" is a list')
+        for issue in (data or {}).get("issues") or []:
+            if isinstance(issue, dict) and str(issue.get("evidence") or "").strip() and not continuity.BENIGN.search(str(issue["evidence"])):
+                report["world"].append({"category": str(issue.get("category") or "other")[:20], "evidence": clip_words(issue["evidence"], 24),
+                                        "segments": [int(x) for x in issue.get("segments") or [] if str(x).isdigit()][:8]})
+    write_json(run_dir(run["id"]) / "film-check.json", report)
+    run["film_check"] = report
+    drift = [r for r in report["identity"] if not r["same"]]
+    say(run, "The film's continuity pass: " + (f"{len(drift)} person/era with drift, " if drift else "no face drift, ")
+        + f"{len(report['world'])} other issue{'s' if len(report['world']) != 1 else ''}" + (f", {len(report['errors'])} question(s) not answered" if report["errors"] else "") + ".",
+        stage="film-check")
+    return report
 
 
 # ---------- the film ----------

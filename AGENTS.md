@@ -169,8 +169,11 @@ Rules:
   shots cast. A slot in bars (`tf.bars`, with `tf.song` on the project) sets the clip's frames through
   `shot_frames`; the tempo is the user's. `tests/test_slate_page.py` runs the page code in node: keep it passing.
 - AutoPilot (`app/autopilot.py`, `app/cosmos.py`, `app/static/autopilot.js`, `docs/autopilot.md`): every segment is a
-  `video` job of the queue (never a render of its own), opens on the segment before's last frame or, on a new scene,
-  the cast's pictures (never both), and is checked by the QA gate and watched before it joins the film. The Director's
+  `video` job of the queue (never a render of its own), opens on the segment before's last frame, its own keyframe (a
+  `scout` job of one, checked by the eyes first) or, on a new scene, the cast's pictures (never two of them), and is
+  checked by the QA gate, watched and checked against the continuity bible (`app/continuity.py`) before it joins the
+  film. A run is fully autonomous: never add an approval step. The bible is never folded (only the scene graph's
+  event detail is), and a major finding needs evidence and a confirming second look before it renders anything again. The Director's
   rules against repetition, the scene budget and stagnation, and the watcher's two-events-a-segment scene graph, are
   HyperFlow-Infinity's (Video Rebirth, Apache-2.0): keep the header of `app/autopilot.py`, `LICENSES/HyperFlow-Infinity-LICENSE`
   and the credit to Echo-Infinity for the idea. Do not name the feature after either. The Studio's own Cosmos3-Edge
