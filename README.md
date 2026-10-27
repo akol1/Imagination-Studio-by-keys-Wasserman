@@ -134,7 +134,7 @@ FastH3 video with sound (125 GB), motion graphics, Finish and phone notification
 | `--flux3` | FLUX3-K pictures (41 GB more, gated) |
 | `--moss` | MOSS-Image (30 GB more) |
 | `--music` | MiniMax Music 3 (22 GB more) |
-| `--yue2` | YuE2 songs, the Music tab's default engine on Linux with an NVIDIA GPU (about 13 GB more; not on a Mac) |
+| `--yue2` | YuE2 songs, the Music tab's default engine on Linux with an NVIDIA GPU (about 14 GB more; not on a Mac) |
 | `--bolt` | Nemotron 3.5 Bolt, the studio's brain (about 25 GB more) |
 | `--sound` | Sound effects and foley (11 GB more, gated) |
 | `--motion` | Motion Previs analysis (0.5 GB) |
@@ -197,7 +197,7 @@ A Mac has nothing new to install: neither runs on a Mac, and its Music tab stays
   6 to 9 s, and Whisper heard **94 to 97 %** of the words sung. MiniMax Music 3 stays one click away: the **engine picker**
   above the Music tab's form (YuE2 · MiniMax Music 3) chooses for each song, and Settings → Presets → *Song engine* sets
   the default (*Best here*: YuE2 where it is installed, MiniMax Music 3 on a Mac). Each take keeps its score
-  (*Download score*). `--yue2` is about 13 GB. [YuE2 songs](#yue2-songs).
+  (*Download score*). `--yue2` is about 14 GB. [YuE2 songs](#yue2-songs).
 - **Character Swap.** *Swap the character* under a clip in the Library: choose a picture of the character and a part
   of the clip (5 to 15 seconds), and the person in it is drawn again as that character, with the clip's own scene,
   performance and sound kept. **Fast** (480p, the default) or **High** (768p); the picture model first puts the
@@ -3064,7 +3064,7 @@ which YuE2 does not run on). Each engine's licence line shows under the picker.
 
 ![The Music tab on a DGX Spark: the engine picker (YuE2 · MiniMax Music 3), YuE2's licence line and the song form](docs/screenshots/music-yue2.webp)
 
-- **Install.** `bash oneshot-setup-spark.sh --yue2` (in `--all`, and ticked in the install checklist): about 13 GB,
+- **Install.** `bash oneshot-setup-spark.sh --yue2` (in `--all`, and ticked in the install checklist): about 14 GB,
   the YuE2-3B model and its YuE2-Vae decoder at pinned revisions with their checksums, in an environment of their own
   under `$PREFIX/yue2` (`spark/setup-yue2.sh`, safe to run again). The studio's own environment is not touched.
 - **Lyrics.** The same section tags as the tab's buttons: `[Intro]`, `[Verse]`, `[Pre-Chorus]`, `[Chorus]`,

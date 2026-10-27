@@ -59,7 +59,7 @@ commercial product must show "MiniMax-Music3" in its interface). The script prin
 `--h3-base`, `--flux3`, `--moss`, `--music`, `--voice`, `--sound`, `--bolt`, `--motion`, `--train`, `--graphics`, `--finish`,
 `--yue2`, `--swap`, `--image-only`, `--no-render`, `--verify`, `--upgrade` and the LoRA flags). There is no `--turbo`, no `--app` and no 2x
 decoder there, and Finish runs Tesseract on a Mac over ssh (Settings → Connections). Two parts are only there:
-`--yue2` (YuE2 songs, the Music tab's default there, about 13 GB) and `--swap` (the Library's Character Swap, 2.1 GB
+`--yue2` (YuE2 songs, the Music tab's default there, about 14 GB) and `--swap` (the Library's Character Swap, 2.1 GB
 beside Ref2VA, which it adds); both are ticked in the checklist. The steps below are the same on both machines unless they
 say otherwise.
 
@@ -418,7 +418,7 @@ The **Music** tab makes a whole song with sung vocals from your lyrics and a sty
 minutes. It has two song engines:
 
 - **YuE2** (m-a-p's YuE2-3B and YuE2-Vae), the default on Linux with an NVIDIA GPU (a DGX Spark, an RTX Pro 6000)
-  where it is installed: `bash oneshot-setup-spark.sh --yue2`, about 13 GB, in an environment of its own. It writes the
+  where it is installed: `bash oneshot-setup-spark.sh --yue2`, about 14 GB, in an environment of its own. It writes the
   song's score first (melody and chords), then the song, 48 kHz stereo. Not on a Mac.
 - **MiniMax-Music3**, on every machine, and the only one on a Mac: `bash oneshot-setup.sh --music` (on either
   machine), 44.1 kHz stereo. The tab, and anything that plays one of its songs, shows "MiniMax-Music3", as its licence
