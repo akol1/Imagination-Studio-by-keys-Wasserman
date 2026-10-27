@@ -116,7 +116,7 @@ H3_MODEL_DIR="${H3_MODEL_DIR:-$HOME/h3-models/MiniMax-H3}"
 QWEN_MODEL_DIR="${QWEN_MODEL_DIR:-$HOME/qwen-models/Qwen-Image-2.1-Turbo}"
 FASTH3_DIR="${FASTH3_DIR:-$HOME/h3-models/FastH3-8-Step-V2}"
 FASTH3_REPO="FastVideo/FastVideo-FastH3-8-Step-V2"
-IMAGE="${IMAGE:-ghcr.io/drowzeys/keys-tensorfold-studio:3.2.0}"
+IMAGE="${IMAGE:-ghcr.io/drowzeys/keys-tensorfold-studio:3.3.0}"
 # the carrier under its name up to 2.2, with the same Mac payload
 IMAGE_BEFORE="ghcr.io/drowzeys/keys-mac-tensorfold-studio:2.2"
 TF_REPO="https://github.com/drowzeys/TensorFold.git"
@@ -126,8 +126,8 @@ REF_COMMIT="79190205258454b43e6c9e50e577de234222419c"
 # the native engine for FastH3: TensorFold 1.0.4's Zig + Metal runtime with the H3 family, from the same fork
 # (its pin is scripts/build-zig-engine.sh's, which the updater also reads, so the two never differ)
 ZIG_COMMIT="$(sed -n 's/^ZIG_COMMIT="\${ZIG_COMMIT:-\([0-9a-f]\{40\}\)}"$/\1/p' "$HERE/scripts/build-zig-engine.sh")"
-ZIG_ENGINE_URL="https://github.com/drowzeys/Imagination-Studio-by-keys-Wasserman/releases/download/v3.2.0/zig-engine-${ZIG_COMMIT:0:8}-macos-arm64.tar.gz"
-ZIG_ENGINE_SHA256="775e9163d77a9d4e7ff8d608e3a59f146fb1c97754b4234b7e5fb6bd685387ab"
+ZIG_ENGINE_URL="https://github.com/drowzeys/Imagination-Studio-by-keys-Wasserman/releases/download/v3.3.0/zig-engine-${ZIG_COMMIT:0:8}-macos-arm64.tar.gz"
+ZIG_ENGINE_SHA256="ed44690f0b67fa85a873341a60c3cd77d6a79150a0fd769eed5aa91304548e1d"
 MFLUX_REPO="https://github.com/mflux-community/mflux.git"
 MFLUX_COMMIT="add5164e62c07cbcc9aec7a95c2e19c75605880c"
 H3_ADAPTER_NAME="lightx2v_v1.0_768p_ourlayout.safetensors"
@@ -550,6 +550,15 @@ if [ "$APP" = 1 ] && [ "$MODE" != "--verify" ]; then
 fi
 
 if [ "$UPGRADE" = 1 ]; then
+  # the TensorFold Metal engines this install already has move to this version's pins (no weights are fetched: an
+  # engine is only here when its weights were set up with it)
+  if [ "$MUSIC" = 0 ] && [ -x "$PREFIX/music3/bin/music3-generate" ]; then
+    step "The Metal music engine at this version's commit"
+    PREFIX="$PREFIX" bash "$HERE/scripts/build-music3-metal.sh" || echo "  ! not rebuilt (above): bash scripts/build-music3-metal.sh"
+  fi
+  if [ "$BOLT" = 0 ] && [ -d "$PREFIX/bolt-metal" ]; then
+    PREFIX="$PREFIX" bash "$HERE/scripts/setup-bolt.sh" || echo "  ! the Bolt engine is not fully set up: bash scripts/setup-bolt.sh"
+  fi
   step "Upgraded: $INSTALLED -> $(cat "$PREFIX/VERSION"). Checking the install (restart the app to serve the new pages)"
   exec bash "$HERE/oneshot-setup.sh" --verify $([ "$VIDEO" = 1 ] || echo --image-only) $([ "$GRAPHICS" = 1 ] || echo --no-graphics) $([ "$FINISH" = 1 ] || echo --no-finish)
 fi

@@ -6,11 +6,11 @@
 # Needs an Apple M5 or later (the engine's DiT, prompt rows and DAV run on its tensor units; an M1 to M4 keeps the MLX
 # port) and Xcode's Metal toolchain (xcrun metal; macOS 26: xcodebuild -downloadComponent MetalToolchain). It fetches
 # Zig 0.17.0 (unless one is on PATH) and the engine's source (drowzeys/TensorFold at MUSIC3_METAL_COMMIT, branch
-# upstream/music3-metal) under $PREFIX. A few minutes.
+# music3-metal-115: the music3 Metal family on TensorFold 1.1.5) under $PREFIX. A few minutes.
 # Environment: PREFIX, MUSIC3_METAL_COMMIT, MUSIC3_SOURCE (an existing checkout to build instead of fetching one).
 set -euo pipefail
 PREFIX="${PREFIX:-$HOME/.local/opt/tensorfold-studio}"
-MUSIC3_METAL_COMMIT="${MUSIC3_METAL_COMMIT:-8c9559da70b70650309b36f96e6a30f69cd1607c}"
+MUSIC3_METAL_COMMIT="${MUSIC3_METAL_COMMIT:-91877e79c14652a7ce7dd2f464575c0e8782fd64}"
 ZIG_VERSION=0.17.0
 # the sha256 ziglang publishes for the tarball below: the aarch64-macos entry's "tarball_sha256" in
 # https://ziglang.org/download/index.json (the release page for ZIG_VERSION lists the same). Fill it in whenever

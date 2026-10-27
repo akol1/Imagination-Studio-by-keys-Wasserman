@@ -159,10 +159,18 @@ On a DGX Spark the song runs on ComfyUI's own MiniMax Music 3 nodes (`comfy_extr
 `comfy/ldm/minimax_music/`), following its blueprint "Text to Music (MiniMax Music 3)", in the ComfyUI the installer
 clones at a pinned commit (GPL-3.0). None of its code is copied into this pack.
 
+## TensorFold music3 (CUDA)
+
+On a DGX Spark the song runs on TensorFold's CUDA port of MiniMax Music 3 (drowzeys/TensorFold, branch
+`music3-cuda-115`, commit 5505dbfa: the music3 family on TensorFold 1.1.5, Apache-2.0, Ash Hart and the TensorFold
+contributors), from the carrier image or built from source into `$PREFIX/music3` by `spark/build-music3.sh` (Zig
+0.17.0, MIT; NVIDIA's CUDA toolkit).
+
 ## TensorFold music3 (Metal)
 
 On an M5 or later Mac the song runs on TensorFold's Metal port of MiniMax Music 3 (drowzeys/TensorFold, branch
-`upstream/music3-metal`, commit 8c9559da, Apache-2.0; pull request #987 to ashhart/TensorFold), built from source into
+`music3-metal-115`, commit 91877e79, Apache-2.0: the code of pull request #987 to ashhart/TensorFold on the TensorFold 1.1.5
+release since 3.3.1), built from source into
 `$PREFIX/music3` by `scripts/build-music3-metal.sh` (Zig 0.17.0, MIT, fetched from ziglang.org).
 
 ## TensorFold music3-mlx
@@ -205,7 +213,8 @@ Agreement, version 1.1 (https://github.com/OpenMDW/OpenMDW/blob/main/1.1/LICENSE
 
 ## Nemotron-3.5-Bolt-TensorFold-DGX-Spark (MiaAI-Lab)
 
-https://github.com/MiaAI-Lab/Nemotron-3.5-Bolt-TensorFold-DGX-Spark at 6f61d7727ae3fac010f30e240799cc884d295f6e. MIT
+https://github.com/MiaAI-Lab/Nemotron-3.5-Bolt-TensorFold-DGX-Spark at 89e1c8a0 (6f61d772 before 3.3.3), carried in the
+drowzeys/TensorFold branch bolt-lilicorr-115 (zig/bolt-cuda) the CUDA engine is built from. MIT
 License, Copyright (c) 2026 MiaAI-Lab:
 
 > Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated
@@ -218,14 +227,14 @@ License, Copyright (c) 2026 MiaAI-Lab:
 > COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR
 > OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
-The engine the Studio runs on a DGX Spark is that recipe's build (`tensorfold-native` with `libbolt.so`): the recipe's
-`engine/` and `patches/` applied to TensorFold at 46a08c18608153bfc566703a88acc883bc6140f4 (Apache-2.0, code before
-0.6.0 MIT; Ash Hart and the TensorFold contributors). The build also carries, each under its own licence (listed in
-the recipe's NOTICE and kept in `$PREFIX/bolt/share/doc/tensorfold`): ggml's IQ2_XXS tables and block layouts (MIT),
-libjpeg-turbo 3.1.4.1 (BSD-3-Clause, IJG, zlib), FFmpeg 9.0.2's decoders in libtfvideo.so (LGPL 2.1 or later),
-xgrammar v0.2.8 with dlpack (Apache-2.0) and picojson (BSD-2-Clause) in libtfgrammar.so. Mia's image is based on
-NVIDIA's PyTorch container (NVIDIA Software License Agreement); the Studio copies only `/opt/tensorfold` out of it and
-runs nothing of the container.
+The engine the Studio runs on a DGX Spark is that recipe's build (`tensorfold-native` with `libbolt.so`): since 3.3.3 the
+recipe's `engine/` (in `zig/bolt-cuda`) and its registration patch rebased onto TensorFold 1.1.5
+(84e0d560303d85c50becb730720c04a56e38abe5; Apache-2.0, code before 0.6.0 MIT; Ash Hart and the TensorFold contributors),
+drowzeys/TensorFold branch bolt-lilicorr-115 at ecdc78923834c5e4d358432ccbb13809d819ab53 (6f61d772 on TensorFold
+46a08c18 before). The build also carries, each under its own licence (kept in `$PREFIX/bolt/share/doc/tensorfold`):
+ggml's IQ2_XXS tables and block layouts (MIT), libjpeg-turbo 3.1.4.1 (BSD-3-Clause, IJG, zlib), FFmpeg 9.0.2's decoders
+in libtfvideo.so (LGPL 2.1 or later), xgrammar v0.2.8 with dlpack (Apache-2.0) and picojson (BSD-2-Clause) in
+libtfgrammar.so. It is built with the CUDA toolkit's nvcc and Zig; no container image is involved.
 
 ## llama.cpp
 

@@ -329,8 +329,13 @@ def room_mb() -> int | None:
     wrote that down). A server from before the guard has no such note: the machine is then taken as otherwise
     idle. None where there is no /proc/meminfo.
 
-    On a discrete card, that card's room only (``device_room_mb``, the 2 GB margin already taken out). System RAM
-    is not a second pool. The Spark branch, ``device_room_mb`` None, returns the RAM figure above and is not mixed."""
+    On a discrete card, that card's room only (``device_room_mb``, the 2 GB margin already taken out). The Spark
+    branch, ``device_room_mb`` None, returns the RAM figure above and is not mixed.
+
+    STUDIO_ROOM_MB (MB) stands in for the card's room on a discrete card, for a card smaller than the video models
+    when ComfyUI offloads them to RAM and streams blocks to the card (docs/rtx-5090.md). It is a budget of the
+    machine's RAM, so it never gives more than the RAM room above; unset, empty or not a number, it is ignored.
+    A Spark has no card to stand in for."""
 
     info = meminfo()
     now = info.get("MemAvailable")
@@ -348,7 +353,12 @@ def room_mb() -> int | None:
         if server_pid():
             ram = max(now, info["MemTotal"] - IDLE_MB)
     card = device_room_mb()
-    return ram if card is None else card
+    if card is None:
+        return ram
+    asked = os.environ.get("STUDIO_ROOM_MB", "").strip()
+    if asked.isdigit() and int(asked) > 0:
+        return min(ram, int(asked))
+    return card
 
 
 # ---------- layer 1: the estimate ----------
@@ -487,7 +497,8 @@ MUSIC_ESTIMATE = (27_800, 11)
 MUSIC_MEASURED = ((30, 30.0, 28_070), (60, 60.0, 28_665), (120, 55.6, 28_617), (120, 120.0, 29_078),
                   (300, 189.8, 28_996), (60, 60.0, 29_299))  # the last: through the app, from an empty page cache
 MUSIC_LONGEST = 300  # the app's longest song
-# MiniMax Music 3 on TensorFold's CUDA engine (music3-generate, branch music3-cuda 6b714531), int8 and bf16 weights:
+# MiniMax Music 3 on TensorFold's CUDA engine (music3-generate, branch music3-cuda 6b714531), int8 and bf16 weights
+# (the TensorFold 1.1.5 build, music3-cuda-115 5505dbfa, peaked at the same 16.46 GB for a 30 s int8 song):
 # (MB, MB per second of song asked for), the same way, measured 2026-10-16 on worker .2 (5.1 GB in use before each
 # song, one process a song, MemTotal - MemAvailable twice a second, less those 5.1 GB; hiphop seed 7, and a 120 s
 # song of longer lyrics). The weights are on the GPU throughout; the length adds the AR cache and the DiT's windows.

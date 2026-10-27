@@ -372,7 +372,7 @@ print("[tensorfold] " + json.dumps({"output": out, "audio_s": 3.0, "ar_s": 20.0,
         music._engine, voice.comfy_up = had, had_up
 
 
-# `music3-generate --model M --weights W --serve 1`, stood in for: TensorFold's CUDA engine (music3-cuda 6b714531)
+# `music3-generate --model M --weights W --serve 1`, stood in for: TensorFold's CUDA engine (music3-cuda-115 5505dbfa)
 # speaks the Mac engine's protocol, with "engine":"tensorfold-music3-cuda" and "weights" on its ready line
 CUDA_SERVE = r"""
 import json, os, struct, sys, wave
@@ -455,7 +455,7 @@ def test_a_spark_prefers_the_cuda_engine_and_falls_back_to_comfy():
         argv = one.argv()
         assert argv[0] == str(one.bin) and argv[argv.index("--weights") + 1] == "int8" and argv[-2:] == ["--serve", "1"]
         assert one.guard_route == "music-cuda-int8" and one.RTF == 2.1 and one.NEED_GB == 30.0
-        assert one.estimate(60) == int(37 + 60 * 2.1 + 2)
+        assert one.estimate(60) == int(16 + 60 * 2.1 + 2)
     with Spark(folder, MUSIC3_WEIGHTS="bf16"):
         one = music.engine()
         assert one.weights == "bf16" and one.argv()[one.argv().index("--weights") + 1] == "bf16" and one.RTF == 3.3
@@ -577,7 +577,7 @@ def test_the_cuda_engine_makes_a_song_stops_comfy_first_and_is_unloaded_before_o
             assert state["route"] == "cuda" and state["label"].startswith("TensorFold CUDA") and state["weights"] == "int8"
             assert state["fallback"] is None and state["rtf"] == 2.1 and state["credit"] == "MiniMax-Music3"
             job = client.post("/api/music/takes", json={"caption": "Hip-hop anthem, 92 BPM", "lyrics": "[Verse]\nRaise it up", "seconds": 60, "seed": 7}).json()
-            assert job["kind"] == "music" and job["estimate"] >= int(37 + 60 * 2.1)
+            assert job["kind"] == "music" and job["estimate"] >= int(16 + 60 * 2.1)
             done = wait(job["id"])
             assert done["status"] == "done", done
             take = done["music"]

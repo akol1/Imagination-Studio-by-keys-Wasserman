@@ -206,6 +206,47 @@ def one_speaker(text: str) -> bool:
     return set(SPEAKER.findall(text)) <= {"0"}
 
 
+STALL_S = 3.0  # quiet at the end that means a stalled take: Drama 3's own pauses run to about 2.4 s
+STALL_INSIDE_S = 8.0  # quiet inside a take the engine chunked (a chunk stalled, the next one went on)
+QUIET_DBFS = -30.0  # under it is silence or the stall's flat hum (about -36 dBFS)
+STALL_REDRAWS = 3
+
+
+def stall(path: Path) -> float | None:
+    """Where a take went quiet for good, in seconds, or None. Drama 3 sometimes speaks the first sentence or two of a
+    long line and then only silence or a flat hum until the frame cap (about 1 in 5 paragraphs, the same seed and text
+    every time; TensorFold issue 1275): after a second of speech, ``STALL_S`` under ``QUIET_DBFS`` at the end, or
+    ``STALL_INSIDE_S`` anywhere. Measured on the Metal engine: a stalled paragraph spoke 9.2 s then 26.9 s of quiet; on
+    12 paragraphs the longest pause of a good take was 2.4 s."""
+
+    import wave
+
+    import numpy as np
+
+    try:
+        with wave.open(str(path)) as w:
+            rate, channels, width = w.getframerate(), w.getnchannels(), w.getsampwidth()
+            data = w.readframes(w.getnframes())
+    except (OSError, EOFError, wave.Error):
+        return None
+    if width != 2 or not rate:
+        return None
+    x = np.frombuffer(data[: len(data) - len(data) % (2 * channels)], "<i2").astype(np.float32)
+    if channels > 1:
+        x = x.reshape(-1, channels).mean(axis=1)
+    window = rate // 20  # 50 ms
+    count = len(x) // window
+    if not count:
+        return None
+    loud = np.sqrt(np.mean(x[: count * window].reshape(count, window) ** 2, axis=1)) >= 32768 * 10 ** (QUIET_DBFS / 20)
+    voiced = quiet = 0
+    for index, on in enumerate(loud):
+        voiced, quiet = (voiced + 1, 0) if on else (voiced, quiet + 1)
+        if voiced >= 20 and quiet * 0.05 >= STALL_INSIDE_S:
+            return round((index + 1 - quiet) * 0.05, 2)
+    return round((count - quiet) * 0.05, 2) if voiced >= 20 and quiet * 0.05 >= STALL_S else None
+
+
 class Served:
     """A Drama 3 engine run as a persistent server, the protocol both TensorFold ports speak (``--serve``: one JSON
     request a line on its stdin, one JSON answer a line on its stderr, lines that are not protocol never start with
@@ -775,6 +816,8 @@ class Cuda(Served):
                     if voice_of:
                         request.update(ref_audio=str(voice_of[0]), ref_text=voice_of[1])
                     answer = self.ask(job, request, 120 + 1500 / 10)
+                    if answer is not None:
+                        answer = self.unstalled(job, request, out, answer, index)
                     if answer is None:
                         return None
                     answers.append(answer)
@@ -796,13 +839,42 @@ class Cuda(Served):
         audio = sum(float(a.get("audio_s") or 0) for a in answers) + self.GAP_S * (len(answers) - 1)
         decoding = sum(int(a.get("frames") or 0) / float(a["fps"]) for a in answers if a.get("fps"))
         made = time.time() - loaded
+        stalls = [a["stalled"] for a in answers if a.get("stalled")]
         return {"frames": frames, "audio_s": round(audio, 3), "frames_per_s": round(frames / decoding, 1) if decoding else None,
                 "rtf": round(made / audio, 2) if audio else None, "total_s": round(time.time() - began, 1),
                 "engine_s": round(sum(float(a.get("total_ms") or 0) for a in answers) / 1000, 2),
                 "first_audio_ms": answers[0].get("first_audio_ms") if answers else None,
                 "encode_ms": answers[0].get("encode_ms") if answers else None,
                 "load_s": job.get("load_s"), "device_gb": self.device_gb,
-                "chunks": len(answers), "finish": ["stop" if a.get("eos") else "length" for a in answers], "stream": live}
+                "chunks": len(answers), "finish": ["stop" if a.get("eos") else "length" for a in answers], "stream": live,
+                **({"stalled": stalls} if stalls else {})}
+
+    def unstalled(self, job: dict, request: dict, out: Path, answer: dict, index: int) -> dict | None:
+        """A part that went quiet partway (``stall``) drawn again with the next seed, not played, ``STALL_REDRAWS``
+        times at most; the draw that speaks longest before going quiet is kept (one that never does, at once). Its
+        answer then says ``stalled``: where the first draw went quiet and the redraws taken. None when cancelled."""
+
+        first = at = stall(out)
+        draw, redraws, kept = {k: v for k, v in request.items() if k != "pcm"}, 0, request["seed"]
+        while at is not None and redraws < STALL_REDRAWS:
+            redraws += 1
+            draw["seed"] += 1
+            job["log"] += (f"[tensorfold] part {index + 1} went quiet after {at:.1f} s (a Drama 3 stall): drawn again, "
+                           f"seed {draw['seed']}, not played\n")
+            attempt = out.with_name(f"{out.stem}.stall{redraws}.wav")
+            again = self.ask(job, {**draw, "wav": str(attempt)}, 120 + 1500 / 10)
+            if again is None:
+                attempt.unlink(missing_ok=True)
+                return None
+            now = stall(attempt)
+            if now is None or now > at:
+                attempt.replace(out)
+                answer, at, kept = again, now, draw["seed"]
+            else:
+                attempt.unlink(missing_ok=True)
+        if redraws:
+            answer = {**answer, "stalled": {"part": index + 1, "at_s": first, "redraws": redraws, "seed": kept, "still": at}}
+        return answer
 
 
 LIVE: dict[str, dict] = {}  # a running take's raw PCM parts, as the engine writes them (the live WAV, /live)
@@ -1141,6 +1213,10 @@ def perform(job: dict) -> bool:
             return False
         if params.get("ref_audio") and not params.get("ref_text") and measured.get("ref_texts"):
             params["ref_text"] = str(measured["ref_texts"][0]).strip()  # what the engine heard in the clip
+        if one.name != "cuda":  # the CUDA engine's parts are checked as they are made (``Cuda.unstalled``)
+            measured = unstalled(job, one, params, wav, reference, measured)
+            if measured is None:
+                return False
         if not getattr(one, "checks", False) and params.get("asr") and qa.ready()["transcript"]:
             measured = redrawn(job, one, params, wav, reference, measured)
             if measured is None:
@@ -1175,7 +1251,7 @@ def perform(job: dict) -> bool:
             "device_gb": measured.get("device_gb"),
             "chunks": measured.get("chunks"), "finish": measured.get("finish"), "first_audio_ms": measured.get("first_audio_ms"),
             "load_s": measured.get("load_s"), "engine_s": measured.get("engine_s"), "verify": checked_by_engine(measured),
-            "streamed": bool(measured.get("stream")), "retaken": measured.get("retaken"),
+            "streamed": bool(measured.get("stream")), "retaken": measured.get("retaken"), "stalled": measured.get("stalled"),
             "reference": {"path": params["ref_audio"], "text": params["ref_text"], "consent": True} if params.get("ref_audio") else None,
             "slate": params.get("slate"), "credit": CREDIT}
     if params.get("asr") and measured.get("app_check"):
@@ -1206,6 +1282,34 @@ def hears_references(one) -> bool:
     drama3-mlx 8f3d4b33 on): the app then does not run its own Whisper on the CPU first."""
 
     return bool(getattr(one, "hears", False) and hasattr(one, "serving") and one.serving())
+
+
+def unstalled(job: dict, one, params: dict, wav: Path, reference, measured: dict) -> dict | None:
+    """``Cuda.unstalled`` for an engine that makes a take in one request (the Mac's MLX server): a take that went quiet
+    partway (``stall``) is made again with the next seed, not played, ``STALL_REDRAWS`` times at most, and the draw
+    that speaks longest before going quiet is kept. None when the job was cancelled."""
+
+    first = at = stall(wav)
+    seed, redraws, kept = int(params["seed"]), 0, None
+    while at is not None and redraws < STALL_REDRAWS:
+        redraws += 1
+        seed += 1
+        job["log"] += f"[tensorfold] the take went quiet after {at:.1f} s (a Drama 3 stall): drawn again, seed {seed}, not played\n"
+        attempt = wav.with_name(f"{wav.stem}.stall{redraws}.wav")
+        again = one.make(job, params["text"], attempt, reference, seed, {k: params[k] for k in SAMPLING}, live=False)
+        if again is None:
+            attempt.unlink(missing_ok=True)
+            return None
+        now = stall(attempt)
+        if now is None or now > at:
+            attempt.replace(wav)
+            measured = {**again, "load_s": measured.get("load_s"), "first_audio_ms": measured.get("first_audio_ms")}
+            at, kept = now, seed
+        else:
+            attempt.unlink(missing_ok=True)
+    if redraws:
+        measured = {**measured, "stalled": {"at_s": first, "redraws": redraws, "seed": kept, "still": at}}
+    return measured
 
 
 RETRIES = 2  # draws again of a take with missing words, as the Mac engine's --verify-retries

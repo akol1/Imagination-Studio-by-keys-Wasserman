@@ -94,6 +94,8 @@ for line in sys.stdin:
     if "CRASH" in request["text"]:
         sys.exit(3)
     samples = struct.pack("<h", 100) * 44100
+    if "STALL" in request["text"] and (request["seed"] % 2 == 0 or "ALWAYS" in request["text"]):
+        samples = struct.pack("<hh", 8000, -8000) * 44100 + struct.pack("<h", 300) * 44100 * 4  # 2 s spoken, then 4 s of hum
     if request.get("pcm"):
         with open(request["pcm"], "wb") as pcm:
             for i in range(4):
@@ -608,6 +610,72 @@ def test_a_cuda_take_with_missing_words_is_drawn_again_not_played_and_the_best_k
     finally:
         one.release("test over")
         voice._backend, voice.qa.ready, voice.qa.transcribe = had, had_ready, had_transcribe
+
+
+def wav_of(path: Path, *runs: tuple[float, int]) -> Path:
+    """A test WAV of (seconds, amplitude) runs: 8000 is speech-loud (-12 dBFS), 300 the stall's hum (-41 dBFS)."""
+    with wave.open(str(path), "wb") as w:
+        w.setnchannels(1); w.setsampwidth(2); w.setframerate(44100)
+        for seconds, amplitude in runs:
+            w.writeframes(struct.pack("<hh", amplitude, -amplitude) * int(22050 * seconds))
+    return path
+
+
+def test_a_stall_is_quiet_after_speech_that_lasts():
+    folder = Path(tempfile.mkdtemp())
+    assert voice.stall(wav_of(folder / "a.wav", (2, 8000), (2.4, 0), (2, 8000), (0.5, 0))) is None  # a long pause of its own
+    assert voice.stall(wav_of(folder / "b.wav", (9.2, 8000), (26.9, 300))) == 9.2  # the hum to the frame cap
+    assert voice.stall(wav_of(folder / "c.wav", (3, 8000), (3.5, 0))) == 3.0  # silence at the end
+    assert voice.stall(wav_of(folder / "d.wav", (3, 8000), (9, 300), (3, 8000))) == 3.0  # a chunk stalled, the next went on
+    assert voice.stall(wav_of(folder / "e.wav", (0.5, 8000), (10, 0))) is None  # under a second of speech
+    assert voice.stall(wav_of(folder / "f.wav", (3, 0))) is None and voice.stall(folder / "missing.wav") is None
+
+
+def test_a_cuda_part_that_stalls_is_drawn_again_with_the_next_seed_not_played():
+    folder = Path(tempfile.mkdtemp())
+    one = fake_cuda(folder)
+    had = voice._backend
+    try:
+        voice._backend = one
+        done = wait(client.post("/api/voice/takes", json={"text": "The tower STALL has not chimed in years.", "seed": 8, "asr": False}).json()["id"])
+        take, sent = done["voice"], requests_of(folder)[-2:]
+        assert [r["seed"] for r in sent] == [8, 9] and "pcm" in sent[0] and "pcm" not in sent[1]
+        assert take["stalled"] == [{"part": 1, "at_s": 2.0, "redraws": 1, "seed": 9, "still": None}]
+        assert "went quiet after 2.0 s" in done["log"] and not list((server.HOME / "voice").glob(f"{done['id']}*.stall*"))
+        assert voice.stall(server.HOME / take["path"]) is None
+        # a part that stalls on every seed: three draws again, then the first kept and said
+        count = len(requests_of(folder))
+        take = wait(client.post("/api/voice/takes", json={"text": "ALWAYS STALL here.", "seed": 3, "asr": False}).json()["id"])["voice"]
+        assert [r["seed"] for r in requests_of(folder)[count:]] == [3, 4, 5, 6]
+        assert take["stalled"] == [{"part": 1, "at_s": 2.0, "redraws": 3, "seed": 3, "still": 2.0}]
+        # a take that never stalls is asked once
+        count = len(requests_of(folder))
+        take = wait(client.post("/api/voice/takes", json={"text": "No trouble here.", "seed": 4, "asr": False}).json()["id"])["voice"]
+        assert len(requests_of(folder)) == count + 1 and take["stalled"] is None
+    finally:
+        one.release("test over")
+        voice._backend = had
+
+
+def test_a_one_request_take_that_stalls_is_made_again_with_the_next_seed():
+    folder = Path(tempfile.mkdtemp())
+
+    class OneRequest:  # the Mac's MLX server: the whole take in one request
+        seeds = []
+
+        def make(self, job, text, wav, reference, seed, sampling, live=True):
+            self.seeds.append((seed, live))
+            wav_of(wav, (2, 8000), (5, 300)) if seed < 13 else wav_of(wav, (4, 8000))
+            return {"audio_s": 7.0 if seed < 13 else 4.0, "first_audio_ms": 90.0 + seed}
+
+    job = {"log": ""}
+    params = {"text": "A long line.", "seed": 11, "temperature": 1.0, "top_p": 0.9, "top_k": 30}
+    wav = wav_of(folder / "t.wav", (2, 8000), (5, 300))
+    one = OneRequest()
+    measured = voice.unstalled(job, one, params, wav, None, {"audio_s": 7.0, "first_audio_ms": 80.0, "load_s": 5.0})
+    assert one.seeds == [(12, False), (13, False)] and measured["audio_s"] == 4.0 and measured["first_audio_ms"] == 80.0
+    assert measured["stalled"] == {"at_s": 2.0, "redraws": 2, "seed": 13, "still": None} and voice.stall(wav) is None
+    assert not list(folder.glob("*.stall*")) and job["log"].count("a Drama 3 stall") == 2
 
 
 def test_the_word_check_is_the_engines():
