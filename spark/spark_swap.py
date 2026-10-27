@@ -37,6 +37,7 @@ import asyncio
 import json
 import os
 import shutil
+import signal
 import subprocess
 import sys
 import time
@@ -628,6 +629,9 @@ def need(nodes: tuple[str, ...]) -> None:
 
 
 def main() -> None:
+    # a cancelled job is stopped with SIGTERM (server.cancel): leave through the cleanup below, so the work folder's
+    # frames and the pictures handed to ComfyUI do not stay behind
+    signal.signal(signal.SIGTERM, lambda *_: sys.exit(143))
     parser = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     parser.add_argument("--video", required=True)
     parser.add_argument("--image", required=True, help="the character, outfit included")

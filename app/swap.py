@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import importlib.util
 import os
+import shutil
 from pathlib import Path
 
 from fastapi import APIRouter, HTTPException
@@ -67,6 +68,18 @@ def estimate(seconds: float, quality: int, anchor: bool = True) -> int:
         share = (one["length"] / plan.WINDOW) ** 1.2
         total += (OVERHEAD[quality] + 8 * PASS[quality]) * share
     return int(round(total))
+
+
+def work_folder(home: Path, job_id: str) -> Path:
+    """Where a swap keeps its frames while it runs (spark_swap.py --work): gigabytes of pictures for a long part."""
+
+    return home / "renders" / f".swap-{job_id}"
+
+
+def tidy(home: Path, job_id: str) -> None:
+    """After a swap job, however it ended (server.perform): its work folder, if the script could not remove it."""
+
+    shutil.rmtree(work_folder(home, job_id), ignore_errors=True)
 
 
 def attach(home: Path, pack: Path, spark: bool, inside, relative, media_seconds):
@@ -190,7 +203,7 @@ def attach(home: Path, pack: Path, spark: bool, inside, relative, media_seconds)
                    "--image", str(chosen["picture"]), "--start", f"{chosen['start']:g}", "--seconds", f"{chosen['seconds']:g}",
                    "--quality", str(chosen["quality"]), "--seed", str(chosen["seed"]), "--swap-lora", str(swap_lora()),
                    "--turbo-lora", str(models() / TURBO), "--mask-preview", str(mask), "-o", str(target),
-                   "--work", str(home / "renders" / f".swap-{job_id}")]
+                   "--work", str(work_folder(home, job_id))]
         if chosen["anchor"]:
             command += ["--anchor-out", str(still)]
         else:

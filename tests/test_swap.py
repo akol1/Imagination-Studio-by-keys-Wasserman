@@ -308,6 +308,63 @@ def test_a_part_past_the_clips_end_or_out_of_range_is_refused(tmp_path):
         assert said in str(refused.value)
 
 
+CANCELLED = r"""
+import sys, time, types
+from pathlib import Path
+sys.path.insert(0, sys.argv[1])
+import spark_swap
+spark_swap.sg = types.SimpleNamespace(UPLOADED=[], PREFIX=Path("/nowhere"))
+
+def prepare(args, work):  # the part cut out, a picture handed to ComfyUI, then a long wait
+    (work / "part").mkdir()
+    (work / "part" / "00001.png").write_bytes(b"x" * 1000)
+    spark_swap.put(Path(args.image))
+    print("READY", flush=True)
+    time.sleep(60)
+
+spark_swap.prepare = prepare
+sys.argv = ["spark_swap.py", *sys.argv[2:]]
+spark_swap.main()
+"""
+
+
+def test_a_cancelled_swap_leaves_no_frames_and_no_pictures_in_comfyui(tmp_path):
+    import signal
+
+    for name in ("clip.mp4", "hero.png", "swap.safetensors", "turbo.safetensors"):
+        (tmp_path / name).write_bytes(b"x")
+    work, given = tmp_path / "renders" / ".swap-j1", tmp_path / "input"
+    script = tmp_path / "cancelled.py"
+    script.write_text(CANCELLED)
+    process = subprocess.Popen([sys.executable, str(script), str(ROOT / "spark"), "--video", str(tmp_path / "clip.mp4"),
+                                "--image", str(tmp_path / "hero.png"), "--swap-lora", str(tmp_path / "swap.safetensors"),
+                                "--turbo-lora", str(tmp_path / "turbo.safetensors"), "--work", str(work), "-o", str(tmp_path / "renders/j1.mp4")],
+                               stdout=subprocess.PIPE, text=True, env={**os.environ, "SPARK_COMFY_INPUT": str(given)})
+    try:
+        while "READY" not in process.stdout.readline():
+            assert process.poll() is None, "the stand-in ended before it was ready"
+        assert work.is_dir() and [f.name for f in given.iterdir()][0].startswith("studio_")
+        process.send_signal(signal.SIGTERM)  # what server.cancel sends
+        assert process.wait(20) == 143
+    finally:
+        if process.poll() is None:
+            process.kill()
+    assert not work.exists() and list(given.iterdir()) == []
+
+
+def test_a_swap_s_work_folder_is_removed_however_the_job_ended(tmp_path):
+    os.environ.setdefault("STUDIO_HOME", str(Path(tempfile.mkdtemp()) / "TensorFoldStudio"))
+    import server
+
+    left = swap.work_folder(server.HOME, "0101-000000-tidy01")
+    (left / "window1").mkdir(parents=True)
+    (left / "window1" / "00001.png").write_bytes(b"x")
+    job = {"id": "0101-000000-tidy01", "kind": "swap", "status": "running", "params": {"image": "uploads/x.png"}, "log": "",
+           "outputs": [], "progress": None, "error": None}
+    server.perform(job)  # refused when its turn comes (no clip): the job fails, and its folder goes with it
+    assert job["status"] == "failed" and not left.exists()
+
+
 # ---------------------------------------------------------------- the studio around it
 
 def test_the_studio_takes_a_swap_job_and_shows_its_stages(tmp_path):
