@@ -32,7 +32,7 @@ model() {
   mkdir -p "$dir"
   curl -fL --retry 5 -C - -sS -o "$dir/$name.part" "https://huggingface.co/$repo/resolve/$rev/$file"
   echo "$sum  $dir/$name.part" | sha256sum -c --quiet - || { echo "  ! $name: checksum mismatch" >&2; rm -f "$dir/$name.part"; exit 1; }
-  mv -n "$dir/$name.part" "$dir/$name"; echo "  ✓ $name (downloaded)"; touch "$PREFIX/workflows.restart"
+  mv -n "$dir/$name.part" "$dir/$name"; echo "  ✓ $name (downloaded)"; [ ! -d "$PREFIX" ] || touch "$PREFIX/workflows.restart"
 }
 model akatz-ai/MiniMax-H3-Character-Swap-LoRA d06323b7c8e70e97cdab48b78a1e05f786c8cba9 h3_character_swap_v1.5.safetensors \
   MiniMax-H3-Comfy/loras 8f2c3c3eba161df8d0c6099598b4730f641f5ce01e04cd16d2427cff8a35218f
@@ -41,7 +41,8 @@ model lightx2v/Minimax-h3-Turbo 3ec17a324ced54151364f24f8b5fb6bf7e26414f minimax
 model Comfy-Org/sam3.1 7bb8374780a725b4353ed31f3a9395c9742b5621 checkpoints/sam3.1_multiplex_fp16.safetensors \
   Workflows-Comfy/checkpoints 9ba99c92703c2e8b4f47de2d34a539bb8e18923049e238b780d70dbe6368eb03
 
-# ComfyUI reads SAM 3.1's folder from extra_model_paths.yaml (spark/setup-workflows.sh adds it too)
+# ComfyUI reads SAM 3.1's folder from extra_model_paths.yaml (spark/setup-workflows.sh adds it too, and the Upscale
+# action's folder beside it, each looked for on its own)
 YAML="$PREFIX/ComfyUI/extra_model_paths.yaml"
 if [ -f "$PREFIX/ComfyUI/main.py" ] && ! grep -q "Workflows-Comfy/checkpoints" "$YAML" 2>/dev/null; then
   if [ "$VERIFY" = 1 ]; then echo "  ! $YAML does not list SAM 3.1's folder"; bad=1; else

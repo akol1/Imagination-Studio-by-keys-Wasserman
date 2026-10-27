@@ -405,6 +405,62 @@ def test_the_agents_swap_a_character_through_the_studio_tools(monkeypatch):
     assert "swap_character" in agents.MAKERS and "swap_character" in agents.STUDIO_TOOLS
 
 
+FAKE_GIT = """#!/bin/bash
+# the node packs already at their pinned commits: `git -C <dir> rev-parse HEAD` answers the commit setup-workflows.sh wants
+case "$(basename "$2")" in
+  ComfyUI-H3-ContactSheet) echo 3c8c8c66e69362e5abf9cf4c4e693baddab90ca3;;
+  ComfyUI-H3-Video-Upsampler) echo 36cb612ec3df30094eeb4fec66f1528925ebba73;;
+  h3-relay) echo cf489b7f2472fdf33866fae36de49aea03ef464f;;
+esac
+"""
+# a download stood in for: curl writes the file asked for, and its checksum is taken as right
+FAKE_CURL = """#!/bin/bash
+while [ $# -gt 0 ]; do [ "$1" = -o ] && { echo weights > "$2"; shift; }; shift; done
+"""
+
+
+def setup_machine(tmp_path, comfy=True):
+    """A Spark with ComfyUI and every model the two setups fetch already there; git and curl stood in for."""
+
+    prefix, models, tools = tmp_path / "prefix", tmp_path / "models", tmp_path / "bin"
+    tools.mkdir(parents=True)
+    for name, text in (("git", FAKE_GIT), ("curl", FAKE_CURL), ("sha256sum", "#!/bin/bash\ncat >/dev/null\n")):
+        (tools / name).write_text(text)
+        (tools / name).chmod(0o755)
+    if comfy:
+        (prefix / "ComfyUI").mkdir(parents=True)
+        (prefix / "ComfyUI/main.py").write_text("")
+        (prefix / "ComfyUI/extra_model_paths.yaml").write_text("studio:\n  base_path: " + str(models) + "\n")
+    for one in (swap.SAM, swap.REF2VA[0], "MiniMax-H3-Comfy/diffusion_models/minimax_h3_ref2va_pruned_bf16.safetensors", swap.TURBO,
+                swap.SWAP_LORA, "Workflows-Comfy/latent_upscale_models/minimax_h3_latent_upscaler_3d_bf16.safetensors"):
+        (models / one).parent.mkdir(parents=True, exist_ok=True)
+        (models / one).write_bytes(b"x")
+    env = {**os.environ, "PREFIX": str(prefix), "SPARK_MODELS": str(models), "PATH": f"{tools}:{os.environ['PATH']}"}
+    return prefix, models, env
+
+
+@pytest.mark.parametrize("first,then", [("setup-swap.sh", "setup-workflows.sh"), ("setup-workflows.sh", "setup-swap.sh")])
+def test_both_setups_leave_comfyui_both_model_folders_whichever_runs_first(tmp_path, first, then):
+    prefix, _, env = setup_machine(tmp_path)
+    for script in (first, then, first):
+        done = subprocess.run(["bash", str(ROOT / "spark" / script)], capture_output=True, text=True, env=env)
+        assert done.returncode == 0, done.stdout + done.stderr
+    yaml = (prefix / "ComfyUI/extra_model_paths.yaml").read_text()
+    assert yaml.count("Workflows-Comfy/checkpoints") == 1 and yaml.count("Workflows-Comfy/latent_upscale_models") == 1
+    assert yaml.count("  checkpoints: |") == 1 and yaml.count("  latent_upscale_models: |") == 1
+    verify = subprocess.run(["bash", str(ROOT / "spark/setup-workflows.sh"), "--verify"], capture_output=True, text=True, env=env)
+    assert verify.returncode == 0 and "does not list" not in verify.stdout
+
+
+def test_the_swap_setup_downloads_before_the_studio_is_installed(tmp_path):
+    _, models, env = setup_machine(tmp_path, comfy=False)
+    (models / swap.SWAP_LORA).unlink()
+    (models / swap.TURBO).unlink()
+    done = subprocess.run(["bash", str(ROOT / "spark/setup-swap.sh")], capture_output=True, text=True, env=env)
+    assert done.returncode == 0, done.stdout + done.stderr  # no $PREFIX yet: nothing to mark for a restart, and no stop
+    assert done.stdout.count("(downloaded)") == 2 and (models / swap.SWAP_LORA).is_file() and (models / swap.TURBO).is_file()
+
+
 def test_the_installer_fetches_the_swaps_files_and_the_checklist_lists_it():
     setup = (ROOT / "spark/setup-swap.sh").read_text()
     for needed in ("h3_character_swap_v1.5.safetensors", "8f2c3c3eba161df8d0c6099598b4730f641f5ce01e04cd16d2427cff8a35218f",

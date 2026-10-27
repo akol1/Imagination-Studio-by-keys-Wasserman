@@ -54,14 +54,12 @@ model LBH-123-AI/Minimax_h3_latent_Upscaler minimax_h3_latent_upscaler_3d_conv_v
 
 # ComfyUI reads these folders from extra_model_paths.yaml
 YAML="$COMFY/extra_model_paths.yaml"
-if ! grep -q "Workflows-Comfy/checkpoints" "$YAML" 2>/dev/null; then
+# (each folder looked for on its own: spark/setup-swap.sh may have added the checkpoints one already)
+if ! grep -q "Workflows-Comfy/checkpoints" "$YAML" 2>/dev/null || ! grep -q "Workflows-Comfy/latent_upscale_models" "$YAML" 2>/dev/null; then
   if [ "$VERIFY" = 1 ]; then echo "  ! $YAML does not list the workflow models"; bad=1; else
-    cat >> "$YAML" <<EOF
-  checkpoints: |
-    Workflows-Comfy/checkpoints
-  latent_upscale_models: |
-    Workflows-Comfy/latent_upscale_models
-EOF
+    grep -q "Workflows-Comfy/checkpoints" "$YAML" 2>/dev/null || printf '  checkpoints: |\n    Workflows-Comfy/checkpoints\n' >> "$YAML"
+    grep -q "Workflows-Comfy/latent_upscale_models" "$YAML" 2>/dev/null \
+      || printf '  latent_upscale_models: |\n    Workflows-Comfy/latent_upscale_models\n' >> "$YAML"
     echo "  ✓ model folders added to extra_model_paths.yaml"; touch "$PREFIX/workflows.restart"
   fi
 fi
