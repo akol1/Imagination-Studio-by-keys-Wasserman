@@ -124,7 +124,7 @@ def test_a_swap_is_built_with_the_parts_settings_and_its_outputs(tmp_path):
     command, env, outputs = s.build("swap", {**GOOD, "direction": "  she keeps   her hands in her pockets ", "seed": 7}, "j1")
     joined = " ".join(command)
     assert command[0] == str(s.prefix / "venv/bin/python") and command[1].endswith("spark/spark_swap.py")
-    for words in ("--start 1", "--seconds 5", "--quality 768", "--seed 7", "--direction she keeps her hands in her pockets"):
+    for words in ("--start 1", "--seconds 5", "--quality 768", "--seed 7", "--direction=she keeps her hands in her pockets"):
         assert words in joined
     assert command[command.index("--swap-lora") + 1].endswith("h3_character_swap_v1.5.safetensors")
     assert command[command.index("--turbo-lora") + 1].endswith("minimax_h3_fl2v_turbo_8step_v1.0_768p_comfyui_bf16.safetensors")
@@ -135,6 +135,34 @@ def test_a_swap_is_built_with_the_parts_settings_and_its_outputs(tmp_path):
     assert "--no-anchor" in command and "--anchor-out" not in command and len(outputs) == 2
     assert command[command.index("--seed") + 1] == str(swap.SEED)  # Akatz Labs' own seed when none is given
     assert s.title({"video": "uploads/clip.mp4"}) == "Character Swap: clip.mp4" and s.source({"video": "uploads/clip.mp4"}) == "uploads/clip.mp4"
+    # nothing is made when the job is built (a full queue may still refuse it): the job makes its folders when it runs
+    assert not (s.home / "masks/j1").exists() and not (s.home / "scouts/j1").exists()
+
+
+def test_a_direction_that_starts_with_a_dash_reaches_the_script_as_the_direction(tmp_path, monkeypatch):
+    import argparse
+    import signal
+
+    s = stand_in(tmp_path)
+    command, _, _ = s.build("swap", {**GOOD, "direction": "-- no hat, -x"}, "j3")
+    read, real = {}, argparse.ArgumentParser.parse_args
+
+    class Read(Exception):
+        pass
+
+    def parse(self, args=None, namespace=None):
+        read["args"] = real(self, args, namespace)
+        raise Read
+
+    monkeypatch.setattr(argparse.ArgumentParser, "parse_args", parse)
+    monkeypatch.setattr(sys, "argv", command[1:])
+    before = signal.getsignal(signal.SIGTERM)
+    try:
+        with pytest.raises(Read):
+            spark_swap.main()  # stopped once spark_swap.py's own parser has read the command
+    finally:
+        signal.signal(signal.SIGTERM, before)
+    assert read["args"].direction == "-- no hat, -x" and read["args"].seed == 904239
 
 
 @pytest.mark.parametrize("change,said", [
@@ -152,6 +180,12 @@ def test_a_swap_is_built_with_the_parts_settings_and_its_outputs(tmp_path):
     ({"direction": "x" * 501}, "at most 500"),
     ({"seed": -2}, "whole number"),
     ({"seed": True}, "seed is a number"),
+    ({"start": "nan"}, "start is a number"),
+    ({"start": float("inf")}, "start is a number"),
+    ({"seconds": "nan"}, "seconds is a number"),
+    ({"seconds": "-inf"}, "seconds is a number"),
+    ({"seed": float("inf")}, "seed is a number"),
+    ({"quality": "nan"}, "quality is a number"),
 ])
 def test_what_a_swap_refuses_before_it_is_queued(tmp_path, change, said):
     s = stand_in(tmp_path)
@@ -169,6 +203,15 @@ def test_where_it_cannot_run_it_says_what_to_install(tmp_path):
     with pytest.raises(HTTPException) as refused:
         bare.build("swap", GOOD, "j1")
     assert "oneshot-setup-spark.sh --swap" in refused.value.detail
+    import sparks
+    had = sparks.card_face
+    try:  # on a workstation's card the hint names that machine's installer
+        sparks.card_face = lambda: True
+        with pytest.raises(HTTPException) as refused:
+            bare.build("swap", GOOD, "j1")
+        assert "oneshot-setup-rtx-6000.sh --swap" in refused.value.detail
+    finally:
+        sparks.card_face = had
     s = stand_in(tmp_path / "some")
     (s.models / swap.SWAP_LORA).unlink()
     from fastapi import FastAPI

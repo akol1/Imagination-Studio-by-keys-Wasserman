@@ -655,6 +655,9 @@ def main() -> None:
         if not Path(path).is_file():
             sys.exit(f"no {what} at {path}")
     target = Path(args.output)
+    for path in (args.mask_preview, args.anchor_out):  # their folders are made here, when the job runs (app/swap.py)
+        if path:
+            Path(path).parent.mkdir(parents=True, exist_ok=True)
     work = Path(args.work) if args.work else target.parent / f".swap-{target.stem}"
     if work.exists():
         shutil.rmtree(work)
