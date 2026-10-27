@@ -270,6 +270,17 @@ copied into this pack.
   0.36.2, safetensors 0.7.0 and accelerate 1.13.0 (Apache 2.0), tiktoken 0.12.0 (MIT, OpenAI), NumPy 2.2.6 (BSD-3),
   soundfile 0.13.1 (BSD-3), and the studio's PyTorch 2.14.1 for CUDA 13 (BSD-3) with Triton (MIT).
 
+## TensorFold yue2 decode engine (CUDA)
+
+On a DGX Spark the YuE2 song model's decode steps can run on `libtf_yue2.so`, built into `$PREFIX/tf-yue2` by
+`spark/build-yue2-engine.sh` from TensorFold (drowzeys/TensorFold, branch `music3-cuda-115`, commit 5505dbfa: TensorFold
+1.1.5 with the music3 family, Apache-2.0, Ash Hart and the TensorFold contributors) with this pack's yue2 family
+(`spark/tensorfold_yue2/tensorfold`) laid over it. The family's kernels include TensorFold music3's decode GEMVs and
+int8 quantizers (`zig/kernels/cuda/music3_ar.cuh`, Apache-2.0); the build fetches Zig 0.17.0 (MIT) and uses NVIDIA's
+CUDA toolkit. The Python side (`spark/tensorfold_yue2/__init__.py`) subclasses the `GraphAR` decode class of the YuE2
+inference package (`yue2-infer`, multimodal-art-projection/YuE, Apache-2.0) and keeps its step checks; no YuE2 weights
+are part of the engine or this pack (they are CC BY-NC 4.0, see the YuE2 entry).
+
 ## Typefaces
 
 The web app ships three typefaces in `app/static/fonts`, each under the SIL Open Font License 1.1 (full text beside
