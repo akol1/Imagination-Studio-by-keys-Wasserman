@@ -429,7 +429,7 @@ MiniMax Music 3 on a Mac). Each engine's licence line shows under the picker.
 
 | Machine | Engine | Plays while it is made | A 60 s song |
 |---|---|---|---|
-| DGX Spark, YuE2 (the default) | YuE2, its tokens on TensorFold's CUDA engine (int8) | no | about 38 s with the model loaded; it loads in about 6 s on the first song |
+| DGX Spark, YuE2 (the default) | YuE2, its tokens on TensorFold's CUDA engine (int8) | no | about 38 s with the model loaded; it loads in 6 to 9 s on the first song |
 | Mac with an M5 or later | TensorFold's native Metal engine (Zig and Metal, since 2.9.2) | no, not yet: the song plays when it is done | 59.5 to 63.0 s on an M5 Ultra on TensorFold's command line, 17.8 GB at the peak; through the app a 33.4 s song took 35.2 s |
 | Mac with an M1 to M4, or `MUSIC3_BACKEND=mlx` | TensorFold's MLX port, int8 | yes: it starts once enough is made that it never stops, about 13 s into a 60 s song | about 63 s on an M5 Ultra, through the app |
 | DGX Spark, MiniMax Music 3 | TensorFold's CUDA engine, int8 (ComfyUI's nodes where it is not built) | no | about 149 s on one GB10, through the app |

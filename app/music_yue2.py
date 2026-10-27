@@ -99,6 +99,7 @@ class Yue2(music.Cuda):
     # through the server on a GB10, the model loaded, the same lyrics at seeds 7, 11 and 21: 60 s in 35.0 to 40.4 s,
     # 120 s in 60.4 to 66.9 s (int8 Triton loop: 45.7 to 47.6 s and 76.0 to 78.8 s), ready in 6 s instead of 21
     BLOCKS_RTF_OF, BLOCKS_PLAN_S_OF, BLOCKS_SONG_RTF_OF, BLOCKS_LOAD_S = {"int8": 0.65}, {"int8": 15.0}, {"int8": 0.4}, 6.0
+    BLOCKS_NEED_GB = 29.0  # its peak (21.0 GB at 120 s: the engine's 2.6 GB beside the bf16 model) and the guard's 8 GB
 
     def __init__(self) -> None:
         voice.Served.__init__(self)
@@ -117,8 +118,8 @@ class Yue2(music.Cuda):
         if self.backend == "blocks" and self.weights in self.BLOCKS_RTF_OF:
             self.RTF, self.load_s = self.BLOCKS_RTF_OF[self.weights], self.BLOCKS_LOAD_S
             self.plan_s, self.song_rtf = self.BLOCKS_PLAN_S_OF[self.weights], self.BLOCKS_SONG_RTF_OF[self.weights]
-            self.label = "TensorFold CUDA · DGX Spark"
-        self.guard_route = "music-yue2-" + self.weights
+            self.label, self.NEED_GB = "TensorFold CUDA · DGX Spark", self.BLOCKS_NEED_GB
+        self.guard_route = "music-yue2-" + ("blocks" if self.label.startswith("TensorFold") else self.weights)
 
     def python(self) -> Path:
         return self.venv / "bin" / "python"

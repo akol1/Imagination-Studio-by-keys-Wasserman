@@ -138,6 +138,13 @@ quantizes on the GPU at load; the Triton loop tunes its kernels). Whisper (faste
 Studio's lyric check) heard, per song in the order above: PyTorch int8 68, 97, 97 / 79, 87, 99 %; engine 97, 94,
 97 / 97, 97, 97 %. The flow matching and the VAE are the same code in both (8.2 s and 1.1 to 1.4 s for 60 s).
 
+Memory, the machine's use above idle while the server ran (sampled twice a second), seed 21: the engine 17.0 / 19.9 /
+21.0 GB for 30 / 60 / 120 s songs, the PyTorch int8 loop 13.5 / 17.0 / 19.1 GB: the engine's 2.6 GB of int8 weights
+and embeddings sit beside the bf16 model, which the prompt pass and the flow matching still read.
+
+With `TF_YUE2_PDL=1` (programmatic dependent launch for the GEMVs) the same six songs came out bit for bit the same
+WAVs, in 35.7 to 40.7 s and 60.7 to 67.1 s: no faster within the run-to-run spread, so it stays off.
+
 ## Not done
 
 - The NAR flow matching (64 passes of ~2,700 rows) and the VAE stay PyTorch. Profiled: a NAR pass is 400 ms, of which
@@ -145,8 +152,8 @@ Studio's lyric check) heard, per song in the order above: PyTorch int8 68, 97, 9
   19%, and elementwise glue (fp32 norms, rope's cat, the per-layer cat of the AR keys) ~37%. A native pass (cuBLASLt
   GEMMs as music3's DiT, a GQA head-128 flash kernel, fused norms / rope) would be ~2.5x on this stage.
 - GPUs other than GB10 (sm_121): the build refuses unless YUE2_ANY_GPU=1.
-- Programmatic dependent launch for the GEMVs (`TF_YUE2_PDL=1`, as music3 does) is built in but off: it was built,
-  not measured, so the numbers above are without it.
+- Programmatic dependent launch for the GEMVs (`TF_YUE2_PDL=1`, as music3 does) is built in but off: measured through
+  the server it changes no output and gains nothing measurable.
 - Several seeds and listening tests: the parity above is per token; songs were checked by the reference's likelihood,
   one song per decode.
 - vLLM's backend and the package's fp8 path are not touched; the engine replaces the torch backend's bf16 decode.

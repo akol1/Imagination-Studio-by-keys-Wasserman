@@ -253,6 +253,7 @@ def test_the_tokens_go_to_tensorfolds_engine_where_it_is_built():
             assert music_yue2.engine_built() and one.backend == "blocks" and one.label == "TensorFold CUDA · DGX Spark"
             assert one.argv()[one.argv().index("--backend") + 1] == "blocks" and one.RTF < plain.RTF
             assert one.estimate(60) < plain.estimate(60) and one.load_s < plain.load_s
+            assert one.guard_route == "music-yue2-blocks" and one.NEED_GB > plain.NEED_GB
             os.environ["YUE2_BACKEND"] = "torch"
             mine = music_yue2.Yue2()
             assert mine.backend == "torch" and mine.estimate(60) == plain.estimate(60)

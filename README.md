@@ -194,7 +194,7 @@ A Mac has nothing new to install: neither runs on a Mac, and its Music tab stays
   song: sung vocals and accompaniment, 48 kHz stereo, up to five minutes. It runs as a resident server in an
   environment of its own (`$PREFIX/yue2`); on a DGX Spark the song's tokens run on TensorFold's CUDA engine (int8).
   Measured on one DGX Spark: a 60 s song in about **38 s**, a 2-minute song in about **64 s**, the model loaded in
-  about 6 s, and Whisper heard **94 to 97 %** of the words sung. MiniMax Music 3 stays one click away: the **engine picker**
+  6 to 9 s, and Whisper heard **94 to 97 %** of the words sung. MiniMax Music 3 stays one click away: the **engine picker**
   above the Music tab's form (YuE2 · MiniMax Music 3) chooses for each song, and Settings → Presets → *Song engine* sets
   the default (*Best here*: YuE2 where it is installed, MiniMax Music 3 on a Mac). Each take keeps its score
   (*Download score*). `--yue2` is about 13 GB. [YuE2 songs](#yue2-songs).
@@ -3087,14 +3087,13 @@ which YuE2 does not run on). Each engine's licence line shows under the picker.
   bf16 only.
 
 Measured on one DGX Spark (GB10), the model loaded, English indie-pop lyrics at seeds 7, 11 and 21 (each song ran
-longer than its length and was cut there); Whisper's check on each song; the peak is PyTorch's (the engine holds
-2.6 GB more beside it, the int8 PyTorch loop's copies 1.8 GB):
+longer than its length and was cut there); Whisper's check on each song; the peak is the server's own memory:
 
 | Setting | 60 s song | 120 s song | Whisper heard (60 s / 120 s) | Ready in | At the peak (120 s) |
 |---|---|---|---|---|---|
-| TensorFold engine, int8 (default on a DGX Spark) | 35.0 to 40.4 s | 60.4 to 66.9 s | 94 to 97 % / 97 % | 6 s | 17.2 GB |
-| int8 PyTorch token loop (`YUE2_BACKEND=torch`, other GPUs) | 45.7 to 47.6 s | 76.0 to 78.8 s | 68 to 97 % / 79 to 99 % | 21 s | 17.3 GB |
-| bf16 (`YUE2_QUANT=bf16 YUE2_BACKEND=torch`) | 94.9 s | 146.7 s | 98 and 97 % (60 s, seeds 7 and 11) | about 15 s | 19.4 GB (the process's own) |
+| TensorFold engine, int8 (default on a DGX Spark) | 35.0 to 40.4 s | 60.4 to 66.9 s | 94 to 97 % / 97 % | 6 to 9 s | 21.1 GB |
+| int8 PyTorch token loop (`YUE2_BACKEND=torch`, other GPUs) | 45.7 to 47.6 s | 76.0 to 78.8 s | 68 to 97 % / 79 to 99 % | 21 s | 19.1 GB |
+| bf16 (`YUE2_QUANT=bf16 YUE2_BACKEND=torch`) | 94.9 s | 146.7 s | 98 and 97 % (60 s, seeds 7 and 11) | about 15 s | 19.4 GB |
 
 The score comes first, about 1,200 to 1,800 tokens whatever the length (11 to 17 s on the engine, 17 to 19 s on the
 PyTorch loop); the song then takes about 0.4 s a second of song (0.5 s on the PyTorch loop). Through the app (a test
