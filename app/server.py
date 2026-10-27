@@ -1427,7 +1427,7 @@ def bolt_need(job: dict, resident_gb: float) -> tuple[bool, str] | None:
             said = memory_of(params, sized, frames, bool(params.get("loras")), found, available_mb=room)
         elif kind == "music":
             said = memory_guard.music_check(float(params.get("seconds") or 60), available_mb=room,
-                                            route=getattr(music.engine(), "guard_route", "music"), card=on_card)
+                                            route=music.guard_route(params), card=on_card)
         elif kind in sound.KINDS:
             said = memory_guard.sound_check(kind, float(params.get("seconds") or 10), available_mb=room, card=on_card)
             if said.get("need_mb") is None:

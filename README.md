@@ -133,6 +133,7 @@ FastH3 video with sound (125 GB), motion graphics, Finish and phone notification
 | `--flux3` | FLUX3-K pictures (41 GB more, gated) |
 | `--moss` | MOSS-Image (30 GB more) |
 | `--music` | MiniMax Music 3 (22 GB more) |
+| `--yue2` | YuE2 songs, the Music tab's default engine on Linux with an NVIDIA GPU (about 13 GB more; not on a Mac) |
 | `--bolt` | Nemotron 3.5 Bolt, the studio's brain (about 25 GB more) |
 | `--sound` | Sound effects and foley (11 GB more, gated) |
 | `--motion` | Motion Previs analysis (0.5 GB) |
@@ -2942,6 +2943,47 @@ top_k?, title?, asr?, live?}` (a job of kind `music`; `live: false` does not str
 product or service must display "MiniMax-Music3" in its user interface; a licensee above US$20 million of yearly
 revenue needs MiniMax's prior written authorisation; a hosted service must keep safeguards against misuse. Do not
 redistribute the weights.
+
+## YuE2 songs
+
+**YuE2.** On Linux with an NVIDIA GPU (a DGX Spark, an RTX Pro 6000) the **Music** tab makes songs with YuE2 by
+default where it is installed: from your lyrics and a style it first writes the song's score (melody and chords), then
+the song itself, sung vocals and accompaniment, 48 kHz stereo WAV, up to five minutes (10 to 300 s). MiniMax Music 3
+stays one click away: the **engine picker** above the form (YuE2 · MiniMax Music 3) chooses for each song, and
+Settings → Presets → *Song engine* sets the default (*Best here*: YuE2 where it is installed, MiniMax Music 3 on a Mac,
+which YuE2 does not run on). Each engine's licence line shows under the picker.
+
+- **Install.** `bash oneshot-setup-spark.sh --yue2` (in `--all`, and ticked in the install checklist): about 13 GB,
+  the YuE2-3B model and its YuE2-Vae decoder at pinned revisions with their checksums, in an environment of their own
+  under `$PREFIX/yue2` (`spark/setup-yue2.sh`, safe to run again). The studio's own environment is not touched.
+- **Lyrics.** The same section tags as the tab's buttons: `[Intro]`, `[Verse]`, `[Pre-Chorus]`, `[Chorus]`,
+  `[Bridge]`, `[Interlude]`, `[Outro]`, `[Instrumental]`. Others are read as the nearest of those (`[Verse 2]` as
+  `[Verse]`, `[Hook]` and `[Post-Chorus]` as `[Chorus]`, `[Solo]` and `[Break]` as `[Interlude]`).
+- **Instrumentals.** Empty lyrics (or tags alone) make an instrumental: YuE2 writes a score from the section tags,
+  the melody is given to the instruments, and that score is played with no words to sing. The style gets
+  "Instrumental ... no vocals, no singing, no choir, no spoken words" added where it does not say so.
+- **Length** is the longest the song may be. YuE2 decides a song's length from its lyrics; a song that would run
+  longer is cut at the length you set and faded out over its last 2 seconds (the take says so).
+- **The score.** Each YuE2 take keeps its score (`score.abc`, *Download score* on the take) and what it was made from,
+  in `~/ImaginationStudio/music/<id>.yue2/`.
+- **Each song** is a job in the queue, as with MiniMax Music 3: YuE2 loads on the first song (about 40 to 60 s from
+  disk), stays loaded for five minutes after a song (`YUE2_IDLE_S`), and is unloaded at once when any other job
+  starts, MiniMax Music 3 included. While loaded it holds the studio's GPU lock. Whisper's lyrics check works as for
+  MiniMax Music 3.
+- **Speed.** The score and the song's tokens are written with an int8 copy of the model's projections (twice as fast
+  as bf16, the same words heard); everything else runs on YuE2's own bf16 weights. `YUE2_QUANT=bf16` runs bf16 only.
+
+Measured on one DGX Spark (GB10), the model loaded, a 60 s indie-pop song with English lyrics and a 60 s instrumental:
+
+| Setting | 60 s song made in | Tokens a second | Whisper heard | At the peak |
+|---|---|---|---|---|
+| int8 token loop (default) | 41.5 s (0.69 of its length) | 79 | 96 and 97 % of the words sung | 15.3 GB |
+| bf16 | 92.7 s (1.54 of its length) | 36 | 98 and 97 % | 13.9 GB |
+
+**Licence.** YuE2's code is Apache 2.0. Its weights are CC BY-NC 4.0 with the YuE2 authors' additional permission for
+individual creators: personal users, content creators and musicians may publish, sell and license the songs they make,
+free and with no royalties; a company needs a commercial licence from the authors; the songs must not be used for
+anything illegal, harmful or deceptive. Do not redistribute the weights.
 
 ## The brain engine (NVIDIA Nemotron 3.5 Bolt)
 

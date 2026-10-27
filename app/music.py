@@ -36,6 +36,11 @@ appends raw 16-bit stereo PCM to a file as each piece is decoded, and ``/api/mus
 stereo WAV whose sound is held back until enough is made that playing never runs dry (``lead_s``). The kept take is the
 engine's finished WAV, as without streaming. The MLX route alone streams: not the Metal one yet, nor a Spark (its
 CUDA engine and ComfyUI's route alike).
+
+Two engines make songs (``engine`` in a song's settings): ``yue2``, m-a-p's YuE2 (app/music_yue2.py, Linux with an
+NVIDIA GPU, in its own environment), and ``music3``, MiniMax Music 3 on the routes above. YuE2 is the default where it
+is installed; a Mac, or a machine without it, makes songs with MiniMax Music 3. Settings (Presets, "Song engine") and
+STUDIO_MUSIC_ENGINE choose otherwise; each song names its own in the Music tab.
 """
 
 from __future__ import annotations
@@ -734,34 +739,92 @@ def choose() -> tuple[type, str]:
     return (Comfy, why) if why else (Cuda, "")
 
 
-def engine():
+def engine(name: str | None = None):
+    """A song engine's route: MiniMax Music 3's chosen route for "music3", YuE2's for "yue2", the default (default_engine)
+    for None."""
+
     global _engine, _chosen_why
+    if (name or default_engine()) == "yue2":
+        return yue2().engine()
     if _engine is None:
         route, _chosen_why = choose()
         _engine = route()
     return _engine
 
 
+ENGINES = {"yue2": "YuE2", "music3": "MiniMax Music 3"}  # the song engines, as the Music tab names them
+
+
+def yue2():
+    import music_yue2  # beside this file; it builds on the routes above
+
+    return music_yue2
+
+
+def default_engine() -> str:
+    """The engine of a song that names none: STUDIO_MUSIC_ENGINE, else the setting (presets.music_engine) when it names
+    one, else YuE2 where it is installed (Linux, an NVIDIA GPU, its environment and weights) and MiniMax Music 3
+    elsewhere (a Mac, or no YuE2)."""
+
+    told = (os.environ.get("STUDIO_MUSIC_ENGINE") or "").strip().lower()
+    if told in ENGINES:
+        return told
+    try:
+        import settings
+
+        chosen = settings.load()["presets"].get("music_engine", "auto") if settings.HOME else "auto"
+    except Exception:  # noqa: BLE001 - a settings file that cannot be read leaves the platform's default
+        chosen = "auto"
+    if chosen in ENGINES:
+        return chosen
+    return "yue2" if SPARK and yue2().installed() else "music3"
+
+
+def loaded_engines() -> list:
+    """The song engines that exist in this process (each made on first use)."""
+
+    return [one for one in (_engine, yue2()._engine if "music_yue2" in sys.modules else None) if one is not None]
+
+
+def guard_route(params: dict) -> str:
+    """The memory guard's route for a queued song (memory_guard.music_check)."""
+
+    return getattr(engine(params.get("engine") or "music3"), "guard_route", "music")
+
+
 def room_mb() -> int | None:
     """While the CUDA engine is loaded: the memory this machine had before it loaded (MB), which any other job of the
     queue gets back, since a song's engine is unloaded before that job starts (as voice.room_mb). None otherwise."""
 
-    one = _engine
-    if not isinstance(one, Cuda) or not one.loaded() or one.before_gb < 0:
-        return None
-    return int(one.before_gb * 1024)
+    held = [int(one.before_gb * 1024) for one in loaded_engines() if isinstance(one, Cuda) and one.loaded() and one.before_gb >= 0]
+    return max(held) if held else None
 
 
 def release(why: str) -> bool:
     """Before any other job of this machine's queue (server.py): a loaded MiniMax Music 3 gives back its memory and the
     GPU lock. True when it was loaded."""
 
-    one = _engine
-    return bool(one is not None and one.release(why))
+    return any([one.release(why) for one in loaded_engines()])
 
 
 def state() -> dict:
-    one = engine()
+    """The default engine's state, as before engines were two, and each engine's under ``engines``."""
+
+    chosen = default_engine()
+    each = {name: engine_state(name) for name in ENGINES}
+    return {**each[chosen], "engine": chosen, "engine_names": ENGINES, "engines": each}
+
+
+def engine_state(name: str) -> dict:
+    if name == "yue2":
+        mod, one = yue2(), yue2().engine()
+        why = one.check()
+        return {"available": not why, "why": why, "route": one.name, "label": one.label, "credit": mod.CREDIT,
+                "licence": mod.LICENCE, "seconds": mod.SECONDS, "defaults": {}, "ranges": {}, "sections": mod.SECTIONS,
+                "caption_limit": CAPTION_LIMIT, "lyrics_limit": LYRICS_LIMIT, "rtf": one.RTF, "music_db": MUSIC_DB,
+                "duck_db": DUCK_DB, "server": one.status(), "stream": False, "stream_lead": None, "fallback": None,
+                "weights": one.weights, "rate": 48000, "installed": not one.present() if SPARK else False}
+    one = engine("music3")
     why = one.check()
     return {"available": not why, "why": why, "route": one.name, "label": one.label, "credit": CREDIT, "licence": LICENCE,
             "seconds": SECONDS, "defaults": {k: v[0] for k, v in SAMPLING.items()}, "ranges": {k: v[1:] for k, v in SAMPLING.items()},
@@ -770,7 +833,7 @@ def state() -> dict:
             # played while it is made: the Mac's MLX engine only (Metal does not stream yet, nor a Spark on either route)
             "stream": bool(not why and hasattr(one, "streaming") and one.streaming()),
             "stream_lead": {"no_stall_s": dict(NO_STALL_S), "margin_s": HOLD_MARGIN_S, "first_audio_s": 7.6},
-            "fallback": _chosen_why or None, "weights": getattr(one, "weights", None)}
+            "fallback": _chosen_why or None, "weights": getattr(one, "weights", None), "rate": RATE}
 
 
 # ---------- text ----------
@@ -822,10 +885,14 @@ def checked(body: dict) -> dict:
     low, high = SECONDS
     if not low <= seconds <= high:
         raise HTTPException(400, f"a song is {low} to {high} seconds long")
-    params = {"caption": caption, "lyrics": lyrics, "seconds": seconds, "title": str(body.get("title") or "").strip()[:120]}
+    chosen = str(body.get("engine") or "").strip().lower() or default_engine()
+    if chosen not in ENGINES:
+        raise HTTPException(400, "engine is " + " or ".join(ENGINES))
+    params = {"caption": caption, "lyrics": lyrics, "seconds": seconds, "title": str(body.get("title") or "").strip()[:120],
+              "engine": chosen}
     try:
         params["seed"] = int(body.get("seed") if body.get("seed") not in (None, "") else random.randrange(1, 100000))
-        for key, (default, low, high) in SAMPLING.items():
+        for key, (default, low, high) in (SAMPLING.items() if chosen == "music3" else ()):
             value = body.get(key)
             value = default if value in (None, "") else (int(value) if key in ("steps", "top_k") else float(value))
             if not low <= value <= high:
@@ -833,7 +900,9 @@ def checked(body: dict) -> dict:
             params[key] = value
     except (TypeError, ValueError):
         raise HTTPException(400, "seed, steps, dit_cfg, ar_cfg and top_k are numbers")
-    why = engine().check()
+    if chosen == "yue2":
+        params = yue2().checked(body, params)
+    why = engine(chosen).check()
     if why:
         raise HTTPException(400, why)
     if SPARK:
@@ -845,11 +914,11 @@ def checked(body: dict) -> dict:
         # budget is the RAM and the Spark's arithmetic below is kept.
         if memory_guard.card_room_applies():
             have = memory_guard.card_room_for_job([voice.room_mb(), room_mb()])
-            found = memory_guard.music_check(seconds, available_mb=have, route=getattr(engine(), "guard_route", "music"), card=True)
+            found = memory_guard.music_check(seconds, available_mb=have, route=guard_route(params), card=True)
         else:
             held = [one for one in (voice.room_mb(), room_mb()) if one]
             room = max([memory_guard.room_mb() or 0] + held) if held else None
-            found = memory_guard.music_check(seconds, available_mb=room, route=getattr(engine(), "guard_route", "music"))
+            found = memory_guard.music_check(seconds, available_mb=room, route=guard_route(params))
         if not found["fits"]:
             raise HTTPException(400, found["reason"])
     params["asr"] = body.get("asr", True) is not False
@@ -863,19 +932,29 @@ def perform(job: dict) -> bool:
     params, folder = job["params"], HOME / "music"
     folder.mkdir(parents=True, exist_ok=True)
     wav = folder / f"{job['id']}.wav"
-    one = engine()
+    chosen = params.get("engine") or "music3"  # a song queued before engines were two is MiniMax Music 3's
+    one = engine(chosen)
+    for other in loaded_engines():  # the other song engine gives back its memory and the GPU lock first
+        if other is not one:
+            other.release(f"a song on {ENGINES[chosen]} needs the GPU")
     job["engine"] = one.name
     measured = one.make(job, params, wav)
     if measured is None:
         return False
     if not wav.is_file():
-        raise RuntimeError("MiniMax Music 3 finished without writing its song")
+        raise RuntimeError(f"{ENGINES[chosen]} finished without writing its song")
     take = {"id": job["id"], "path": relative(wav), "title": params.get("title") or job.get("title"), "caption": params["caption"],
-            "lyrics": params["lyrics"], "seconds": params["seconds"], "seed": params["seed"], **{k: params[k] for k in SAMPLING},
-            "route": one.name, "created": time.time(), "duration": measured.get("audio_s"), "ended": measured.get("eos"),
+            "lyrics": params["lyrics"], "seconds": params["seconds"], "seed": params["seed"], **{k: params[k] for k in SAMPLING if k in params},
+            "route": one.name, "engine": chosen, "created": time.time(), "duration": measured.get("audio_s"), "ended": measured.get("eos"),
             "ar_s": measured.get("ar_s"), "dit_s": measured.get("dit_s"), "dav_s": measured.get("dav_s"), "load_s": measured.get("load_s"),
             "rtf": measured.get("rtf"), "total_s": measured.get("total_s"), "peak_memory_gb": measured.get("peak_memory_gb"),
-            "credit": CREDIT}
+            "credit": CREDIT if chosen == "music3" else yue2().CREDIT}
+    if chosen == "yue2":  # its score (ABC) and what it was made from, beside the song
+        score = measured.get("score")
+        take.update(plan_s=measured.get("plan_s"), semantic_s=measured.get("semantic_s"), nar_s=measured.get("nar_s"),
+                    vae_s=measured.get("vae_s"), tokens=measured.get("tokens"), cot=measured.get("cot"),
+                    instrumental=bool(measured.get("instrumental")), truncated=measured.get("truncated"),
+                    weights=measured.get("weights"), score=relative(Path(score)) if score and Path(score).is_file() else None)
     if measured.get("stream"):  # played while it was made: when the first sound came and when the player was let start
         take.update(streamed=True, first_audio_s=measured.get("first_audio_s"), play_s=measured.get("play_s"), lead_s=measured.get("lead_s"))
     if params.get("asr") and sung(params["lyrics"]) and qa.ready()["transcript"]:
@@ -1029,11 +1108,12 @@ def music_state() -> dict:
 
 @router.post("/api/music/takes")
 def render(body: dict) -> dict:
-    """Queue a song: {caption, lyrics, seconds, seed?, steps?, dit_cfg?, ar_cfg?, top_k?, title?, asr?, live?}."""
+    """Queue a song: {caption, lyrics, seconds, seed?, engine? (yue2|music3), steps?, dit_cfg?, ar_cfg?, top_k?, title?, asr?, live?}
+    (steps, dit_cfg, ar_cfg and top_k are MiniMax Music 3's)."""
 
     params = checked(body)
     title = params["title"] or "Music: " + (sung(params["lyrics"])[:40] or params["caption"][:40])
-    return enqueue("music", title, params, engine().estimate(params["seconds"]) + (20 if params["asr"] else 0))
+    return enqueue("music", title, params, engine(params["engine"]).estimate(params["seconds"]) + (20 if params["asr"] else 0))
 
 
 @router.get("/api/music/takes")
@@ -1052,7 +1132,7 @@ def take_audio(take_id: str):
     target = inside(take["path"])
     if not target.is_file():
         raise HTTPException(404, "the song's file is gone (deleted to the trash folder?)")
-    return FileResponse(target, media_type="audio/wav", filename=f"minimax-music3-{take_id}.wav")
+    return FileResponse(target, media_type="audio/wav", filename=f"{'yue2' if take.get('engine') == 'yue2' else 'minimax-music3'}-{take_id}.wav")
 
 
 @router.get("/api/music/takes/{take_id}/live")
@@ -1089,5 +1169,5 @@ def attach(home: Path, runner, queue, within, short, measure, gate) -> tuple[API
     HOME, run, enqueue, inside, relative, media_seconds, qa = home, runner, queue, within, short, measure, gate
     (HOME / "music").mkdir(parents=True, exist_ok=True)
     if not SPARK:
-        threading.Thread(target=engine().check, daemon=True).start()  # the first look runs a process: not in a request
+        threading.Thread(target=engine("music3").check, daemon=True).start()  # the first look runs a process: not in a request
     return router, perform, soundtrack

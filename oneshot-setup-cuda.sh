@@ -26,6 +26,12 @@
 #                                             # which it builds too (spark/build-music3.sh). MiniMax-Music3 Community License:
 #                                             # commercial use allowed; a commercial UI shows "MiniMax-Music3"; above US$20M
 #                                             # yearly revenue needs MiniMax's written authorisation
+#   bash oneshot-setup-spark.sh --yue2        # add YuE2 (m-a-p's song model) for the Music tab, about 13 GB more (spark/setup-yue2.sh):
+#                                             # YuE2-3B (bf16) and its YuE2-Vae decoder at pinned revisions, sha256 checked, in
+#                                             # their own Python 3.12 environment under $PREFIX/yue2; the Music tab's default
+#                                             # engine where it is installed. Code Apache 2.0; weights CC BY-NC 4.0 with the
+#                                             # authors' creator permission: personal users, creators and musicians may sell
+#                                             # and license their songs royalty-free; a company needs the authors' licence
 #   bash oneshot-setup-spark.sh --bolt        # add NVIDIA Nemotron 3.5 Bolt as the Studio's own brain engine, about 25 GB more:
 #                                             # NVIDIA's 24 GB checkpoint (a326822a) and its LiLiCorr drafter (4c6a5613), and
 #                                             # the engine (spark/build-bolt.sh: TensorFold with MiaAI-Lab's Bolt backend).
@@ -100,11 +106,11 @@ fi
 # written down in this repo to copy, and the resolver keeps them beside the torch pinned here.
 TORCH_PIN=(torch==2.14.1 torchvision==0.29.1)  # requirements.lock; scripts/setup-comfy.sh pins the same pair
 STUDIO_PIN=(huggingface_hub==1.33.0 fastapi==0.142.2 uvicorn==0.54.0 python-multipart==0.0.32 pillow==12.3.0)  # requirements.lock
-IMAGE_ONLY=0; RENDER=1; VERIFY=0; REF2VA=0; MOTION=0; VOICE=0; UPGRADE=0; LORAS=""; H3_BASE=0; WORKFLOWS=1; IMAGE_EDIT=0; FLUX3=0; MOSS=0; MUSIC=0; SOUND=0; BOLT=0; TRAIN=0; GRAPHICS=""; FINISH=""
+IMAGE_ONLY=0; RENDER=1; VERIFY=0; REF2VA=0; MOTION=0; VOICE=0; UPGRADE=0; LORAS=""; H3_BASE=0; WORKFLOWS=1; IMAGE_EDIT=0; FLUX3=0; MOSS=0; MUSIC=0; SOUND=0; BOLT=0; TRAIN=0; GRAPHICS=""; FINISH=""; YUE2=0
 for arg in "$@"; do
   case "$arg" in
-    --ref2va) REF2VA=1;; --h3-base) H3_BASE=1;; --image-edit) IMAGE_EDIT=1;; --flux3) FLUX3=1;; --moss) MOSS=1;; --music) MUSIC=1;; --bolt) BOLT=1;; --train) TRAIN=1;; --graphics) GRAPHICS=1;; --no-graphics) GRAPHICS=0;; --finish) FINISH=1;; --no-finish) FINISH=0;; --sound) SOUND=1;; --motion) MOTION=1;; --voice) VOICE=1;; --image-only) IMAGE_ONLY=1;; --no-render) RENDER=0;; --verify) VERIFY=1; RENDER=0;; --upgrade) UPGRADE=1; RENDER=0; MOTION=1;;
-    --all) REF2VA=1; H3_BASE=1; IMAGE_EDIT=1; FLUX3=1; MOSS=1; MUSIC=1; SOUND=1; BOLT=1; VOICE=1; MOTION=1; TRAIN=1; GRAPHICS=1; FINISH=1;;  # every feature
+    --ref2va) REF2VA=1;; --h3-base) H3_BASE=1;; --image-edit) IMAGE_EDIT=1;; --flux3) FLUX3=1;; --moss) MOSS=1;; --music) MUSIC=1;; --yue2) YUE2=1;; --bolt) BOLT=1;; --train) TRAIN=1;; --graphics) GRAPHICS=1;; --no-graphics) GRAPHICS=0;; --finish) FINISH=1;; --no-finish) FINISH=0;; --sound) SOUND=1;; --motion) MOTION=1;; --voice) VOICE=1;; --image-only) IMAGE_ONLY=1;; --no-render) RENDER=0;; --verify) VERIFY=1; RENDER=0;; --upgrade) UPGRADE=1; RENDER=0; MOTION=1;;
+    --all) REF2VA=1; H3_BASE=1; IMAGE_EDIT=1; FLUX3=1; MOSS=1; MUSIC=1; YUE2=1; SOUND=1; BOLT=1; VOICE=1; MOTION=1; TRAIN=1; GRAPHICS=1; FINISH=1;;  # every feature
     --no-workflows) WORKFLOWS=0;;
     --yes|-y) ;;  # the plain install without the checklist
     --loras) LORAS=all;; --loras=*) LORAS="${arg#--loras=}";; --no-loras) LORAS=none;; --lora-bundle=*) LORA_BUNDLE="${arg#--lora-bundle=}";;
@@ -136,6 +142,7 @@ if [ "$UPGRADE" = 1 ]; then
   [ ! -s "$MODELS/FLUX3-K-Comfy/diffusion_models/flux3_image_klein_sd_bf16.safetensors" ] || FLUX3=1
   [ ! -s "$MODELS/MOSS-Image-Comfy/diffusion_models/moss_image_sft_bf16.safetensors" ] || MOSS=1
   [ ! -s "$MODELS/MiniMax-Music3-Comfy/diffusion_models/minimax_music3_dit_fp16.safetensors" ] || MUSIC=1
+  [ ! -x "${YUE2_HOME:-$PREFIX/yue2}/venv/bin/python" ] || YUE2=1
   [ ! -d "$PREFIX/ComfyUI/custom_nodes/ComfyUI-MMAudio" ] || SOUND=1
   [ ! -s "${BOLT_MODELS:-$MODELS}/Nemotron-3.5-Bolt-24GB/model.safetensors.index.json" ] || BOLT=1
   [ ! -x "$PREFIX/drama3/bin/drama3-generate" ] || VOICE=1
@@ -200,6 +207,7 @@ if [ "$IMAGE_ONLY" = 0 ]; then
     || [ -s "$MODELS/FLUX3-K-Comfy/diffusion_models/flux3-image-klein-bf16.safetensors" ] || NEED=$((NEED + 42))
   [ "$MOSS" = 0 ] || ! missing "$MODELS/MOSS-Image-Comfy/diffusion_models/moss_image_sft_bf16.safetensors" || NEED=$((NEED + 31))
   [ "$MUSIC" = 0 ] || ! missing "$MODELS/MiniMax-Music3-Comfy/diffusion_models/minimax_music3_dit_fp16.safetensors" || NEED=$((NEED + 23))
+  [ "$YUE2" = 0 ] || ! missing "${YUE2_WEIGHTS:-${YUE2_HOME:-$PREFIX/yue2}/weights}/YuE2-3B/model.safetensors" || NEED=$((NEED + 14))
   [ "$SOUND" = 0 ] || ! missing "$MODELS/Sound-Comfy/stable-audio-open-1.0/model.safetensors" || NEED=$((NEED + 12))
   [ "$BOLT" = 0 ] || ! missing "${BOLT_MODELS:-$MODELS}/Nemotron-3.5-Bolt-24GB/model.safetensors.index.json" || NEED=$((NEED + 26))
   [ "$TRAIN" = 0 ] || ! missing "$MODELS/Train-H3/vae/minimax_h3_video_vae_fp16.safetensors" || NEED=$((NEED + 15))
@@ -402,6 +410,14 @@ if [ "$MUSIC" = 1 ]; then
   fi
 fi
 
+if [ "$YUE2" = 1 ]; then  # YuE2 for the Music tab, in its own environment (spark/setup-yue2.sh, idempotent)
+  if PREFIX="$PREFIX" bash "$HERE/spark/setup-yue2.sh" $([ "$VERIFY" = 0 ] || echo --verify); then :
+  else
+    [ "$VERIFY" = 0 ] || die "YuE2 is not installed as pinned: run bash spark/setup-yue2.sh"
+    echo "  YuE2 did not install: songs use MiniMax Music 3 (with --music). Fix and rerun bash spark/setup-yue2.sh"
+  fi
+fi
+
 if [ "$BOLT" = 1 ]; then  # NVIDIA Nemotron 3.5 Bolt, the brains' Studio-managed engine: weights and engine (scripts/setup-bolt.sh)
   if [ "$UPGRADE" = 1 ]; then PREFIX="$PREFIX" SPARK_MODELS="$MODELS" bash "$HERE/spark/build-bolt.sh" || echo "  ! the Bolt engine was not updated: bash spark/build-bolt.sh"
   else PREFIX="$PREFIX" SPARK_MODELS="$MODELS" bash "$HERE/scripts/setup-bolt.sh" $([ "$VERIFY" = 1 ] && echo --verify) \
@@ -550,7 +566,7 @@ elif [ "$VERIFY" = 1 ]; then echo "  - Finish is not installed (--finish adds it
 [ "$VERIFY" = 1 ] || cp "$HERE/VERSION" "$PREFIX/VERSION"
 if [ "$UPGRADE" = 1 ]; then
   say "Upgraded: $INSTALLED -> $(cat "$PREFIX/VERSION"). Checking the install (restart the app to serve the new pages: scripts/app.sh)"
-  exec bash "$HERE/oneshot-setup-cuda.sh" --verify $([ "$IMAGE_ONLY" = 0 ] || echo --image-only) $([ "$REF2VA" = 0 ] || echo --ref2va) $([ "$FLUX3" = 0 ] || echo --flux3) $([ "$MOSS" = 0 ] || echo --moss) $([ "$MUSIC" = 0 ] || echo --music) $([ "$SOUND" = 0 ] || echo --sound) $([ "$BOLT" = 0 ] || echo --bolt) $([ "$VOICE" = 0 ] || echo --voice) $([ "$TRAIN" = 0 ] || echo --train) $([ "$GRAPHICS" = 0 ] && echo --no-graphics || echo --graphics) $([ "$FINISH" = 0 ] && echo --no-finish || echo --finish)
+  exec bash "$HERE/oneshot-setup-cuda.sh" --verify $([ "$IMAGE_ONLY" = 0 ] || echo --image-only) $([ "$REF2VA" = 0 ] || echo --ref2va) $([ "$FLUX3" = 0 ] || echo --flux3) $([ "$MOSS" = 0 ] || echo --moss) $([ "$MUSIC" = 0 ] || echo --music) $([ "$YUE2" = 0 ] || echo --yue2) $([ "$SOUND" = 0 ] || echo --sound) $([ "$BOLT" = 0 ] || echo --bolt) $([ "$VOICE" = 0 ] || echo --voice) $([ "$TRAIN" = 0 ] || echo --train) $([ "$GRAPHICS" = 0 ] && echo --no-graphics || echo --graphics) $([ "$FINISH" = 0 ] && echo --no-finish || echo --finish)
 fi
 # The essential LoRA bundle: every preset of the LoRA hub, fetched once from its author's page into one folder laid out
 # by the hub's groups, then installed (oneshot-essential-bundle.sh). --loras=GROUPS takes some groups, --lora-bundle=PATH

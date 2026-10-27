@@ -178,6 +178,47 @@ release since 3.3.1), built from source into
 On an older Mac, or with `MUSIC3_BACKEND=mlx`, the song runs on TensorFold's MLX port of MiniMax Music 3 (drowzeys/TensorFold, branch `music3-mlx`, commit
 6844b413, Apache-2.0), installed into its own environment by `scripts/setup-music.sh`.
 
+## YuE2 (Multimodal Art Projection, the YuE2 authors)
+
+The Music tab's YuE2 engine (app/music_yue2.py, spark/yue2_server.py) runs YuE2 in its own environment under
+`$PREFIX/yue2`, installed by `spark/setup-yue2.sh` (`oneshot-setup-spark.sh --yue2`). None of YuE2's code or weights is
+copied into this pack.
+
+- Code: github.com/multimodal-art-projection/YuE at commit 1647252d68b70cbead046ffd3f7caf036dde47ee (the `yue2-infer`
+  0.1.6 package and the yue2-music 1.2.0 skill), Apache License 2.0, Copyright (c) 2026 the YuE2 authors. Its
+  `modeling_vae.py` keeps code derived from stable-audio-tools (Copyright (c) 2023 Stability AI, MIT) and SnakeBeta /
+  BigVGAN (Copyright (c) 2022 NVIDIA CORPORATION, MIT). The skill's instrumental helpers (`skills/yue2-music/instrumental`,
+  `convert_score`, run from that checkout to move a score's vocal melody to the instruments) are MIT, Copyright (c)
+  2026 yue2-music contributors.
+- Weights: m-a-p/YuE2-3B (revision 8f24312f, model.safetensors sha256 1d55c42c...) and m-a-p/YuE2-Vae (revision
+  152733a1, sha256 807ce9d5...), under Creative Commons Attribution-NonCommercial 4.0 International (CC BY-NC 4.0),
+  with the additional "Individual creator permission and academic use (2026-09-16)" of the repository's
+  MODEL_LICENSE, which reads in part:
+
+  > In addition to the CC BY-NC 4.0 license below, the YuE2 model licensors grant personal users, content creators
+  > and musicians acting in an individual capacity permission to use the model weights free of charge to generate
+  > outputs, and to publish, distribute, sell, license or otherwise monetize those outputs, subject to the
+  > responsible-use conditions below.
+  >
+  > For these individual creative activities, the model licensors waive the NonCommercial restriction to the extent
+  > necessary. These users do not need a separate commercial license from, or owe license fees or royalties to, the
+  > model licensors for this use or for monetizing their outputs.
+  >
+  > The individual creator permission does not authorize commercial use of the model weights by companies.
+  >
+  > Under this permission, you must not use the model weights or generated outputs for illegal, harmful, deceptive or
+  > otherwise unethical purposes, including fraud, harassment or deceptive impersonation.
+  >
+  > This permission concerns generating and using outputs; it does not extend to commercial redistribution or sale of
+  > the model weights.
+
+  Academic users may use YuE2 free of charge for non-commercial research and education under CC BY-NC 4.0. Companies
+  wishing to use the weights commercially contact the authors for a commercial licence. The weights are not
+  redistributed by this pack; read the full MODEL_LICENSE (copied next to the weights by the installer) before use.
+- YuE2's environment also installs, at the versions YuE2 pins: Hugging Face transformers 4.57.6, huggingface_hub
+  0.36.2, safetensors 0.7.0 and accelerate 1.13.0 (Apache 2.0), tiktoken 0.12.0 (MIT, OpenAI), NumPy 2.2.6 (BSD-3),
+  soundfile 0.13.1 (BSD-3), and the studio's PyTorch 2.14.1 for CUDA 13 (BSD-3) with Triton (MIT).
+
 ## Typefaces
 
 The web app ships three typefaces in `app/static/fonts`, each under the SIL Open Font License 1.1 (full text beside

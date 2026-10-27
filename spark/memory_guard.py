@@ -557,13 +557,26 @@ MUSIC_CUDA_ESTIMATE = {"music-cuda-int8": (15_900, 30), "music-cuda-bf16": (23_2
 MUSIC_CUDA_MEASURED = {"music-cuda-int8": ((30, 30.0, 16_632), (60, 60.0, 17_928), (120, 63.3, 18_885), (120, 120.0, 19_291),
                                            (60, 55.2, 18_656)),  # the last: through the app (Studio 2.9.1), Whisper after it
                        "music-cuda-bf16": ((30, 30.0, 24_012), (60, 60.0, 25_485), (120, 61.3, 25_683), (120, 120.0, 26_647))}
+# YuE2 (app/music_yue2.py, spark/yue2_server.py: YuE2-3B and YuE2-Vae in YuE2's own environment, PyTorch 2.14.1), bf16
+# and with the int8 weight-only token loop: (MB, MB per second of song asked for). Measured 2026-10-27 on a GB10 Spark:
+# the server's own peak through each song, its GPU memory (nvidia-smi, per process) and its resident memory, sampled
+# twice a second; the machine's MemTotal - MemAvailable above idle rose by the same give or take 0.5 GB. The weights and
+# the decoder stay on the GPU throughout (7.5 GB bf16, 9.3 GB with the int8 copies); the length adds the KV cache and
+# the flow matching's frames. A load peaks at 15.1 GB (the file read once into memory beside its copy on the GPU).
+# Songs over 120 s are not measured: the line goes on at the same slope.
+MUSIC_YUE2_ESTIMATE = {"music-yue2-bf16": (14_100, 45), "music-yue2-int8": (15_600, 30)}
+# (seconds asked, seconds made, MB): English pop lyrics seed 21 at 30, 60, 120 s; the int8 65 and 70 s rows are the two
+# A/B instrumentals at seed 42 and 43
+MUSIC_YUE2_MEASURED: dict = {"music-yue2-bf16": ((30, 30.0, 12_193), (60, 60.0, 15_809), (120, 120.0, 19_438)),
+                             "music-yue2-int8": ((30, 30.0, 13_495), (60, 60.0, 17_031), (120, 120.0, 19_149),
+                                                 (65, 65.0, 16_752), (70, 70.0, 17_079))}
 
 
 def music_check(seconds: float, available_mb: int | None = None, total_mb: int | None = None, route: str = "music",
                 card: bool = False) -> dict:
     """Whether a MiniMax Music 3 song of up to ``seconds`` fits this machine, as ``check`` answers for a clip:
-    ``route`` "music" (ComfyUI's nodes) or "music-cuda-int8" / "music-cuda-bf16" (TensorFold's CUDA engine);
-    everything fits where there is no /proc/meminfo."""
+    ``route`` "music" (ComfyUI's nodes), "music-cuda-int8" / "music-cuda-bf16" (TensorFold's CUDA engine) or
+    "music-yue2-bf16" / "music-yue2-int8" (YuE2); everything fits where there is no /proc/meminfo."""
 
     if total_mb is None:
         total_mb = meminfo().get("MemTotal", 0)
@@ -571,8 +584,8 @@ def music_check(seconds: float, available_mb: int | None = None, total_mb: int |
         return {"fits": True, "reason": "", "route": None}
     measured_here = available_mb is None and not card
     available_mb, floor, on_card = _pool(available_mb, total_mb, card)
-    fixed, per_second = MUSIC_CUDA_ESTIMATE.get(route) or MUSIC_ESTIMATE
-    route = route if route in MUSIC_CUDA_ESTIMATE else "music"
+    fixed, per_second = MUSIC_CUDA_ESTIMATE.get(route) or MUSIC_YUE2_ESTIMATE.get(route) or MUSIC_ESTIMATE
+    route = route if route in MUSIC_CUDA_ESTIMATE or route in MUSIC_YUE2_ESTIMATE else "music"
     need = int(fixed + per_second * float(seconds))
     left = available_mb - need - ERROR_MB
     out = {"fits": left >= floor, "reason": "", "need_mb": need, "error_mb": ERROR_MB, "left_mb": left, "floor_mb": floor,
