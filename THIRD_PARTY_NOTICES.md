@@ -135,6 +135,57 @@ those nodes through ComfyUI's HTTP API as a separate program. The three LoRAs co
   of `Comfy-Org/sam3.1` on Hugging Face, SHA-256
   `9ba99c92703c2e8b4f47de2d34a539bb8e18923049e238b780d70dbe6368eb03`. SAM License. Run by ComfyUI's own SAM 3 nodes.
 
+# Third-party notices: Character Swap
+
+"Character Swap" (`app/swap.py`, `app/static/swap.js`, `spark/spark_swap.py`, `spark/swap_plan.py`,
+`spark/setup-swap.sh`) replaces the person in a part of a clip with the character in a picture. Its code is this
+pack's own and runs on ComfyUI's own nodes (SAM 3, MiniMax H3, the latent and video nodes) through ComfyUI's HTTP API;
+no node pack is installed for it and no code of anyone below is copied into this repository.
+
+## Openjutsu, by Comfy Org
+
+- <https://github.com/Comfy-Org/comfy-openjutsu>, commit `70ec62df0eda7c58697ea3ac2050588513651583`. MIT License,
+  Copyright (c) 2026 Comfy Org. The idea (one picture's character in place of the person in a 5 to 15 second part of
+  one shot, the clip's own sound kept), its limits, the prompt and the settings of its `workflows/swap.api.json` were
+  read and followed. Its optional first frame went to a paid picture service; here the studio's own FLUX3-K edit draws
+  it, on this machine.
+
+## H3 Character Swap, by Akatz Labs
+
+- The workflow: Akatz Labs' H3 Character Swap workflow (MIT, Copyright (c) 2026 Akatz Labs), as Openjutsu carries it,
+  and the example workflows on the LoRA's Hugging Face page (`examples/`, under the MIT notice kept there). Their
+  settings are used: strength 1 for both LoRAs, 8 passes of `er_sde` with the `normal` schedule at CFG 1, sigma shift
+  12 for the picture and 3 for the sound, SAM finding "person" at 0.35 with two refinement passes and following them
+  at 0.5 with one object, the largest person, masks grown by 64 pixels, windows of 124 frames carrying 18 frames of
+  history, seed 904239.
+- Their ComfyUI node pack for it (`h3_character_swap` in akatz-labs/h3-character-swap-tool) and their H3 Relay pack
+  are GNU General Public License v3.0. Neither is installed for this action and no code of either was read into or
+  copied into this pack: how the mask, the history and the windows work here was written from the LoRA's model card,
+  the MIT workflows' settings and H3 Relay's published documentation (`docs/windowed-edit.md`).
+- The LoRA: `h3_character_swap_v1.5.safetensors` from `akatz-ai/MiniMax-H3-Character-Swap-LoRA` (revision
+  `d06323b7c8e70e97cdab48b78a1e05f786c8cba9`), SHA-256
+  `8f2c3c3eba161df8d0c6099598b4730f641f5ce01e04cd16d2427cff8a35218f`. A Model Derivative of MiniMax H3 under the
+  MiniMax H3 Community License Agreement (its `NOTICE`: "Modified by Akatz Labs").
+
+## MiniMax H3 Turbo, by LightX2V (ModelTC)
+
+- `minimax_h3_fl2v_turbo_8step_v1.0_768p_comfyui_bf16.safetensors` from `lightx2v/Minimax-h3-Turbo` (revision
+  `3ec17a324ced54151364f24f8b5fb6bf7e26414f`), SHA-256
+  `08cfe946033af7d27719b964b6e0a0e50c32138daabbd6ce4137e23df6bf9980`. Apache License 2.0
+  (<https://github.com/ModelTC/Minimax-H3-Turbo>). It derives from MiniMax H3, whose Community License applies to it too.
+
+## MiniMax H3 (MiniMax)
+
+- Ref2VA (`minimax_h3_ref2va_pruned_int8_convrot.safetensors`, or the bf16 file where it is the one installed), its
+  text encoder and decoders from `Comfy-Org/MiniMax-H3`, the files the studio's H3 install already has. MiniMax H3
+  Community License Agreement: its grant does not cover the European Union, the United Kingdom, the Republic of Korea
+  or the United States of America, and it carries an Acceptable Use Policy. "MiniMax H3 is licensed under the
+  MiniMax H3 Community License Agreement, Copyright © 2026 MiniMax. All Rights Reserved." Powered by MiniMax H3.
+- SAM 3.1 is the build listed under the Library's actions above (SAM License).
+- `spark/patches/tensorfold-h3-gateless.patch` changes TensorFold's H3 CUDA family (drowzeys/TensorFold at
+  `1f7ecc75ded5df6da151d4d5eeee87b35161e3c2`, Apache License 2.0) so it loads a MiniMax H3 transformer without
+  FastH3's gate weights, for the optional `SWAP_ENGINE=tensorfold` route. It is not applied by any installer.
+
 # Third-party notices: the Music tab
 
 The Music tab (app/music.py, app/static/music.js) makes songs with MiniMax-Music3. Nothing of the model is in this

@@ -1577,6 +1577,8 @@ def build(kind: str, params: dict, job_id: str, room: bool = True) -> tuple[list
         if room:
             mac_comfy_room(kind)
         return built
+    if kind in swap.KINDS:  # Character Swap, a Library action on a clip (swap.py: spark/spark_swap.py)
+        return swap_build(kind, params, job_id)
     if kind in sound.KINDS:  # a sound effect or a clip's foley (sound.py)
         return sound_build(kind, params, job_id)
     if kind in train.KINDS:  # a LoRA trained on this Spark (train.py: spark/train_lora.py)
@@ -1751,8 +1753,10 @@ def export(job: dict) -> None:
         job["progress"] = None
 
 
-STEP = re.compile(r"\[tensorfold\] (step|voice|ar|dit|train) (\d+)/(\d+)")
-STEP_WORDS = {"step": "picture", "voice": "sound", "ar": "the model writes the song", "dit": "the sound", "train": "training step"}  # MiniMax Music 3: ar, dit
+STEP = re.compile(r"\[tensorfold\] (step|voice|ar|dit|train|frame) (\d+)/(\d+)")
+STEP_WORDS = {"step": "picture", "voice": "sound", "ar": "the model writes the song", "dit": "the sound", "train": "training step",
+              "frame": "frame"}  # MiniMax Music 3: ar, dit; frame: a clip followed frame by frame (Character Swap)
+STAGE = re.compile(r"\[tensorfold\] stage (\d+)/(\d+) (.+)$")  # a job of several stages (Character Swap): said above its passes
 RAN_ON = re.compile(r"\[tensorfold\] engine: (\w+)")
 
 
@@ -1768,6 +1772,10 @@ def run(job: dict, command: list[str], env: dict, label: str = "") -> bool:
             engine = RAN_ON.search(line)
             if engine:
                 job["engine"] = engine.group(1)
+            staged = STAGE.search(line.rstrip())
+            if staged:
+                label = staged.group(3).strip() + " · "
+                job["progress"] = {"stage": staged.group(3).strip(), "at": int(staged.group(1)), "of": int(staged.group(2))}
             found = STEP.search(line)
             if found:
                 kind, at, total = found.group(1), int(found.group(2)), int(found.group(3))
@@ -2242,7 +2250,7 @@ def queue_job(body: dict) -> dict:
     if body.get("title") is not None and not isinstance(body.get("title"), str):
         raise HTTPException(400, "title is text")
     params = dict(body.get("params") or {})
-    if kind not in ("scout", "video", "studio", "export", "long", "edit") + actions.KINDS + sound.KINDS + finish.KINDS + graphics.KINDS:
+    if kind not in ("scout", "video", "studio", "export", "long", "edit") + actions.KINDS + swap.KINDS + sound.KINDS + finish.KINDS + graphics.KINDS:
         raise HTTPException(400, "unknown job kind")
     if kind == "long" and (params.get("last_image") or params.get("last_same") or params.get("last_frame_from")):
         raise HTTPException(400, "a last frame is for single clips: a long video is a chain of clips")
@@ -2252,7 +2260,7 @@ def queue_job(body: dict) -> dict:
             raise HTTPException(400, f"a long video is over {LONGEST} seconds and at most {max(LONG) // 60} minutes")
         pieces = plan(total, int(params.get("segment_seconds", LONGEST)))
         build("video", {**params, "seconds": pieces[0], "output": None}, "check")
-    if kind not in ("export", "edit", "foley") + actions.KINDS + finish.KINDS + graphics.KINDS and not (params.get("prompt") or "").strip():
+    if kind not in ("export", "edit", "foley") + actions.KINDS + swap.KINDS + finish.KINDS + graphics.KINDS and not (params.get("prompt") or "").strip():
         raise HTTPException(400, "a prompt is needed")
     if kind != "video" and params.get("references"):
         raise HTTPException(400, "reference pictures are for single clips")
@@ -2295,10 +2303,12 @@ def queue_job(body: dict) -> dict:
               room=not (kind in ("video", "studio") and said["used"] > 1))
     if kind in graphics.KINDS and not body.get("title"):
         body = {**body, "title": graphics_title(params)}
+    if kind in swap.KINDS and not body.get("title"):
+        body = {**body, "title": swap_title(params)}
     job = {"id": job_id, "kind": kind, "status": "queued", "title": body.get("title") or (action_title(kind, params) if kind in actions.KINDS else sound_title(kind, params) if kind in sound.KINDS else kind), "params": params,
-           "source": action_source(kind, params) if kind in actions.KINDS else sound_source(kind, params) if kind in sound.KINDS else None,
+           "source": action_source(kind, params) if kind in actions.KINDS else swap_source(params) if kind in swap.KINDS else sound_source(kind, params) if kind in sound.KINDS else None,
            "outputs": [], "progress": None, "error": None, "log": "", "created": time.time(), "started": None,
-           "finished": None, "estimate": clip_estimate(kind, params, referenced, ref_media)}
+           "finished": None, "estimate": swap_estimate(params) if kind in swap.KINDS else clip_estimate(kind, params, referenced, ref_media)}
     if referenced:  # the passes a reference clip runs: the number set by hand, or the model's 20, or the adapter's 4
         job["passes"] = int(params["steps"]) if params.get("steps") not in (None, "") else 4 if params.get("ref_turbo") else 20
     if kind in ("video", "studio", "long"):
@@ -2870,6 +2880,9 @@ import motion  # noqa: E402  (Motion Previs: a Python port of Sam Wasserman's Mo
 app.include_router(motion.attach(HOME, PACK, SPARK))
 import actions  # noqa: E402  (Turnaround sheet, Upscale and Remove a person: Library actions, beside this file)
 action_router, action_build, action_title, action_source = actions.attach(HOME, PACK, SPARK, inside, relative)
+import swap  # noqa: E402  (Character Swap: the person in a part of a clip replaced by a character, a Library action, beside this file)
+swap_router, swap_build, swap_title, swap_source, swap_estimate = swap.attach(HOME, PACK, SPARK, inside, relative, media_seconds)
+app.include_router(swap_router)
 import sound  # noqa: E402  (sound effects and foley: Stable Audio Open and MMAudio, run locally, beside this file)
 sound_router, sound_build, sound_title, sound_source = sound.attach(HOME, PACK, SPARK, inside, relative, held_room, media_seconds)
 app.include_router(action_router)
