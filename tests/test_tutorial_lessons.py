@@ -82,5 +82,5 @@ def test_the_character_swap_lesson_points_at_the_panel_s_real_controls():
         assert ('"' + spot) in SWAP_JS, spot
     text = out["text"]
     for said in ("5 to 15 second", "Fast · 480p", "High · 768p", "hard cut", "opens on nobody", "On a Mac",
-                 "not licensed for use in the EU, the UK, South Korea or the US", "about 5.7 minutes at Fast"):
+                 "not licensed for use in the EU, the UK, South Korea or the US", "about 6 minutes at Fast"):
         assert said in text, said
