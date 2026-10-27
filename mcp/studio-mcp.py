@@ -136,10 +136,10 @@ TOOLS = [
                                  "picture": {"type": "string", "description": "Library path of the character's picture, outfit included"},
                                  "start": {"type": "number", "description": "where the part starts, in seconds (default 0)"},
                                  "seconds": {"type": "number", "description": "how long the part is, 5 to 15 (default 5)"},
-                                 "quality": {"type": "integer", "enum": [480, 768], "description": "the short side, 768 (default) or 480 (faster)"},
+                                 "quality": {"type": "integer", "enum": [480, 768], "description": "the short side, 480 (default, Fast) or 768 (High, a little over twice as long)"},
                                  "direction": {"type": "string", "description": "optional words for the model, e.g. she keeps her hands in her pockets"},
                                  "anchor": {"type": "boolean", "description": "put the character in the first frame first (default true)"},
-                                 "seed": {"type": "integer"}}, ("clip", "picture"))},
+                                 "seed": {"type": "integer"}, "title": {"type": "string"}}, ("clip", "picture"))},
     {"name": "queue_sound", "description": "Queue a sound: kind sfx is a sound effect from words (Stable Audio Open, 1 to 47 s, a .wav); "
                                            "kind foley makes a clip's sound for its picture (MMAudio: a .wav and the clip with it).",
      "inputSchema": text_schema({"kind": {"type": "string", "enum": ["sfx", "foley"]},

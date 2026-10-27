@@ -3,10 +3,15 @@ lessons()), run in node: python3 -m pytest tests/test_tutorial_lessons.py. "Show
 control the tab really draws (app/static/music.js, app/static/swap.js). Skipped without node."""
 import json
 import subprocess
+import sys
 import tempfile
 from pathlib import Path
 
 from test_shell_page import need_node
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "app"))
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "spark"))
+import swap  # noqa: E402  (the panel's estimates: app/swap.py)
 
 ROOT = Path(__file__).resolve().parent.parent
 HTML = (ROOT / "app/static/index.html").read_text(encoding="utf-8")
@@ -81,6 +86,25 @@ def test_the_character_swap_lesson_points_at_the_panel_s_real_controls():
     for spot in spots:
         assert ('"' + spot) in SWAP_JS, spot
     text = out["text"]
+    fast, high = (round(swap.estimate(5, q) / 60) for q in (480, 768))  # the panel's own figure: swapMinutes
     for said in ("5 to 15 second", "Fast · 480p", "High · 768p", "hard cut", "opens on nobody", "On a Mac",
-                 "not licensed for use in the EU, the UK, South Korea or the US", "about 6 minutes at Fast"):
+                 "not licensed for use in the EU, the UK, South Korea or the US", f"about {fast} minutes at Fast, about {high} at High",
+                 "a little over twice as long", "one more for about every 4.4 seconds"):
         assert said in text, said
+
+
+def test_the_swap_times_in_the_readme_and_the_tutorial_are_the_panels():
+    import swap_plan as plan
+
+    names = {1: "one", 2: "two", 3: "three", 4: "four"}
+    rows = []
+    for n in (5, 8, 10, 15):
+        windows = len(plan.windows(plan.part_frames(n)))
+        rows.append(f"| {n} s, {names[windows]} window{'s' if windows > 1 else ''} | about {round(swap.estimate(n, 480) / 60)} min | "
+                    f"about {round(swap.estimate(n, 768) / 60)} min |")
+    table = "\n".join(rows)
+    readme, tutorial = ((ROOT / name).read_text(encoding="utf-8") for name in ("README.md", "TUTORIAL.md"))
+    assert table in readme and table in tutorial, table
+    fast, high = (round(swap.estimate(5, q) / 60) for q in (480, 768))
+    assert f"a 5 s part in\n  about **{fast} minutes** at Fast and about **{high} minutes** at High" in readme  # New in 3.4.0
+    assert "a little over twice as long" in tutorial and "a little over twice as long" in readme

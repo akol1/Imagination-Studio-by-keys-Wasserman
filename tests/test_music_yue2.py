@@ -123,15 +123,53 @@ def requests_of(folder: Path) -> list[dict]:
 # ---------- which engine ----------
 
 def test_a_mac_makes_songs_with_minimax_music_3_and_yue2_says_why_not():
-    had = music.SPARK
+    had = music.SPARK, music.MAC
     try:
-        music.SPARK = False
+        music.SPARK, music.MAC = False, True
         assert music.default_engine() == "music3"
-        assert "Mac" in music_yue2.Yue2().present() and not music_yue2.installed()
+        assert music_yue2.Yue2().present() == "YuE2 has no Mac build: on a Mac the Music tab makes songs with MiniMax Music 3."
+        assert not music_yue2.installed()
         state = music.engine_state("yue2")
         assert state["available"] is False and state["installed"] is False and "Mac" in state["why"]
+        music.MAC = False  # neither a Mac nor Linux: the reason does not call it a Mac
+        assert "Linux with an NVIDIA GPU" in music_yue2.Yue2().present() and "Mac" not in music_yue2.Yue2().present()
     finally:
-        music.SPARK = had
+        music.SPARK, music.MAC = had
+
+
+def test_yue2_chosen_where_it_is_not_installed_makes_songs_with_minimax_music_3(tmp_path):
+    had = settings.HOME, music.SPARK, music.MAC
+    try:
+        settings.HOME = tmp_path
+        settings.save({"presets": {"music_engine": "yue2"}})
+        music.SPARK, music.MAC = False, True  # a Mac
+        assert music.default_engine() == "music3" and music.state()["engine"] == "music3"
+        os.environ["STUDIO_MUSIC_ENGINE"] = "yue2"
+        assert music.default_engine() == "music3"
+        os.environ.pop("STUDIO_MUSIC_ENGINE")
+        # a song that names YuE2 on a Mac is refused with the reason, not with a missing engine
+        with pytest.raises(HTTPException) as refused:
+            music.checked({"caption": "Warm pop", "lyrics": "[Verse]\nla", "seconds": 30, "engine": "yue2"})
+        assert refused.value.status_code == 400 and "no Mac build" in refused.value.detail
+        with Linux(tmp_path / "machine", installed=False):  # a Spark without YuE2
+            assert music.default_engine() == "music3"
+        with Linux(tmp_path / "other"):
+            assert music.default_engine() == "yue2"
+    finally:
+        os.environ.pop("STUDIO_MUSIC_ENGINE", None)
+        settings.HOME, music.SPARK, music.MAC = had
+
+
+def test_settings_offers_yue2_only_where_it_is_installed():
+    from test_shell_page import run as page
+
+    out = page("""answers["/api/settings"] = { settings: { presets: { music_engine: "yue2" } } }; await settingsLoad();
+      const seg = () => { SET.section = "presets"; const v = viewSettings(); const s = find(v, n => n.attrs && n.attrs["aria-label"] === "Song engine" && n.attrs.role === "radiogroup");
+        return s.kids.map(b => [text(b), b.attrs["aria-checked"]]); };
+      S.music = { engines: { yue2: { installed: false, available: false }, music3: { available: true } } }; out.mac = seg();
+      S.music.engines.yue2 = { installed: true, available: true }; out.spark = seg();""")
+    assert out["mac"] == [["Best here", "true"], ["MiniMax Music 3", "false"]]
+    assert out["spark"] == [["Best here", "false"], ["YuE2", "true"], ["MiniMax Music 3", "false"]]
 
 
 def test_linux_with_yue2_installed_defaults_to_yue2_and_without_it_to_music_3():
@@ -170,7 +208,7 @@ def test_the_setting_and_the_variable_choose_over_the_platform(tmp_path):
 def test_settings_page_and_its_defaults_name_the_song_engine():
     page = (ROOT / "app/static/settings.js").read_text()
     assert 'music_engine: "auto"' in page and '"Song engine"' in page
-    assert 'yue2: "YuE2", music3: "MiniMax Music 3"' in page
+    assert '{ yue2: "YuE2" }' in page and 'music3: "MiniMax Music 3"' in page
 
 
 # ---------- the request ----------
@@ -219,10 +257,25 @@ def test_checked_takes_the_engine_and_refuses_what_is_wrong():
             music.checked({"caption": "pop", "seconds": 400, "engine": "yue2"})
         assert "10 to 300" in long.value.detail
         assert music.guard_route({"engine": "yue2"}) == "music-yue2-int8"
+        for body, said in (({"caption": "p" * (music.CAPTION_LIMIT + 1)}, "the style is at most"),
+                           ({"caption": "pop", "lyrics": "l" * (music.LYRICS_LIMIT + 1)}, "the lyrics are at most")):
+            with pytest.raises(HTTPException) as over:  # the tab's limits, the same for both engines
+                music.checked({**body, "engine": "yue2"})
+            assert said in over.value.detail
         one.known = (time.time(), "No YuE2 weights at /x")
         with pytest.raises(HTTPException) as missing:
             music.checked({"caption": "pop", "engine": "yue2"})
         assert "No YuE2 weights" in missing.value.detail
+
+
+def test_yue2_runs_with_its_own_cuda_libraries_not_the_system_toolkit(monkeypatch):
+    monkeypatch.setenv("LD_LIBRARY_PATH", "/opt/own/lib")
+    real = Path.is_dir
+    monkeypatch.setattr(Path, "is_dir", lambda self: True if str(self).startswith("/usr/local/cuda") else real(self))
+    assert music.Cuda().environment()["LD_LIBRARY_PATH"].startswith("/usr/local/cuda/lib64")  # MiniMax Music 3's engine
+    env = music_yue2.Yue2().environment()
+    assert env["LD_LIBRARY_PATH"] == "/opt/own/lib" and "/usr/local/cuda" not in env["LD_LIBRARY_PATH"]
+    assert env["PATH"] == os.environ["PATH"]
 
 
 def test_the_server_command_and_its_weights():

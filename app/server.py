@@ -2051,6 +2051,8 @@ def perform(job: dict, worker: dict | None = None) -> None:
     finally:
         if job["status"] != "queued":
             job["finished"] = time.time()
+            if job["kind"] in swap.KINDS:  # a cancelled or failed swap's frames do not stay behind
+                swap.tidy(HOME, job["id"])
 
 
 def work() -> None:

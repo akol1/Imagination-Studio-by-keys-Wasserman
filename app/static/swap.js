@@ -11,10 +11,11 @@ async function swapLoad() { try { SWAP.state = await api("/api/swap"); } catch {
 function swapButtons(m) { if (m.kind !== "video") return [];
   if (!SWAP.state) { SWAP.state = { ready: false, why: "" }; swapLoad().then(() => { if (tab === "Library") render(); }); }
   return [el("button", { class: "small", title: SWAP.state.ready ? "Replace the person in a part of this clip with the character in a picture: the scene, the performance and the sound stay"
-    : SWAP.state.why || "Character Swap", onclick: () => actOpen("swap", m.path) }, "Swap the character…")]; }
+    : SWAP.state.why || "Character Swap", onclick: () => actOpen("swap", m.path) }, "Swap the character")]; }
 const swapAnchorBy = () => SWAP.state && SWAP.state.anchor_model === "qwen" ? "Qwen-Image-2.1" : "FLUX3-K Fast";
-// the windows a part is made in (spark/swap_plan.py): 124 frames, then 123 more for each further window
-const swapWindows = seconds => { const n = Math.round(Number(seconds) * 24); return n <= 124 ? 1 : 1 + Math.ceil((n - 124) / 123); };
+// the windows a part is made in (spark/swap_plan.py): 124 frames, then 106 more for each further window (each is at most
+// 124 frames, the 18 it carries from the window before included)
+const swapWindows = seconds => { const n = Math.round(Number(seconds) * 24); return n <= 124 ? 1 : 1 + Math.ceil((n - 124) / 106); };
 // the time a swap takes on a DGX Spark, from the studio's measured stages (/api/swap estimates, app/swap.py)
 const swapMinutes = (f, st) => { const q = (st.estimates || {})[f.quality] || {}, n = Math.min(15, Math.max(5, Math.round(Number(f.seconds))));
   const s = q[String(n)]; if (!s) return ""; const t = s - (f.anchor ? 0 : ((st.anchor_seconds || {})[f.quality] || 0)); return "about " + Math.max(1, Math.round(t / 60)) + " min"; };
@@ -50,7 +51,7 @@ function swapPanel(o) { const f = SWAP.f, st = SWAP.state || {}, redraw = () => 
       SWAP.picking ? (stills.length ? el("div", { class: "grid", style: "margin-top:10px" }, stills.map(m => el("div", { class: "tile" + (f.image === m.path ? " on" : ""), style: "cursor:pointer", title: m.path, onclick: () => swapPick(m.path) }, media(m.path))))
         : el("div", { class: "note" }, SWAP.lib ? "No pictures in the Library yet: upload one." : "Reading the Library…")) : null,
       el("div", { class: "row" }, field("Part starts at (s)", start), el("div", {}, el("label", {}, "Part length"), length, said)),
-      field("Quality", el("div", { class: "row", style: "align-items:center" }, el("div", { class: "seg-ctl", role: "radiogroup", "aria-label": "Quality" }, [["480", "Fast", "480p"], ["768", "High", "768p, about two and a half times as long"]].map(([v, t, s]) =>
+      field("Quality", el("div", { class: "row", style: "align-items:center" }, el("div", { class: "seg-ctl", role: "radiogroup", "aria-label": "Quality" }, [["480", "Fast", "480p"], ["768", "High", "768p, a little over twice as long"]].map(([v, t, s]) =>
         el("button", { type: "button", role: "radio", "aria-checked": f.quality === v ? "true" : "false", class: f.quality === v ? "on" : "", title: s, onclick: () => { f.quality = v; redraw(); } }, t + " · " + v + "p"))), took)),
       el("label", { class: "switch", style: "margin-top:8px" }, anchor, el("span", {}, "Put the character in the first frame first",
         el("small", {}, swapAnchorBy() + " draws the character into the part’s first frame, and the swap starts from that frame. Off: the swap starts from the clip’s own first frame."))),

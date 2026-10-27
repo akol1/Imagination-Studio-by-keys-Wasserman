@@ -98,6 +98,8 @@ function setPresets() { const p = prefs().presets, put1 = patch => settingsSave(
   const models = S && S.image_models && S.image_models.length ? S.image_models : [{ id: "qwen", label: "Qwen 2.1 Turbo" }];
   const lengths = Object.keys((S && S.durations) || { 3: 0, 5: 0, 8: 0, 10: 0 }).map(Number).filter(n => n >= 1 && n <= 15);
   const model = el("select", { "aria-label": "Default picture model", onchange: e => put1({ image_model: e.target.value }) }, models.map(m => el("option", { value: m.id, selected: m.id === p.image_model }, m.label)));
+  // YuE2 is offered where it is installed (music.default_engine makes a YuE2 setting MiniMax Music 3 elsewhere)
+  const yue = !!(S && S.music && S.music.engines && S.music.engines.yue2 && S.music.engines.yue2.installed);
   const secs = el("select", { "aria-label": "Default clip length", onchange: e => put1({ seconds: Number(e.target.value) }) }, (lengths.length ? lengths : [5]).map(n => el("option", { value: n, selected: Number(p.seconds) === n }, n + " s")));
   return [setPanel("Presets & preferences", "What a new take starts from: the Home composer and the Create wizard open with these.",
     setRow("Render recipe", "For clips from Home and a new Create", setSeg(p.recipe, { quick: "Quick look", ...(S && S.sharp ? { sharp: "Sharp Spec" } : {}), final: "Final 2K", custom: "Custom" }, v => put1({ recipe: v }), "Render recipe")),
@@ -107,7 +109,7 @@ function setPresets() { const p = prefs().presets, put1 = patch => settingsSave(
     setRow("QA gate on each clip", "The transcript and contact-sheet check after a Sharp Spec clip", setSwitch(p.qa_gate, v => put1({ qa_gate: v }), "QA gate")),
     setRow("Describe new clips automatically", "When nothing is rendering, the local model looks at new clips and pictures so the Library can search by what is in them", setSwitch(p.captions_auto !== false, v => put1({ captions_auto: v }), "Describe new clips automatically")),
     setRow("Delivery sound", (typeof cardFace === "function" && cardFace() ? "On this GPU" : "On a DGX Spark") + " a clip's sound is 32 kHz; 48 kHz stereo re-encodes only the sound", setSeg(p.audio_rate, { keep: "Keep 32 kHz", "48000": "48 kHz stereo" }, v => put1({ audio_rate: v }), "Delivery sound")),
-    setRow("Song engine", "For the Music tab: best here is YuE2 where it is installed (Linux, NVIDIA) and MiniMax Music 3 on a Mac; each song can still choose", setSeg(p.music_engine || "auto", { auto: "Best here", yue2: "YuE2", music3: "MiniMax Music 3" }, v => put1({ music_engine: v }), "Song engine")),
+    setRow("Song engine", "For the Music tab: best here is YuE2 where it is installed (Linux, NVIDIA) and MiniMax Music 3 on a Mac; each song can still choose", setSeg(p.music_engine === "yue2" && !yue ? "auto" : p.music_engine || "auto", { auto: "Best here", ...(yue ? { yue2: "YuE2" } : {}), music3: "MiniMax Music 3" }, v => put1({ music_engine: v }), "Song engine")),
     setRow("Seed", "Fixed repeats a take; random gives each a new one", setSeg(p.seed, { fixed: "Fixed", random: "Random" }, v => put1({ seed: v }), "Seed")),
     setRow("Renders go to", "The studio folder, set when the studio starts (STUDIO_HOME)", el("code", { class: "st-path" }, (S && S.home) || "the studio folder")))]; }
 

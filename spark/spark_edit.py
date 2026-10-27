@@ -24,6 +24,7 @@ import time
 import subprocess
 import argparse
 import json
+import signal
 import sys
 import tempfile
 import uuid
@@ -172,6 +173,7 @@ def workflow(args, pictures: list[str], prompt: str, seed: int, loras: list[tupl
 
 
 def main() -> None:
+    signal.signal(signal.SIGTERM, lambda *_: sys.exit(143))  # a cancelled job still runs the cleanup below
     parser = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     parser.add_argument("--image", required=True, action="append", help="the picture to edit; repeat for further pictures the prompt draws on (image 2, image 3, ...)")
     parser.add_argument("--prompt", default="", help="what to change (one picture, written to -o)")

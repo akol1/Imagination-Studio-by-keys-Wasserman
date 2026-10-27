@@ -5,18 +5,21 @@ It is what Comfy Org's Openjutsu app does (MIT), made inside the studio: no Comf
 job of the studio's queue (kind ``swap``) runs spark/spark_swap.py on the studio's own ComfyUI engine with ComfyUI's
 own nodes: SAM 3.1 finds the largest person in the part's first frame and follows them, the picture model puts the
 character into the first frame (the anchor, FLUX3-K Fast), then MiniMax H3 Ref2VA with Akatz Labs' Character Swap
-LoRA and LightX2V's 8-step Turbo LoRA draws the person again in windows of 124 frames, each carrying the last 18 of
-the one before. The settings are the ones Akatz Labs published for the LoRA; the code is the studio's own.
+LoRA and LightX2V's 8-step Turbo LoRA draws the person again in windows of at most 124 frames, each starting with
+the last 18 of the one before (those included in its 124). The settings are the ones Akatz Labs published for the LoRA; the code is the studio's own.
 
 Its result is renders/<job>.mp4 (the part, swapped, with the part's own sound), with the part's mask preview
 (masks/<job>/person.mp4: the person who is swapped, tinted green) and the anchor (scouts/<job>/anchor.png). It runs on
-a DGX Spark or another CUDA machine with MiniMax H3 Ref2VA (oneshot-setup-spark.sh --swap); not on a Mac.
+a DGX Spark or another NVIDIA GPU with MiniMax H3 Ref2VA (oneshot-setup-spark.sh --swap; oneshot-setup-rtx-6000.sh
+--swap on an RTX Pro 6000); not on a Mac.
 """
 
 from __future__ import annotations
 
 import importlib.util
+import math
 import os
+import shutil
 from pathlib import Path
 
 from fastapi import APIRouter, HTTPException
@@ -43,12 +46,15 @@ TURBO = "MiniMax-H3-Comfy/loras/minimax_h3_fl2v_turbo_8step_v1.0_768p_comfyui_bf
 SWAP_LORA_FILE = "h3_character_swap_v1.5.safetensors"
 SWAP_LORA = "MiniMax-H3-Comfy/loras/" + SWAP_LORA_FILE
 INSTALL = "bash oneshot-setup-spark.sh --swap"
+INSTALL_CARD = "bash oneshot-setup-rtx-6000.sh --swap"  # the same install, on a workstation's card (oneshot-setup-rtx-6000.sh)
 QUALITY = 480  # the panel's default: "Fast"; 768 is "High"
 # Measured on a DGX Spark (GB10), 2026-10-27, a 5 s and an 8 s part of a 1376x768 clip with one person, int8 Ref2VA on
 # ComfyUI's own blocks, <Video 1> at half the canvas, models loaded from the first window on:
 #   per window of 124 frames: the prompt and references encoded, the frames encoded and decoded (OVERHEAD), and one
 #   pass of eight (PASS); a shorter window takes (frames / 124) ** 1.2 of that
 #   SAM: about 6 s to find the person, 0.35 s a frame to follow them; the anchor (Qwen-Image-2.1's edit) 40 to 54 s
+# Checked 2026-10-27 on the same Spark: a 10 s part at 480 in three windows (124, 124 and 39 frames, the history in
+# them), 660 s against the 670 estimated, the two joins holding
 PASS = {480: 22.0, 768: 65.0}
 OVERHEAD = {480: 62.0, 768: 113.0}
 ANCHOR = {480: 41.0, 768: 54.0}
@@ -67,6 +73,29 @@ def estimate(seconds: float, quality: int, anchor: bool = True) -> int:
         share = (one["length"] / plan.WINDOW) ** 1.2
         total += (OVERHEAD[quality] + 8 * PASS[quality]) * share
     return int(round(total))
+
+
+def work_folder(home: Path, job_id: str) -> Path:
+    """Where a swap keeps its frames while it runs (spark_swap.py --work): gigabytes of pictures for a long part."""
+
+    return home / "renders" / f".swap-{job_id}"
+
+
+def tidy(home: Path, job_id: str) -> None:
+    """After a swap job, however it ended (server.perform): its work folder, if the script could not remove it."""
+
+    shutil.rmtree(work_folder(home, job_id), ignore_errors=True)
+
+
+def on_card() -> bool:
+    """Whether this studio is the CUDA build on a workstation's card (an RTX Pro 6000), not a DGX Spark: sparks.card_face."""
+
+    try:
+        import sparks  # looks the running server up; importing server here would start a second app
+
+        return sparks.card_face()
+    except Exception:  # noqa: BLE001 - no server to ask (a script, a test): named as a DGX Spark
+        return False
 
 
 def attach(home: Path, pack: Path, spark: bool, inside, relative, media_seconds):
@@ -89,17 +118,18 @@ def attach(home: Path, pack: Path, spark: bool, inside, relative, media_seconds)
         """Why Character Swap cannot run here, or '' when it can."""
 
         if not spark:
-            return "Character Swap runs on a DGX Spark or another CUDA machine with MiniMax H3 Ref2VA, not on a Mac."
+            return "Character Swap runs on an NVIDIA GPU (a DGX Spark, an RTX Pro 6000) with MiniMax H3 Ref2VA, not on a Mac."
+        install = INSTALL_CARD if on_card() else INSTALL  # the command this machine's installer takes
         if not any((models() / one).is_file() for one in REF2VA):
-            return f"MiniMax H3 Ref2VA is not installed: run `{INSTALL}`."
+            return f"MiniMax H3 Ref2VA is not installed: run `{install}`."
         if not (models() / SAM).is_file():
-            return f"SAM 3.1 is not installed: run `{INSTALL}`."
+            return f"SAM 3.1 is not installed: run `{install}`."
         if not (models() / TURBO).is_file():
-            return f"LightX2V's 8-step Turbo LoRA is not installed: run `{INSTALL}`."
+            return f"LightX2V's 8-step Turbo LoRA is not installed: run `{install}`."
         if swap_lora() is None:
-            return f"Akatz Labs' Character Swap LoRA (version 1.5) is not installed: run `{INSTALL}`."
+            return f"Akatz Labs' Character Swap LoRA (version 1.5) is not installed: run `{install}`."
         if not (prefix / "venv/bin/python").exists() or not (prefix / "ComfyUI/main.py").is_file():
-            return "The studio's engine is not installed here: run `bash oneshot-setup-spark.sh`."
+            return f"The studio's engine is not installed here: run `{install.rsplit(' ', 1)[0]}`."
         return ""
 
     def anchor_model() -> str:
@@ -131,9 +161,12 @@ def attach(home: Path, pack: Path, spark: bool, inside, relative, media_seconds)
         if isinstance(value, bool):
             raise HTTPException(400, f"{key} is a number")
         try:
-            return kind(value)
-        except (TypeError, ValueError):
+            number = kind(value)
+        except (TypeError, ValueError, OverflowError):
             raise HTTPException(400, f"{key} is a number")
+        if not math.isfinite(number):  # "nan" and "inf" read as numbers, and no part starts or lasts that long
+            raise HTTPException(400, f"{key} is a number")
+        return number
 
     def settings(params: dict) -> dict:
         """The job's settings checked, with the defaults filled in; 400 with the reason for what cannot be done."""
@@ -183,20 +216,19 @@ def attach(home: Path, pack: Path, spark: bool, inside, relative, media_seconds)
         target = home / "renders" / f"{job_id}.mp4"
         mask = home / "masks" / job_id / "person.mp4"
         still = home / "scouts" / job_id / "anchor.png"
-        if job_id != "check":
-            for folder in (target.parent, mask.parent, still.parent):
-                folder.mkdir(parents=True, exist_ok=True)
+        # the folders of the outputs are made by the job when it runs (spark_swap.py), not when it is queued: a job the
+        # queue refuses leaves none behind
         command = [str(prefix / "venv/bin/python"), str(pack / "spark/spark_swap.py"), "--video", str(chosen["clip"]),
                    "--image", str(chosen["picture"]), "--start", f"{chosen['start']:g}", "--seconds", f"{chosen['seconds']:g}",
                    "--quality", str(chosen["quality"]), "--seed", str(chosen["seed"]), "--swap-lora", str(swap_lora()),
                    "--turbo-lora", str(models() / TURBO), "--mask-preview", str(mask), "-o", str(target),
-                   "--work", str(home / "renders" / f".swap-{job_id}")]
+                   "--work", str(work_folder(home, job_id))]
         if chosen["anchor"]:
             command += ["--anchor-out", str(still)]
         else:
             command.append("--no-anchor")
         if chosen["direction"]:
-            command += ["--direction", chosen["direction"]]
+            command.append("--direction=" + chosen["direction"])  # one argument, even when the words start with "-"
         env = {"PREFIX": str(prefix), "SPARK_MODELS": str(models())}
         return command, env, [str(target), str(mask)] + ([str(still)] if chosen["anchor"] else [])
 

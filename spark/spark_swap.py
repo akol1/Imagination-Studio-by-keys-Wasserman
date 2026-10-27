@@ -21,8 +21,8 @@ The steps, each said as `[tensorfold] stage i/n ...` for the studio's job card:
                  strength 1): 8 passes of er_sde, normal schedule, CFG 1, sigma shift 12 for the picture and 3 for the
                  sound. The part is <Video 1> and its own sound a reference, the character <Picture 1> (the anchor
                  <Picture 2> and the guide of the first frame). Only the grown mask is drawn again: the rest of each
-                 frame is the clip's own. A part over 124 frames is made in windows of 124, each carrying the last 18
-                 frames of the one before (spark/swap_plan.py).
+                 frame is the clip's own. A part over 124 frames is made in windows of at most 124, each starting
+                 with the last 18 frames of the one before, those included (spark/swap_plan.py).
 6. assembly      the windows' frames joined, the part's own sound laid under them, H.264 at 24 frames a second.
 
 The models stay loaded from one window to the next: only the first window loads them.
@@ -37,6 +37,7 @@ import asyncio
 import json
 import os
 import shutil
+import signal
 import subprocess
 import sys
 import time
@@ -628,6 +629,9 @@ def need(nodes: tuple[str, ...]) -> None:
 
 
 def main() -> None:
+    # a cancelled job is stopped with SIGTERM (server.cancel): leave through the cleanup below, so the work folder's
+    # frames and the pictures handed to ComfyUI do not stay behind
+    signal.signal(signal.SIGTERM, lambda *_: sys.exit(143))
     parser = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     parser.add_argument("--video", required=True)
     parser.add_argument("--image", required=True, help="the character, outfit included")
@@ -651,6 +655,9 @@ def main() -> None:
         if not Path(path).is_file():
             sys.exit(f"no {what} at {path}")
     target = Path(args.output)
+    for path in (args.mask_preview, args.anchor_out):  # their folders are made here, when the job runs (app/swap.py)
+        if path:
+            Path(path).parent.mkdir(parents=True, exist_ok=True)
     work = Path(args.work) if args.work else target.parent / f".swap-{target.stem}"
     if work.exists():
         shutil.rmtree(work)

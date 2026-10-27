@@ -43,14 +43,16 @@ def test_the_model_grid_and_its_latent_frames():
 
 @pytest.mark.parametrize("seconds,expected", [
     (5, [(0, 124, 0, 4, 0, 119)]),
-    (10, [(0, 124, 0, 0, 0, 123), (106, 141, 18, 7, 124, 239)]),
-    (15, [(0, 124, 0, 0, 0, 123), (106, 141, 18, 0, 124, 246), (229, 141, 18, 10, 247, 359)]),
+    (9, [(0, 124, 0, 0, 0, 123), (106, 124, 18, 14, 124, 215)]),
+    (10, [(0, 124, 0, 0, 0, 123), (106, 124, 18, 0, 124, 229), (212, 39, 18, 11, 230, 239)]),
+    (15, [(0, 124, 0, 0, 0, 123), (106, 124, 18, 0, 124, 229), (212, 124, 18, 0, 230, 335), (318, 56, 18, 14, 336, 359)]),
 ])
 def test_windows_of_124_frames_with_18_of_history_for_5_10_and_15_seconds(seconds, expected):
     frames = plan.part_frames(seconds)
     made = plan.windows(frames, 124, 18)
     assert [(w["start"], w["length"], w["held"], w["pad"], w["first"], w["last"]) for w in made] == expected
     assert all(plan.on_grid(w["length"]) and w["of"] == len(made) for w in made)
+    assert all(w["length"] <= 124 for w in made)  # the history counted: no window is longer than the 124 measured
     covered = [f for w in made for f in range(w["first"], w["last"] + 1)]
     assert covered == list(range(frames))  # every frame of the part made once, in order
     for before, after in zip(made, made[1:]):  # each later window starts 17 frames before the last one delivered
@@ -62,6 +64,15 @@ def test_the_example_of_a_six_second_part():
     # 144 frames: the second window is 22 frames drawn after 17 carried, 39 in all, with one frame past the end
     second = plan.windows(144)[1]
     assert (second["start"], second["length"], second["pad"], second["first"], second["last"]) == (106, 39, 1, 124, 143)
+
+
+def test_every_part_from_5_to_15_seconds_is_made_in_windows_of_at_most_124_frames():
+    for frames in range(120, 361):
+        made = plan.windows(frames)
+        assert all(plan.on_grid(w["length"]) and w["length"] <= plan.WINDOW for w in made), frames
+        assert [f for w in made for f in range(w["first"], w["last"] + 1)] == list(range(frames)), frames
+        assert all(w["length"] == plan.WINDOW for w in made[:-1]), frames  # only the last is shorter
+    assert len(plan.windows(230)) == 2 and len(plan.windows(231)) == 3  # 124, then 106 new frames a window
 
 
 def test_the_canvas_keeps_the_clip_shape_on_32():
@@ -124,7 +135,7 @@ def test_a_swap_is_built_with_the_parts_settings_and_its_outputs(tmp_path):
     command, env, outputs = s.build("swap", {**GOOD, "direction": "  she keeps   her hands in her pockets ", "seed": 7}, "j1")
     joined = " ".join(command)
     assert command[0] == str(s.prefix / "venv/bin/python") and command[1].endswith("spark/spark_swap.py")
-    for words in ("--start 1", "--seconds 5", "--quality 768", "--seed 7", "--direction she keeps her hands in her pockets"):
+    for words in ("--start 1", "--seconds 5", "--quality 768", "--seed 7", "--direction=she keeps her hands in her pockets"):
         assert words in joined
     assert command[command.index("--swap-lora") + 1].endswith("h3_character_swap_v1.5.safetensors")
     assert command[command.index("--turbo-lora") + 1].endswith("minimax_h3_fl2v_turbo_8step_v1.0_768p_comfyui_bf16.safetensors")
@@ -135,6 +146,34 @@ def test_a_swap_is_built_with_the_parts_settings_and_its_outputs(tmp_path):
     assert "--no-anchor" in command and "--anchor-out" not in command and len(outputs) == 2
     assert command[command.index("--seed") + 1] == str(swap.SEED)  # Akatz Labs' own seed when none is given
     assert s.title({"video": "uploads/clip.mp4"}) == "Character Swap: clip.mp4" and s.source({"video": "uploads/clip.mp4"}) == "uploads/clip.mp4"
+    # nothing is made when the job is built (a full queue may still refuse it): the job makes its folders when it runs
+    assert not (s.home / "masks/j1").exists() and not (s.home / "scouts/j1").exists()
+
+
+def test_a_direction_that_starts_with_a_dash_reaches_the_script_as_the_direction(tmp_path, monkeypatch):
+    import argparse
+    import signal
+
+    s = stand_in(tmp_path)
+    command, _, _ = s.build("swap", {**GOOD, "direction": "-- no hat, -x"}, "j3")
+    read, real = {}, argparse.ArgumentParser.parse_args
+
+    class Read(Exception):
+        pass
+
+    def parse(self, args=None, namespace=None):
+        read["args"] = real(self, args, namespace)
+        raise Read
+
+    monkeypatch.setattr(argparse.ArgumentParser, "parse_args", parse)
+    monkeypatch.setattr(sys, "argv", command[1:])
+    before = signal.getsignal(signal.SIGTERM)
+    try:
+        with pytest.raises(Read):
+            spark_swap.main()  # stopped once spark_swap.py's own parser has read the command
+    finally:
+        signal.signal(signal.SIGTERM, before)
+    assert read["args"].direction == "-- no hat, -x" and read["args"].seed == 904239
 
 
 @pytest.mark.parametrize("change,said", [
@@ -152,6 +191,12 @@ def test_a_swap_is_built_with_the_parts_settings_and_its_outputs(tmp_path):
     ({"direction": "x" * 501}, "at most 500"),
     ({"seed": -2}, "whole number"),
     ({"seed": True}, "seed is a number"),
+    ({"start": "nan"}, "start is a number"),
+    ({"start": float("inf")}, "start is a number"),
+    ({"seconds": "nan"}, "seconds is a number"),
+    ({"seconds": "-inf"}, "seconds is a number"),
+    ({"seed": float("inf")}, "seed is a number"),
+    ({"quality": "nan"}, "quality is a number"),
 ])
 def test_what_a_swap_refuses_before_it_is_queued(tmp_path, change, said):
     s = stand_in(tmp_path)
@@ -169,6 +214,15 @@ def test_where_it_cannot_run_it_says_what_to_install(tmp_path):
     with pytest.raises(HTTPException) as refused:
         bare.build("swap", GOOD, "j1")
     assert "oneshot-setup-spark.sh --swap" in refused.value.detail
+    import sparks
+    had = sparks.card_face
+    try:  # on a workstation's card the hint names that machine's installer
+        sparks.card_face = lambda: True
+        with pytest.raises(HTTPException) as refused:
+            bare.build("swap", GOOD, "j1")
+        assert "oneshot-setup-rtx-6000.sh --swap" in refused.value.detail
+    finally:
+        sparks.card_face = had
     s = stand_in(tmp_path / "some")
     (s.models / swap.SWAP_LORA).unlink()
     from fastapi import FastAPI
@@ -247,7 +301,7 @@ def test_a_window_runs_ref2va_int8_with_both_loras_and_akatz_labs_settings(monke
 
 def test_a_later_window_carries_the_history_and_not_the_anchor(monkeypatch):
     w, one = graph(monkeypatch, index=2, direction="the cape moves in the wind")
-    assert one["held"] == 18 and one["length"] == 141
+    assert one["held"] == 18 and one["length"] == 124
     assert "<Picture 2>" not in w["20"]["inputs"]["prompt"] and w["20"]["inputs"]["prompt"].endswith("the cape moves in the wind")
     assert "ref_images.ref_image_1" not in w["20"]["inputs"] and "26" not in w
     assert w["14"]["inputs"]["file"] == "in_pixels.mp4" and w["15"]["inputs"]["video"] == ["14", 0] and w["11"]["inputs"]["file"] == "in_ref.mp4"
@@ -308,6 +362,63 @@ def test_a_part_past_the_clips_end_or_out_of_range_is_refused(tmp_path):
         assert said in str(refused.value)
 
 
+CANCELLED = r"""
+import sys, time, types
+from pathlib import Path
+sys.path.insert(0, sys.argv[1])
+import spark_swap
+spark_swap.sg = types.SimpleNamespace(UPLOADED=[], PREFIX=Path("/nowhere"))
+
+def prepare(args, work):  # the part cut out, a picture handed to ComfyUI, then a long wait
+    (work / "part").mkdir()
+    (work / "part" / "00001.png").write_bytes(b"x" * 1000)
+    spark_swap.put(Path(args.image))
+    print("READY", flush=True)
+    time.sleep(60)
+
+spark_swap.prepare = prepare
+sys.argv = ["spark_swap.py", *sys.argv[2:]]
+spark_swap.main()
+"""
+
+
+def test_a_cancelled_swap_leaves_no_frames_and_no_pictures_in_comfyui(tmp_path):
+    import signal
+
+    for name in ("clip.mp4", "hero.png", "swap.safetensors", "turbo.safetensors"):
+        (tmp_path / name).write_bytes(b"x")
+    work, given = tmp_path / "renders" / ".swap-j1", tmp_path / "input"
+    script = tmp_path / "cancelled.py"
+    script.write_text(CANCELLED)
+    process = subprocess.Popen([sys.executable, str(script), str(ROOT / "spark"), "--video", str(tmp_path / "clip.mp4"),
+                                "--image", str(tmp_path / "hero.png"), "--swap-lora", str(tmp_path / "swap.safetensors"),
+                                "--turbo-lora", str(tmp_path / "turbo.safetensors"), "--work", str(work), "-o", str(tmp_path / "renders/j1.mp4")],
+                               stdout=subprocess.PIPE, text=True, env={**os.environ, "SPARK_COMFY_INPUT": str(given)})
+    try:
+        while "READY" not in process.stdout.readline():
+            assert process.poll() is None, "the stand-in ended before it was ready"
+        assert work.is_dir() and [f.name for f in given.iterdir()][0].startswith("studio_")
+        process.send_signal(signal.SIGTERM)  # what server.cancel sends
+        assert process.wait(20) == 143
+    finally:
+        if process.poll() is None:
+            process.kill()
+    assert not work.exists() and list(given.iterdir()) == []
+
+
+def test_a_swap_s_work_folder_is_removed_however_the_job_ended(tmp_path):
+    os.environ.setdefault("STUDIO_HOME", str(Path(tempfile.mkdtemp()) / "TensorFoldStudio"))
+    import server
+
+    left = swap.work_folder(server.HOME, "0101-000000-tidy01")
+    (left / "window1").mkdir(parents=True)
+    (left / "window1" / "00001.png").write_bytes(b"x")
+    job = {"id": "0101-000000-tidy01", "kind": "swap", "status": "running", "params": {"image": "uploads/x.png"}, "log": "",
+           "outputs": [], "progress": None, "error": None}
+    server.perform(job)  # refused when its turn comes (no clip): the job fails, and its folder goes with it
+    assert job["status"] == "failed" and not left.exists()
+
+
 # ---------------------------------------------------------------- the studio around it
 
 def test_the_studio_takes_a_swap_job_and_shows_its_stages(tmp_path):
@@ -344,8 +455,69 @@ def test_the_agents_swap_a_character_through_the_studio_tools(monkeypatch):
     assert not reply.get("isError"), reply
     assert sent[-1] == ("POST", "/api/jobs", {"kind": "swap", "params": {"video": "renders/a.mp4", "image": "scouts/b/hero.png",
                                                                           "start": 2, "seconds": 10, "quality": 480}})
+    quality = listed["swap_character"]["inputSchema"]["properties"]["quality"]["description"]
+    assert quality.startswith(f"the short side, {swap.QUALITY} (default") and "title" in listed["swap_character"]["inputSchema"]["properties"]
+    mcp.answer({"method": "tools/call", "params": {"name": "swap_character", "arguments": {"clip": "renders/a.mp4", "picture": "scouts/b/hero.png",
+                                                                                        "title": "Hero swap"}}})
+    assert sent[-1][2]["title"] == "Hero swap"
     import agents
     assert "swap_character" in agents.MAKERS and "swap_character" in agents.STUDIO_TOOLS
+
+
+FAKE_GIT = """#!/bin/bash
+# the node packs already at their pinned commits: `git -C <dir> rev-parse HEAD` answers the commit setup-workflows.sh wants
+case "$(basename "$2")" in
+  ComfyUI-H3-ContactSheet) echo 3c8c8c66e69362e5abf9cf4c4e693baddab90ca3;;
+  ComfyUI-H3-Video-Upsampler) echo 36cb612ec3df30094eeb4fec66f1528925ebba73;;
+  h3-relay) echo cf489b7f2472fdf33866fae36de49aea03ef464f;;
+esac
+"""
+# a download stood in for: curl writes the file asked for, and its checksum is taken as right
+FAKE_CURL = """#!/bin/bash
+while [ $# -gt 0 ]; do [ "$1" = -o ] && { echo weights > "$2"; shift; }; shift; done
+"""
+
+
+def setup_machine(tmp_path, comfy=True):
+    """A Spark with ComfyUI and every model the two setups fetch already there; git and curl stood in for."""
+
+    prefix, models, tools = tmp_path / "prefix", tmp_path / "models", tmp_path / "bin"
+    tools.mkdir(parents=True)
+    for name, text in (("git", FAKE_GIT), ("curl", FAKE_CURL), ("sha256sum", "#!/bin/bash\ncat >/dev/null\n")):
+        (tools / name).write_text(text)
+        (tools / name).chmod(0o755)
+    if comfy:
+        (prefix / "ComfyUI").mkdir(parents=True)
+        (prefix / "ComfyUI/main.py").write_text("")
+        (prefix / "ComfyUI/extra_model_paths.yaml").write_text("studio:\n  base_path: " + str(models) + "\n")
+    for one in (swap.SAM, swap.REF2VA[0], "MiniMax-H3-Comfy/diffusion_models/minimax_h3_ref2va_pruned_bf16.safetensors", swap.TURBO,
+                swap.SWAP_LORA, "Workflows-Comfy/latent_upscale_models/minimax_h3_latent_upscaler_3d_bf16.safetensors"):
+        (models / one).parent.mkdir(parents=True, exist_ok=True)
+        (models / one).write_bytes(b"x")
+    env = {**os.environ, "PREFIX": str(prefix), "SPARK_MODELS": str(models), "PATH": f"{tools}:{os.environ['PATH']}"}
+    return prefix, models, env
+
+
+@pytest.mark.parametrize("first,then", [("setup-swap.sh", "setup-workflows.sh"), ("setup-workflows.sh", "setup-swap.sh")])
+def test_both_setups_leave_comfyui_both_model_folders_whichever_runs_first(tmp_path, first, then):
+    prefix, _, env = setup_machine(tmp_path)
+    for script in (first, then, first):
+        done = subprocess.run(["bash", str(ROOT / "spark" / script)], capture_output=True, text=True, env=env)
+        assert done.returncode == 0, done.stdout + done.stderr
+    yaml = (prefix / "ComfyUI/extra_model_paths.yaml").read_text()
+    assert yaml.count("Workflows-Comfy/checkpoints") == 1 and yaml.count("Workflows-Comfy/latent_upscale_models") == 1
+    assert yaml.count("  checkpoints: |") == 1 and yaml.count("  latent_upscale_models: |") == 1
+    verify = subprocess.run(["bash", str(ROOT / "spark/setup-workflows.sh"), "--verify"], capture_output=True, text=True, env=env)
+    assert verify.returncode == 0 and "does not list" not in verify.stdout
+
+
+def test_the_swap_setup_downloads_before_the_studio_is_installed(tmp_path):
+    _, models, env = setup_machine(tmp_path, comfy=False)
+    (models / swap.SWAP_LORA).unlink()
+    (models / swap.TURBO).unlink()
+    done = subprocess.run(["bash", str(ROOT / "spark/setup-swap.sh")], capture_output=True, text=True, env=env)
+    assert done.returncode == 0, done.stdout + done.stderr  # no $PREFIX yet: nothing to mark for a restart, and no stop
+    assert done.stdout.count("(downloaded)") == 2 and (models / swap.SWAP_LORA).is_file() and (models / swap.TURBO).is_file()
 
 
 def test_the_installer_fetches_the_swaps_files_and_the_checklist_lists_it():
@@ -410,7 +582,7 @@ def test_a_clip_gets_swap_the_character_and_its_panel_queues_one_job():
     got = page("""
       ACT.state = { upscale: { ready: true }, remove: { ready: true }, turnaround: { ready: true } };
       SWAP.state = { ready: true, seconds: [5, 15], qualities: [480, 768], quality: 480, anchor: true, anchor_model: "flux3k-fast", direction_most: 500,
-                     estimates: { "480": { "5": 331, "10": 651 }, "768": { "5": 739, "10": 1520 } }, anchor_seconds: { "480": 41, "768": 54 },
+                     estimates: { "480": { "5": 331, "10": 670 }, "768": { "5": 739, "10": 1572 } }, anchor_seconds: { "480": 41, "768": 54 },
                      licence: "MiniMax H3 and the Character Swap LoRA (Akatz Labs): MiniMax H3 Community License, not licensed for use in the EU, the UK, South Korea or the US." };
       out.video = actButtons({ kind: "video", path: "renders/a.mp4" }).map(b => text(b.kids));
       out.image = actButtons({ kind: "image", path: "uploads/a.png" }).map(b => text(b.kids));
@@ -421,7 +593,9 @@ def test_a_clip_gets_swap_the_character_and_its_panel_queues_one_job():
       out.range = (({ min, max, step }) => ({ min, max, step }))(find(panel, n => n.attrs && n.attrs.type === "range").attrs);
       hot(panel).attrs.onclick(); out.refused = toasts.slice(-1)[0];
       SWAP.f.image = "scouts/s1/hero.png"; SWAP.f.seconds = 10; SWAP.f.start = 2; SWAP.f.direction = "keep the scarf";
-      out.windows = text(actPanel()).includes("2 windows"); out.ten = text(actPanel());
+      out.windows = text(actPanel()).includes("3 windows"); out.ten = text(actPanel());
+      out.counts = [5, 6, 9, 10, 14, 15].map(swapWindows);
+      out.high = find(actPanel(), n => n.attrs && n.attrs.class === "seg-ctl").kids[1].attrs.title;
       answers["/api/jobs"] = { id: "j7", title: "Character Swap: a.mp4" };
       await hot(actPanel()).attrs.onclick(); out.sent = calls.slice(-1)[0];
       jobs = [{ id: "j7", status: "done", outputs: ["renders/j7.mp4", "masks/j7/person.mp4", "scouts/j7/anchor.png"] }];
@@ -429,7 +603,7 @@ def test_a_clip_gets_swap_the_character_and_its_panel_queues_one_job():
       SWAP.state = { ready: false, why: "Character Swap runs on a DGX Spark or another CUDA machine with MiniMax H3 Ref2VA, not on a Mac." };
       out.mac = text(actPanel());
     """)
-    assert got["video"] == ["Upscale", "Remove a person", "Restyle", "Extend", "Fix", "Swap the character…"] and got["image"] == ["Turnaround"]
+    assert got["video"] == ["Upscale", "Remove a person", "Restyle", "Extend", "Fix", "Swap the character"] and got["image"] == ["Turnaround"]
     assert got["id"] == "actpanel" and "Character Swap" in got["panel"] and "Swap the character" in got["panel"]
     assert "largest person" in got["panel"] and "Put the character in the first frame first" in got["panel"] and "FLUX3-K Fast" in got["panel"]
     assert "not licensed for use in the EU, the UK, South Korea or the US" in got["panel"]
@@ -437,6 +611,9 @@ def test_a_clip_gets_swap_the_character_and_its_panel_queues_one_job():
     assert "about 6 min on a DGX Spark" in got["panel"] and "about 11 min on a DGX Spark" in got["ten"]
     assert got["refused"] == "Choose the character’s picture first"
     assert got["windows"] is True
+    assert got["counts"] == [len(plan.windows(plan.part_frames(n))) for n in (5, 6, 9, 10, 14, 15)]  # as swap_plan.py makes them
+    assert got["high"] == "768p, a little over twice as long"
+    assert all(2 < swap.estimate(n, 768) / swap.estimate(n, 480) < 2.5 for n in range(5, 16))  # what that title says
     assert got["sent"] == ["/api/jobs", {"kind": "swap", "params": {"video": "renders/a.mp4", "image": "scouts/s1/hero.png", "start": 2, "seconds": 10,
                                                                    "quality": 480, "anchor": True, "direction": "keep the scarf", "seed": 904239}}]
     assert "job j7" in got["done"] and "Swapped" in got["done"] and "Who was swapped, in green" in got["done"] and "The first frame it started from" in got["done"]
