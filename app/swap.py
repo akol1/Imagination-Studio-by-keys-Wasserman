@@ -5,8 +5,8 @@ It is what Comfy Org's Openjutsu app does (MIT), made inside the studio: no Comf
 job of the studio's queue (kind ``swap``) runs spark/spark_swap.py on the studio's own ComfyUI engine with ComfyUI's
 own nodes: SAM 3.1 finds the largest person in the part's first frame and follows them, the picture model puts the
 character into the first frame (the anchor, FLUX3-K Fast), then MiniMax H3 Ref2VA with Akatz Labs' Character Swap
-LoRA and LightX2V's 8-step Turbo LoRA draws the person again in windows of 124 frames, each carrying the last 18 of
-the one before. The settings are the ones Akatz Labs published for the LoRA; the code is the studio's own.
+LoRA and LightX2V's 8-step Turbo LoRA draws the person again in windows of at most 124 frames, each starting with
+the last 18 of the one before (those included in its 124). The settings are the ones Akatz Labs published for the LoRA; the code is the studio's own.
 
 Its result is renders/<job>.mp4 (the part, swapped, with the part's own sound), with the part's mask preview
 (masks/<job>/person.mp4: the person who is swapped, tinted green) and the anchor (scouts/<job>/anchor.png). It runs on

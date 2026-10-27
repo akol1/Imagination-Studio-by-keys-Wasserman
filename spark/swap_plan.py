@@ -6,9 +6,10 @@ MiniMax H3 takes 17n + 5 frames at 24 a second (22, 39, ..., 124, ..., 362). Its
 (1, 4, 4, 4, 4, 1, 4, ...). So 17k + 1 pixel frames fill whole latent frames, which is why the history carried from one
 window to the next is 18 frames: 17 frames before the join and the frame at the join itself.
 
-A part longer than one window is made in windows of at most 124 frames. The first starts at the part's first frame.
-Each later window starts 17 frames before the last frame the window before delivered: those 17 frames and that last
-frame (the join) are the previous window's own output, held as they are, and the window draws what follows. The last
+A part longer than one window is made in windows of at most 124 frames each, the frames carried in included. The
+first starts at the part's first frame. Each later window starts 17 frames before the last frame the window before
+delivered: those 17 frames and that last frame (the join) are the previous window's own output, held as they are, and
+the window draws what follows, at most 107 frames from the join (17 + 107 = 124), so 106 new frames a window. The last
 window is made a little longer than what is left (to the next 17n + 5) and the extra frames at its end are dropped.
 """
 
@@ -17,7 +18,7 @@ from __future__ import annotations
 import math
 
 FPS = 24
-WINDOW = 124          # frames a window draws at most (5.17 s)
+WINDOW = 124          # frames a window is at most, the history included (5.17 s)
 HISTORY = 18          # frames carried into the next window: 17 before the join, and the join
 SECONDS = (5.0, 15.0)  # the part of the clip that is swapped
 QUALITIES = (480, 768)  # the short side of the canvas
@@ -90,6 +91,7 @@ def windows(frames: int, window: int = WINDOW, history: int = HISTORY) -> list[d
     if frames < 5:
         raise ValueError("a part is at least 5 frames")
     past = history - 1
+    most = window - past  # a later window's frames from the join on: the window, the history included, stays in ``window``
     plan = []
     length = min(window, grid_up(frames))
     plan.append({"index": 1, "start": 0, "length": length, "held": 0, "pad": max(0, length - frames),
@@ -97,7 +99,7 @@ def windows(frames: int, window: int = WINDOW, history: int = HISTORY) -> list[d
     while plan[-1]["last"] < frames - 1:
         join = plan[-1]["last"]
         left = frames - join  # the join and everything after it
-        target = window if left > window else grid_up(left)
+        target = most if left > most else grid_up(left)
         start = join - past
         plan.append({"index": len(plan) + 1, "start": start, "length": past + target, "held": history,
                      "pad": max(0, target - left), "first": join + 1, "last": min(frames - 1, join + target - 1),

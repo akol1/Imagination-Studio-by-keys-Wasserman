@@ -198,17 +198,17 @@ shot. The clip keeps its own sound, which still holds the removed person's voice
 
 ## 8.7 Character Swap: a picture's character in place of the person in a clip
 
-**Swap the character…** (under a clip; DGX Spark or a GPU) puts the character in one picture in place of the person
+**Swap the character** (under a clip; DGX Spark or a GPU) puts the character in one picture in place of the person
 in a part of the clip. The scene, the performance and the clip's own sound stay: the person's moves, gaze and timing
 carry over, the room and anyone else in it are the clip's own. Install it with `bash oneshot-setup-spark.sh --swap`
 (2.1 GB beside MiniMax H3 Ref2VA, which it adds when it is not there). It is not on a Mac: there the panel says so. The
 app has the same lesson: **Tutorial → Character Swap**.
 
-1. Press **Swap the character…** under a clip in the Library. The panel opens with the clip beside its settings.
+1. Press **Swap the character** under a clip in the Library. The panel opens with the clip beside its settings.
 2. **The character.** Upload a picture, or press **Pick from the Library** and click one. Head to toe if you can: the
    face, the hair and the whole outfit come from it.
 3. **The part.** *Part starts at (s)* and *Part length*, 5 to 15 seconds. The line under the slider says where the part
-   ends and in how many windows it is made (one up to 5.2 s, then one more for about every 5 s).
+   ends and in how many windows it is made (one up to 5.2 s, then one more for about every 4.4 s).
 4. **Fast or High.** *Fast · 480p* is the default; *High · 768p* takes a little over twice as long. The time
    beside it is what the part you chose takes on a DGX Spark.
 5. **The first frame.** Leave **Put the character in the first frame first** on: the picture model (FLUX3-K Fast, or
@@ -224,7 +224,8 @@ app has the same lesson: **Tutorial → Character Swap**.
 |---|---|---|
 | 5 s, one window | about 6 min | about 12 min |
 | 8 s, two windows | about 9 min | about 20 min |
-| 15 s, three windows | about 16 min | about 38 min |
+| 10 s, three windows | about 11 min | about 26 min |
+| 15 s, four windows | about 16 min | about 39 min |
 
 Measured on a DGX Spark with the GPU to itself; another job on the GPU at the same time makes it slower.
 

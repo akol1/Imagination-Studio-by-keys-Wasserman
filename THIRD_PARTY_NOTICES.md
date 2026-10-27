@@ -156,8 +156,8 @@ no node pack is installed for it and no code of anyone below is copied into this
   and the example workflows on the LoRA's Hugging Face page (`examples/`, under the MIT notice kept there). Their
   settings are used: strength 1 for both LoRAs, 8 passes of `er_sde` with the `normal` schedule at CFG 1, sigma shift
   12 for the picture and 3 for the sound, SAM finding "person" at 0.35 with two refinement passes and following them
-  at 0.5 with one object, the largest person, masks grown by 64 pixels, windows of 124 frames carrying 18 frames of
-  history, seed 904239.
+  at 0.5 with one object, the largest person, masks grown by 64 pixels, windows of at most 124 frames, 18 of them the
+  history carried from the window before, seed 904239.
 - Their ComfyUI node pack for it (`h3_character_swap` in akatz-labs/h3-character-swap-tool) and their H3 Relay pack
   are GNU General Public License v3.0. Neither is installed for this action and no code of either was read into or
   copied into this pack: how the mask, the history and the windows work here was written from the LoRA's model card,

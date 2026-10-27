@@ -198,7 +198,7 @@ A Mac has nothing new to install: neither runs on a Mac, and its Music tab stays
   above the Music tab's form (YuE2 · MiniMax Music 3) chooses for each song, and Settings → Presets → *Song engine* sets
   the default (*Best here*: YuE2 where it is installed, MiniMax Music 3 on a Mac). Each take keeps its score
   (*Download score*). `--yue2` is about 13 GB. [YuE2 songs](#yue2-songs).
-- **Character Swap.** *Swap the character…* under a clip in the Library: choose a picture of the character and a part
+- **Character Swap.** *Swap the character* under a clip in the Library: choose a picture of the character and a part
   of the clip (5 to 15 seconds), and the person in it is drawn again as that character, with the clip's own scene,
   performance and sound kept. **Fast** (480p, the default) or **High** (768p); the picture model first puts the
   character into the part's first frame and the swap starts from it (*Put the character in the first frame first*).
@@ -2237,13 +2237,13 @@ returns the first job and `revise`, the steps so far; `GET /api/revise/<id>` fol
 
 ### Character Swap
 
-*Swap the character…* under a clip in the Library replaces the person in a part of the clip with the character in one
+*Swap the character* under a clip in the Library replaces the person in a part of the clip with the character in one
 picture. The scene, the performance and the clip's own sound stay: the person's moves, gaze and timing carry over, the
 room and the other people are the clip's own, and the part keeps its soundtrack.
 
 ![Character Swap in the Library: the clip, the character's picture, the part, Fast or High, the first-frame switch, a direction and the licence line](docs/screenshots/character-swap.webp)
 
-1. Press **Swap the character…** under a clip. The panel opens with the clip beside its settings.
+1. Press **Swap the character** under a clip. The panel opens with the clip beside its settings.
 2. Choose **the character**: upload a picture or pick one from the Library. Head to toe if you can: the face, the hair
    and the whole outfit come from it.
 3. Choose **the part**: where it starts and how long it is (5 to 15 seconds).
@@ -2257,18 +2257,20 @@ room and the other people are the clip's own, and the part keeps its soundtrack.
 How it works: SAM 3.1 finds the people in the part's first frame and the largest one is swapped; it follows them
 through the part, and the mask is grown by 64 pixels so hair, hands and the outfit's edges are inside it. Only that
 person is drawn again: the rest of each frame is the clip's own. MiniMax H3 Ref2VA with Akatz Labs' Character Swap
-LoRA and LightX2V's 8-step Turbo LoRA draws the person, 8 passes a window, in windows of 124 frames (5.2 s), each
-carrying the last 18 frames of the window before so the joins hold. It all runs on this machine on the studio's own
-engine: no ComfyUI to open, no account, no cloud.
+LoRA and LightX2V's 8-step Turbo LoRA draws the person, 8 passes a window, in windows of at most 124 frames (5.2 s),
+each starting with the last 18 frames of the window before so the joins hold: 106 new frames a window after the first.
+It all runs on this machine on the studio's own engine: no ComfyUI to open, no account, no cloud.
 
-How long it takes on a DGX Spark with the GPU to itself (measured; the panel shows the figure for the part you chose;
-another job on the GPU at the same time makes it slower: 9.7 min for the 5 s Fast swap beside a language model):
+How long it takes on a DGX Spark with the GPU to itself, from the measured stages, as the panel shows it for the part
+you chose (High takes a little over twice as long as Fast; another job on the GPU at the same time makes it slower:
+9.7 min for the 5 s Fast swap beside a language model):
 
 | Part | Fast (480p) | High (768p) |
 |---|---|---|
-| 5 s, one window | about 5.5 min | about 12 min |
+| 5 s, one window | about 6 min | about 12 min |
 | 8 s, two windows | about 9 min | about 20 min |
-| 15 s, three windows | about 16 min | about 38 min |
+| 10 s, three windows | about 11 min | about 26 min |
+| 15 s, four windows | about 16 min | about 39 min |
 
 Where the time goes, 5 s at 480p: cutting the part 1 s, finding the person 5 s, following them 37 s, the first frame 40 s,
 then the window: the prompt and the references read 25 s, the frames encoded 21 s, eight passes of 21 to 23 s, the

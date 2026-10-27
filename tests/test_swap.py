@@ -43,14 +43,16 @@ def test_the_model_grid_and_its_latent_frames():
 
 @pytest.mark.parametrize("seconds,expected", [
     (5, [(0, 124, 0, 4, 0, 119)]),
-    (10, [(0, 124, 0, 0, 0, 123), (106, 141, 18, 7, 124, 239)]),
-    (15, [(0, 124, 0, 0, 0, 123), (106, 141, 18, 0, 124, 246), (229, 141, 18, 10, 247, 359)]),
+    (9, [(0, 124, 0, 0, 0, 123), (106, 124, 18, 14, 124, 215)]),
+    (10, [(0, 124, 0, 0, 0, 123), (106, 124, 18, 0, 124, 229), (212, 39, 18, 11, 230, 239)]),
+    (15, [(0, 124, 0, 0, 0, 123), (106, 124, 18, 0, 124, 229), (212, 124, 18, 0, 230, 335), (318, 56, 18, 14, 336, 359)]),
 ])
 def test_windows_of_124_frames_with_18_of_history_for_5_10_and_15_seconds(seconds, expected):
     frames = plan.part_frames(seconds)
     made = plan.windows(frames, 124, 18)
     assert [(w["start"], w["length"], w["held"], w["pad"], w["first"], w["last"]) for w in made] == expected
     assert all(plan.on_grid(w["length"]) and w["of"] == len(made) for w in made)
+    assert all(w["length"] <= 124 for w in made)  # the history counted: no window is longer than the 124 measured
     covered = [f for w in made for f in range(w["first"], w["last"] + 1)]
     assert covered == list(range(frames))  # every frame of the part made once, in order
     for before, after in zip(made, made[1:]):  # each later window starts 17 frames before the last one delivered
@@ -62,6 +64,15 @@ def test_the_example_of_a_six_second_part():
     # 144 frames: the second window is 22 frames drawn after 17 carried, 39 in all, with one frame past the end
     second = plan.windows(144)[1]
     assert (second["start"], second["length"], second["pad"], second["first"], second["last"]) == (106, 39, 1, 124, 143)
+
+
+def test_every_part_from_5_to_15_seconds_is_made_in_windows_of_at_most_124_frames():
+    for frames in range(120, 361):
+        made = plan.windows(frames)
+        assert all(plan.on_grid(w["length"]) and w["length"] <= plan.WINDOW for w in made), frames
+        assert [f for w in made for f in range(w["first"], w["last"] + 1)] == list(range(frames)), frames
+        assert all(w["length"] == plan.WINDOW for w in made[:-1]), frames  # only the last is shorter
+    assert len(plan.windows(230)) == 2 and len(plan.windows(231)) == 3  # 124, then 106 new frames a window
 
 
 def test_the_canvas_keeps_the_clip_shape_on_32():
@@ -290,7 +301,7 @@ def test_a_window_runs_ref2va_int8_with_both_loras_and_akatz_labs_settings(monke
 
 def test_a_later_window_carries_the_history_and_not_the_anchor(monkeypatch):
     w, one = graph(monkeypatch, index=2, direction="the cape moves in the wind")
-    assert one["held"] == 18 and one["length"] == 141
+    assert one["held"] == 18 and one["length"] == 124
     assert "<Picture 2>" not in w["20"]["inputs"]["prompt"] and w["20"]["inputs"]["prompt"].endswith("the cape moves in the wind")
     assert "ref_images.ref_image_1" not in w["20"]["inputs"] and "26" not in w
     assert w["14"]["inputs"]["file"] == "in_pixels.mp4" and w["15"]["inputs"]["video"] == ["14", 0] and w["11"]["inputs"]["file"] == "in_ref.mp4"
@@ -571,7 +582,7 @@ def test_a_clip_gets_swap_the_character_and_its_panel_queues_one_job():
     got = page("""
       ACT.state = { upscale: { ready: true }, remove: { ready: true }, turnaround: { ready: true } };
       SWAP.state = { ready: true, seconds: [5, 15], qualities: [480, 768], quality: 480, anchor: true, anchor_model: "flux3k-fast", direction_most: 500,
-                     estimates: { "480": { "5": 331, "10": 651 }, "768": { "5": 739, "10": 1520 } }, anchor_seconds: { "480": 41, "768": 54 },
+                     estimates: { "480": { "5": 331, "10": 670 }, "768": { "5": 739, "10": 1572 } }, anchor_seconds: { "480": 41, "768": 54 },
                      licence: "MiniMax H3 and the Character Swap LoRA (Akatz Labs): MiniMax H3 Community License, not licensed for use in the EU, the UK, South Korea or the US." };
       out.video = actButtons({ kind: "video", path: "renders/a.mp4" }).map(b => text(b.kids));
       out.image = actButtons({ kind: "image", path: "uploads/a.png" }).map(b => text(b.kids));
@@ -582,7 +593,9 @@ def test_a_clip_gets_swap_the_character_and_its_panel_queues_one_job():
       out.range = (({ min, max, step }) => ({ min, max, step }))(find(panel, n => n.attrs && n.attrs.type === "range").attrs);
       hot(panel).attrs.onclick(); out.refused = toasts.slice(-1)[0];
       SWAP.f.image = "scouts/s1/hero.png"; SWAP.f.seconds = 10; SWAP.f.start = 2; SWAP.f.direction = "keep the scarf";
-      out.windows = text(actPanel()).includes("2 windows"); out.ten = text(actPanel());
+      out.windows = text(actPanel()).includes("3 windows"); out.ten = text(actPanel());
+      out.counts = [5, 6, 9, 10, 14, 15].map(swapWindows);
+      out.high = find(actPanel(), n => n.attrs && n.attrs.class === "seg-ctl").kids[1].attrs.title;
       answers["/api/jobs"] = { id: "j7", title: "Character Swap: a.mp4" };
       await hot(actPanel()).attrs.onclick(); out.sent = calls.slice(-1)[0];
       jobs = [{ id: "j7", status: "done", outputs: ["renders/j7.mp4", "masks/j7/person.mp4", "scouts/j7/anchor.png"] }];
@@ -590,7 +603,7 @@ def test_a_clip_gets_swap_the_character_and_its_panel_queues_one_job():
       SWAP.state = { ready: false, why: "Character Swap runs on a DGX Spark or another CUDA machine with MiniMax H3 Ref2VA, not on a Mac." };
       out.mac = text(actPanel());
     """)
-    assert got["video"] == ["Upscale", "Remove a person", "Restyle", "Extend", "Fix", "Swap the character…"] and got["image"] == ["Turnaround"]
+    assert got["video"] == ["Upscale", "Remove a person", "Restyle", "Extend", "Fix", "Swap the character"] and got["image"] == ["Turnaround"]
     assert got["id"] == "actpanel" and "Character Swap" in got["panel"] and "Swap the character" in got["panel"]
     assert "largest person" in got["panel"] and "Put the character in the first frame first" in got["panel"] and "FLUX3-K Fast" in got["panel"]
     assert "not licensed for use in the EU, the UK, South Korea or the US" in got["panel"]
@@ -598,6 +611,9 @@ def test_a_clip_gets_swap_the_character_and_its_panel_queues_one_job():
     assert "about 6 min on a DGX Spark" in got["panel"] and "about 11 min on a DGX Spark" in got["ten"]
     assert got["refused"] == "Choose the character’s picture first"
     assert got["windows"] is True
+    assert got["counts"] == [len(plan.windows(plan.part_frames(n))) for n in (5, 6, 9, 10, 14, 15)]  # as swap_plan.py makes them
+    assert got["high"] == "768p, a little over twice as long"
+    assert all(2 < swap.estimate(n, 768) / swap.estimate(n, 480) < 2.5 for n in range(5, 16))  # what that title says
     assert got["sent"] == ["/api/jobs", {"kind": "swap", "params": {"video": "renders/a.mp4", "image": "scouts/s1/hero.png", "start": 2, "seconds": 10,
                                                                    "quality": 480, "anchor": True, "direction": "keep the scarf", "seed": 904239}}]
     assert "job j7" in got["done"] and "Swapped" in got["done"] and "Who was swapped, in green" in got["done"] and "The first frame it started from" in got["done"]
