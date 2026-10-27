@@ -1,0 +1,110 @@
+[
+ {
+  "engine": "int8-groups",
+  "round": 0,
+  "seed": 7,
+  "audio_seconds": 103.95866666666667,
+  "total_seconds": 120.84881643299013,
+  "rtf": 1.1624698575682977,
+  "abc_tokens": 874,
+  "abc_seconds": 8.471150678116828,
+  "abc_tps": 103.17370487314881,
+  "semantic_tokens": 2600,
+  "semantic_seconds": 23.5208501201123,
+  "semantic_tps": 110.54022225909182,
+  "nar_seconds": 15.213832068955526,
+  "vae_seconds": 73.63700911100022,
+  "peak_torch_gib": 7.94158935546875,
+  "engine_weight_gib": 2.4214096069335938,
+  "rms": 0.1514887392051422,
+  "attention": "tensorfold-int8-groups",
+  "neighbours_before": {
+   "reservations": [],
+   "processes": [
+    81043
+   ]
+  },
+  "neighbours_after": {
+   "reservations": [
+    "claude-34-swap"
+   ],
+   "processes": [
+    81043,
+    1332396
+   ]
+  }
+ },
+ {
+  "engine": "bf16",
+  "round": 0,
+  "seed": 7,
+  "audio_seconds": 103.27866666666667,
+  "total_seconds": 219.98335694684647,
+  "rtf": 2.1299980339293674,
+  "abc_tokens": 874,
+  "abc_seconds": 16.197105813072994,
+  "abc_tps": 53.9602574735653,
+  "semantic_tokens": 2583,
+  "semantic_seconds": 65.9519419639837,
+  "semantic_tps": 39.164881625632404,
+  "nar_seconds": 34.02079642098397,
+  "vae_seconds": 103.80655389092863,
+  "peak_torch_gib": 8.191237926483154,
+  "engine_weight_gib": 4.0341796875,
+  "rms": 0.18434350873119648,
+  "attention": "tensorfold-bf16",
+  "neighbours_before": {
+   "reservations": [
+    "claude-34-swap"
+   ],
+   "processes": [
+    81043,
+    1332396
+   ]
+  },
+  "neighbours_after": {
+   "reservations": [
+    "claude-34-swap"
+   ],
+   "processes": [
+    81043,
+    1332396
+   ]
+  }
+ },
+ {
+  "engine": "torch",
+  "round": 0,
+  "seed": 7,
+  "audio_seconds": 108.11866666666667,
+  "total_seconds": 326.2692096061073,
+  "rtf": 3.0176954605998407,
+  "abc_tokens": 929,
+  "abc_seconds": 53.813081779982895,
+  "abc_tps": 17.26346028272933,
+  "semantic_tokens": 2704,
+  "semantic_seconds": 164.04558502999134,
+  "semantic_tps": 16.483223242525217,
+  "nar_seconds": 32.52931564487517,
+  "vae_seconds": 55.76710114395246,
+  "peak_torch_gib": 8.241751194000244,
+  "engine_weight_gib": 0,
+  "rms": 0.16744715285614045,
+  "attention": "flash",
+  "neighbours_before": {
+   "reservations": [
+    "claude-34-swap"
+   ],
+   "processes": [
+    81043,
+    1332396
+   ]
+  },
+  "neighbours_after": {
+   "reservations": [],
+   "processes": [
+    81043
+   ]
+  }
+ }
+]

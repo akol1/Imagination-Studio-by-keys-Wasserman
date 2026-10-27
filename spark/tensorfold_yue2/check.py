@@ -29,6 +29,29 @@ LYRICS = ("[Verse]\nMorning light on the window pane\nCoffee cooling while I wai
           "[Chorus]\nHold on, the day is new\nHold on, the sky is blue\nEverything I need is here with you\n")
 
 
+def neighbours():
+    """Other GPU work on the machine while timing (the governor's other reservations and other CUDA processes): a
+    timing taken beside another job is marked, not trusted."""
+    import os
+    import subprocess
+    seen = {"reservations": [], "processes": []}
+    governor = os.environ.get("SPARK_GOVERNOR", "/data/model_vault/spark-workload-governor/admission_client.py")
+    try:
+        status = json.loads(subprocess.run(["python3", governor, "--owner", "probe", "--status"], capture_output=True,
+                                           text=True, timeout=20).stdout)
+        seen["reservations"] = sorted(r["owner"] for r in status.get("reservations", [])
+                                      if not str(r["owner"]).startswith("claude-34-tfyue"))
+    except Exception:
+        seen["reservations"] = ["unknown"]
+    try:
+        rows = subprocess.run(["nvidia-smi", "--query-compute-apps=pid", "--format=csv,noheader"], capture_output=True,
+                              text=True, timeout=20).stdout.split()
+        seen["processes"] = sorted(int(p) for p in rows if p.isdigit() and int(p) != os.getpid())
+    except Exception:
+        pass
+    return seen
+
+
 def load(args):
     import torch
     from yue2.pipeline import YuE2Pipeline
@@ -214,7 +237,7 @@ def bench(args):
     engine = tf.Engine(model, weights=args.weights, splits=args.splits)
     TF = tf.graph_ar_class(engine, GraphAR)
     prefs, request = prefixes(pipe, "semantic", False, args.seed)
-    out = {"weights": args.weights, "engine": engine.info(), "decode": []}
+    out = {"weights": args.weights, "engine": engine.info(), "decode": [], "neighbours_before": neighbours()}
     with torch.inference_mode():
         for context in args.contexts:
             for name, cls in (("torch", GraphAR), ("tensorfold", TF)):
@@ -257,49 +280,145 @@ def bench(args):
         same = next((i for i, (x, y) in enumerate(zip(a, b)) if x != y), min(len(a), len(b)))
         out["semantic_same_tokens_before_divergence"] = same
     out["peak_torch_gib"] = torch.cuda.max_memory_allocated() / 2**30
+    out["neighbours_after"] = neighbours()
     engine.close()
     Path(args.out).write_text(json.dumps(out, indent=1))
 
 
 def song(args):
+    """Whole songs, one after another in one process (the model loaded once): `--engine torch,int8-groups` runs the
+    same request on each in turn; `--repeat 2` runs the list twice."""
     import numpy as np
     import torch
     import tensorfold_yue2 as tf
     pipe, model = load(args)
-    engine = None
-    if args.engine != "torch":
-        engine = tf.Engine(model, weights=args.engine, splits=args.splits)
-        tf.install(engine)
-    torch.cuda.reset_peak_memory_stats()
-    t0 = time.perf_counter()
-    try:
-        result = pipe(STYLE, LYRICS, seed=args.seed)
-    finally:
-        tf.uninstall()
-    total = time.perf_counter() - t0
-    audio = result.audio
-    if args.audio_out:
-        result.save(args.audio_out)
-        np.save(Path(args.audio_out).with_suffix(".tokens.npy"), np.asarray(result.semantic.tokens, dtype=np.int32))
-    seconds = len(audio) / result.sample_rate
-    t = result.timing
-    out = {"engine": args.engine, "seed": args.seed, "audio_seconds": seconds, "total_seconds": total,
-           "rtf": total / seconds, "abc_tokens": t["abc"].get("output_tokens"), "abc_seconds": t["abc"].get("seconds"),
-           "abc_tps": t["abc"].get("output_tps"), "semantic_tokens": t["semantic"]["output_tokens"],
-           "semantic_seconds": t["semantic"]["seconds"], "semantic_tps": t["semantic"]["output_tps"],
-           "nar_seconds": t["nar_seconds"], "vae_seconds": t["vae_seconds"],
-           "peak_torch_gib": torch.cuda.max_memory_allocated() / 2**30,
-           "engine_weight_gib": engine.info()["weight_bytes"] / 2**30 if engine else 0,
-           "rms": float(np.sqrt((audio.astype(np.float64) ** 2).mean())), "attention": t["semantic"].get("attention")}
-    print(json.dumps(out), flush=True)
-    Path(args.out).write_text(json.dumps(out, indent=1))
-    if engine:
+    engines, results = {}, []
+    for round_ in range(args.repeat):
+        for name in args.engine.split(","):
+            if name != "torch":
+                if name not in engines:
+                    # the pipeline moves its model to the CPU for the VAE: back on the GPU to copy from
+                    engines[name] = tf.Engine(pipe._load_model(), weights=name, splits=args.splits)
+                tf.install(engines[name])
+            torch.cuda.reset_peak_memory_stats()
+            before = neighbours()
+            t0 = time.perf_counter()
+            try:
+                result = pipe(STYLE, LYRICS, seed=args.seed)
+            finally:
+                tf.uninstall()
+            total = time.perf_counter() - t0
+            audio = result.audio
+            if args.audio_out and round_ == 0:
+                path = Path(args.audio_out.replace("{engine}", name))
+                result.save(path)
+                np.save(path.with_suffix(".tokens.npy"), np.asarray(result.semantic.tokens, dtype=np.int32))
+                np.save(path.with_suffix(".abc.npy"), np.asarray(result.semantic.plan.abc_ids, dtype=np.int32))
+            seconds = len(audio) / result.sample_rate
+            t = result.timing
+            out = {"engine": name, "round": round_, "seed": args.seed, "audio_seconds": seconds, "total_seconds": total,
+                   "rtf": total / seconds, "abc_tokens": t["abc"].get("output_tokens"), "abc_seconds": t["abc"].get("seconds"),
+                   "abc_tps": t["abc"].get("output_tps"), "semantic_tokens": t["semantic"]["output_tokens"],
+                   "semantic_seconds": t["semantic"]["seconds"], "semantic_tps": t["semantic"]["output_tps"],
+                   "nar_seconds": t["nar_seconds"], "vae_seconds": t["vae_seconds"],
+                   "peak_torch_gib": torch.cuda.max_memory_allocated() / 2**30,
+                   "engine_weight_gib": engines[name].info()["weight_bytes"] / 2**30 if name in engines else 0,
+                   "rms": float(np.sqrt((audio.astype(np.float64) ** 2).mean())),
+                   "attention": t["semantic"].get("attention"), "neighbours_before": before, "neighbours_after": neighbours()}
+            print(json.dumps(out), flush=True)
+            results.append(out)
+            Path(args.out).write_text(json.dumps(results, indent=1))
+    for engine in engines.values():
         engine.close()
+
+
+def nll(args):
+    """The reference model's mean negative log-likelihood (teacher forced, bf16 prompt pass, the phase's allowed rows)
+    of the score and song tokens each engine drew in `song` (--audio-out files): tokens drawn from the same model's
+    distribution score alike; a decode that drifted would draw tokens the reference finds less likely."""
+    import numpy as np
+    import torch
+    from yue2.protocol import SongRequest, token_prefixes, CODEC_OFFSET, MUSIC_END, ABC_END
+    pipe, model = load(args)
+    request = SongRequest(style=STYLE, lyrics=LYRICS, seed=args.seed)
+    out = []
+    for name in args.engine.split(","):
+        base = Path(args.audio_out.replace("{engine}", name))
+        abc = np.load(base.with_suffix(".abc.npy")).tolist()
+        codec = np.load(base.with_suffix(".tokens.npy")).tolist()
+        row = {"engine": name, "abc_tokens": len(abc), "semantic_tokens": len(codec)}
+        with torch.inference_mode():
+            for phase, prefix, drawn in (("abc", token_prefixes(request, pipe.tokenizer), abc + [ABC_END]),
+                                         ("semantic", token_prefixes(request, pipe.tokenizer, abc),
+                                          [c + CODEC_OFFSET for c in codec] + [MUSIC_END])):
+                ids = torch.tensor([prefix + drawn], device="cuda")
+                logits = model(ids, use_cache=False).logits[0, len(prefix) - 1:-1].float()
+                rows = allowed(phase, model.config.vocab_size).cuda()
+                logp = logits[:, rows].log_softmax(-1)
+                index = torch.searchsorted(rows, torch.tensor(drawn, device="cuda"))
+                picked = logp.gather(1, index[:, None])[:, 0]
+                row[f"{phase}_nll"] = float(-picked.mean())
+                row[f"{phase}_greedy_share"] = float((logp.argmax(-1) == index).float().mean())
+        print(json.dumps(row), flush=True)
+        out.append(row)
+    Path(args.out).write_text(json.dumps(out, indent=1))
+
+
+def longparity(args):
+    """Teacher forcing over a whole song: a song's own score and semantic tokens (a `song --audio-out` run) fed to
+    PyTorch's decode and the engine's, compared in windows of 256 positions: logits cosine, greedy agreement, the TV of
+    the sampling distributions, and each decode's mean NLL of the forced tokens (raw logits, the phase's rows)."""
+    import numpy as np
+    import torch
+    import tensorfold_yue2 as tf
+    from yue2.cuda_graph import GraphAR
+    from yue2.protocol import SongRequest, token_prefixes, CODEC_OFFSET
+    from yue2.sampling import distribution
+    pipe, model = load(args)
+    engine = tf.Engine(model, weights=args.weights, splits=args.splits)
+    TF = tf.graph_ar_class(engine, GraphAR)
+    request = SongRequest(style=STYLE, lyrics=LYRICS, seed=args.seed)
+    base = Path(args.audio_out)
+    abc = np.load(base.with_suffix(".abc.npy")).tolist()
+    codec = np.load(base.with_suffix(".tokens.npy")).tolist()
+    prefix = token_prefixes(request, pipe.tokenizer, abc)
+    forced = [c + CODEC_OFFSET for c in codec][: args.steps]
+    sampling = pipe.generation_config.semantic
+    rows = allowed("semantic", model.config.vocab_size).cuda()
+    windows, cur = [], None
+    with torch.inference_mode():
+        ref, mine = GraphAR(model, [prefix], len(forced) + 1), TF(model, [prefix], len(forced) + 1)
+        lr, le = ref.prefill(), mine.prefill()
+        for i, tid in enumerate(forced):
+            if i % 256 == 0:
+                cur = {"from": len(prefix) + i, "n": 0, "cos": 0.0, "greedy": 0, "tv": 0.0, "nll_ref": 0.0, "nll_eng": 0.0}
+                windows.append(cur)
+            r, e = lr.float()[0, rows], le.float()[0, rows]
+            k = int(torch.searchsorted(rows, torch.tensor(tid, device="cuda")))
+            cur["n"] += 1
+            cur["cos"] += float(torch.nn.functional.cosine_similarity(r, e, dim=0))
+            cur["greedy"] += int(r.argmax() == e.argmax())
+            hist = forced[max(0, i - sampling.penalty_window):i]
+            pr = distribution(lr[:1], sampling, hist, i, "semantic").softmax(-1)
+            pe = distribution(le[:1], sampling, hist, i, "semantic").softmax(-1)
+            cur["tv"] += float(0.5 * (pr - pe).abs().sum())
+            cur["nll_ref"] -= float(r.log_softmax(0)[k])
+            cur["nll_eng"] -= float(e.log_softmax(0)[k])
+            token = torch.tensor([[tid]], device="cuda")
+            lr, le = ref.step(token).clone(), mine.step(token).clone()
+        ref.close()
+        mine.close()
+    for w in windows:
+        for key in ("cos", "greedy", "tv", "nll_ref", "nll_eng"):
+            w[key] /= w["n"]
+        print(json.dumps(w), flush=True)
+    engine.close()
+    Path(args.out).write_text(json.dumps({"weights": args.weights, "prefix": len(prefix), "windows": windows}, indent=1))
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
-    parser.add_argument("what", choices=("parity", "bench", "song"))
+    parser.add_argument("what", choices=("parity", "bench", "song", "nll", "longparity"))
     parser.add_argument("--model", required=True)
     parser.add_argument("--vae", required=True)
     parser.add_argument("--weights", default="int8", choices=sorted(__import__("tensorfold_yue2").WEIGHTS))
@@ -311,11 +430,12 @@ def main():
     parser.add_argument("--contexts", type=int, nargs="+", default=[1000, 4000, 12000])
     parser.add_argument("--semantic-tokens", type=int, default=1500)
     parser.add_argument("--seed", type=int, default=7)
+    parser.add_argument("--repeat", type=int, default=1)
     parser.add_argument("--budget", type=float, default=40)
     parser.add_argument("--audio-out", default="")
     parser.add_argument("--out", required=True)
     args = parser.parse_args()
-    {"parity": parity, "bench": bench, "song": song}[args.what](args)
+    {"parity": parity, "bench": bench, "song": song, "nll": nll, "longparity": longparity}[args.what](args)
 
 
 if __name__ == "__main__":

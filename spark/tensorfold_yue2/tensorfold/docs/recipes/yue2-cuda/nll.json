@@ -1,0 +1,29 @@
+[
+ {
+  "engine": "int8-groups",
+  "abc_tokens": 873,
+  "semantic_tokens": 2599,
+  "abc_nll": 0.1421702355146408,
+  "abc_greedy_share": 0.9519450664520264,
+  "semantic_nll": 3.222316026687622,
+  "semantic_greedy_share": 0.2488461583852768
+ },
+ {
+  "engine": "bf16",
+  "abc_tokens": 873,
+  "semantic_tokens": 2582,
+  "abc_nll": 0.14546708762645721,
+  "abc_greedy_share": 0.9496567249298096,
+  "semantic_nll": 3.1560261249542236,
+  "semantic_greedy_share": 0.2520325183868408
+ },
+ {
+  "engine": "torch",
+  "abc_tokens": 928,
+  "semantic_tokens": 2703,
+  "abc_nll": 0.15277598798274994,
+  "abc_greedy_share": 0.9515607953071594,
+  "semantic_nll": 2.7930796146392822,
+  "semantic_greedy_share": 0.3250739574432373
+ }
+]

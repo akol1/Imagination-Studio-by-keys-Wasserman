@@ -155,7 +155,8 @@ pub const Model = struct {
     weight_bytes: usize = 0,
     steps: u64 = 0,
     captures: u64 = 0,
-    /// GEMVs with programmatic dependent launch (sm_90 up): their first weight loads overlap the kernel before
+    /// GEMVs with programmatic dependent launch (sm_90 up, TF_YUE2_PDL=1): their first weight loads overlap the
+    /// kernel before. Off by default: the measured parity and speed are without it.
     pdl: bool = false,
 
     pub fn qkvRows(self: *const Model) usize {
@@ -196,7 +197,7 @@ pub const Model = struct {
         inline for (kernel_names, 0..) |name, i| self.functions[i] = try self.module.function(name);
         self.capture = try cuda.Stream.init(d, true);
         errdefer self.capture.deinit();
-        self.pdl = (try self.ctx.capability()) >= 90 and std.c.getenv("TF_YUE2_NO_PDL") == null;
+        self.pdl = (try self.ctx.capability()) >= 90 and std.c.getenv("TF_YUE2_PDL") != null;
         var made: std.ArrayList(*cuda.DeviceBuffer) = .empty;
         defer made.deinit(gpa);
         errdefer for (made.items) |b| b.free();
