@@ -53,6 +53,8 @@ QUALITY = 480  # the panel's default: "Fast"; 768 is "High"
 #   per window of 124 frames: the prompt and references encoded, the frames encoded and decoded (OVERHEAD), and one
 #   pass of eight (PASS); a shorter window takes (frames / 124) ** 1.2 of that
 #   SAM: about 6 s to find the person, 0.35 s a frame to follow them; the anchor (Qwen-Image-2.1's edit) 40 to 54 s
+# Checked 2026-10-27 on the same Spark: a 10 s part at 480 in three windows (124, 124 and 39 frames, the history in
+# them), 660 s against the 670 estimated, the two joins holding
 PASS = {480: 22.0, 768: 65.0}
 OVERHEAD = {480: 62.0, 768: 113.0}
 ANCHOR = {480: 41.0, 768: 54.0}
