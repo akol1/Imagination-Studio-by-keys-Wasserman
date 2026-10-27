@@ -123,8 +123,10 @@ class Yue2(music.Cuda):
     def present(self) -> str:
         """What is missing for YuE2 here ("" when its environment and weights are there): files only, no process."""
 
+        if not music.SPARK and music.MAC:
+            return "YuE2 has no Mac build: on a Mac the Music tab makes songs with MiniMax Music 3."
         if not music.SPARK:
-            return "YuE2 runs on Linux with an NVIDIA GPU (a DGX Spark, an RTX Pro 6000); on a Mac the Music tab uses MiniMax Music 3."
+            return "YuE2 runs on Linux with an NVIDIA GPU (a DGX Spark, an RTX Pro 6000); here the Music tab uses MiniMax Music 3."
         if not nvidia():
             return "YuE2 needs an NVIDIA GPU with BF16, and this machine shows none."
         if not self.python().is_file():

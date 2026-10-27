@@ -764,18 +764,18 @@ def yue2():
 def default_engine() -> str:
     """The engine of a song that names none: STUDIO_MUSIC_ENGINE, else the setting (presets.music_engine) when it names
     one, else YuE2 where it is installed (Linux, an NVIDIA GPU, its environment and weights) and MiniMax Music 3
-    elsewhere (a Mac, or no YuE2)."""
+    elsewhere (a Mac, or no YuE2). YuE2 named where it is not installed is MiniMax Music 3: a setting carried over from
+    another machine, or made before YuE2 was removed, never leaves the Music tab without an engine."""
 
     told = (os.environ.get("STUDIO_MUSIC_ENGINE") or "").strip().lower()
-    if told in ENGINES:
-        return told
     try:
         import settings
 
         chosen = settings.load()["presets"].get("music_engine", "auto") if settings.HOME else "auto"
     except Exception:  # noqa: BLE001 - a settings file that cannot be read leaves the platform's default
         chosen = "auto"
-    if chosen in ENGINES:
+    chosen = told if told in ENGINES else chosen
+    if chosen == "music3":
         return chosen
     return "yue2" if SPARK and yue2().installed() else "music3"
 
