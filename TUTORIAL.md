@@ -209,7 +209,7 @@ app has the same lesson: **Tutorial → Character Swap**.
    face, the hair and the whole outfit come from it.
 3. **The part.** *Part starts at (s)* and *Part length*, 5 to 15 seconds. The line under the slider says where the part
    ends and in how many windows it is made (one up to 5.2 s, then one more for about every 5 s).
-4. **Fast or High.** *Fast · 480p* is the default; *High · 768p* takes about two and a half times as long. The time
+4. **Fast or High.** *Fast · 480p* is the default; *High · 768p* takes a little over twice as long. The time
    beside it is what the part you chose takes on a DGX Spark.
 5. **The first frame.** Leave **Put the character in the first frame first** on: the picture model (FLUX3-K Fast, or
    Qwen-Image-2.1 where FLUX3-K is not installed) draws the character into the part's first frame, and the swap starts
@@ -222,7 +222,7 @@ app has the same lesson: **Tutorial → Character Swap**.
 
 | Part | Fast (480p) | High (768p) |
 |---|---|---|
-| 5 s, one window | about 5.7 min | about 13 min |
+| 5 s, one window | about 6 min | about 12 min |
 | 8 s, two windows | about 9 min | about 20 min |
 | 15 s, three windows | about 16 min | about 38 min |
 

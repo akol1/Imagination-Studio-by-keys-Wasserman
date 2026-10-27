@@ -204,7 +204,7 @@ A Mac has nothing new to install: neither runs on a Mac, and its Music tab stays
   character into the part's first frame and the swap starts from it (*Put the character in the first frame first*).
   It runs on the studio's own MiniMax H3 Ref2VA (int8), with LightX2V's 8-step Turbo LoRA, Akatz Labs' Character Swap
   LoRA v1.5 and SAM 3.1 to find and follow the person. Measured on a DGX Spark with the GPU to itself: a 5 s part in
-  about **5.7 minutes** at Fast and about **13 minutes** at High. A part with a hard cut, or with nobody in its first
+  about **6 minutes** at Fast and about **12 minutes** at High. A part with a hard cut, or with nobody in its first
   frame, is refused before anything is drawn. DGX Spark and CUDA only. `--swap` is 2.1 GB beside Ref2VA (it ticks
   `--ref2va` when Ref2VA is not there). [Character Swap](#character-swap).
 
