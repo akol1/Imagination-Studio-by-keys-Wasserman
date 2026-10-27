@@ -192,9 +192,9 @@ A Mac has nothing new to install: neither runs on a Mac, and its Music tab stays
 
 - **YuE2 songs.** m-a-p's YuE2-3B and its YuE2-Vae decoder write the song's score first (melody and chords), then the
   song: sung vocals and accompaniment, 48 kHz stereo, up to five minutes. It runs as a resident server in an
-  environment of its own (`$PREFIX/yue2`), with an int8 copy of the model's projections for the token loop. Measured
-  on one DGX Spark: a 60 s song in about **48 s**, a 2-minute song in about **80 s**, the model loaded in 12 to 15 s,
-  and Whisper heard **96 to 98 %** of the words sung. MiniMax Music 3 stays one click away: the **engine picker**
+  environment of its own (`$PREFIX/yue2`); on a DGX Spark the song's tokens run on TensorFold's CUDA engine (int8).
+  Measured on one DGX Spark: a 60 s song in about **38 s**, a 2-minute song in about **64 s**, the model loaded in
+  about 6 s, and Whisper heard **94 to 97 %** of the words sung. MiniMax Music 3 stays one click away: the **engine picker**
   above the Music tab's form (YuE2 · MiniMax Music 3) chooses for each song, and Settings → Presets → *Song engine* sets
   the default (*Best here*: YuE2 where it is installed, MiniMax Music 3 on a Mac). Each take keeps its score
   (*Download score*). `--yue2` is about 13 GB. [YuE2 songs](#yue2-songs).
@@ -3079,20 +3079,27 @@ which YuE2 does not run on). Each engine's licence line shows under the picker.
   Spark), stays loaded for five minutes after a song (`YUE2_IDLE_S`), and is unloaded at once when any other job
   starts, MiniMax Music 3 included. While loaded it holds the studio's GPU lock. Whisper's lyrics check works as for
   MiniMax Music 3.
-- **Speed.** The score and the song's tokens are written with an int8 copy of the model's projections (twice as fast
-  as bf16, the same words heard); everything else runs on YuE2's own bf16 weights. `YUE2_QUANT=bf16` runs bf16 only.
+- **Speed.** On a DGX Spark the score and the song's tokens run on TensorFold's CUDA engine for YuE2
+  (`libtf_yue2.so`, built by `--yue2`: int8 weights, a scale for each group of 128, one CUDA graph a token), about
+  3x the speed of bf16, its next-token choices checked against YuE2's own bf16 ones token by token over whole songs;
+  the flow matching and the decoder run on YuE2's own bf16 and fp32 weights. Where the engine is not built (another GPU) the tokens use an int8 copy of the
+  model's projections in PyTorch instead. `YUE2_BACKEND=torch` runs that loop on a Spark too; `YUE2_QUANT=bf16` runs
+  bf16 only.
 
-Measured on one DGX Spark (GB10), the model loaded, English indie-pop lyrics at seed 21 (each song ran longer than its
-length and was cut there); Whisper's check on two 60 s songs at seeds 7 and 11; the peak is the server's own memory:
+Measured on one DGX Spark (GB10), the model loaded, English indie-pop lyrics at seeds 7, 11 and 21 (each song ran
+longer than its length and was cut there); Whisper's check on each song; the peak is PyTorch's (the engine holds
+2.6 GB more beside it, the int8 PyTorch loop's copies 1.8 GB):
 
-| Setting | 30 s song | 60 s song | 120 s song | Whisper heard (60 s) | At the peak (120 s) |
+| Setting | 60 s song | 120 s song | Whisper heard (60 s / 120 s) | Ready in | At the peak (120 s) |
 |---|---|---|---|---|---|
-| int8 token loop (default) | 34.6 s | 48.1 s | 79.8 s | 96 and 97 % of the words sung | 19.1 GB |
-| bf16 (`YUE2_QUANT=bf16`) | 70.8 s | 94.9 s | 146.7 s | 98 and 97 % | 19.4 GB |
+| TensorFold engine, int8 (default on a DGX Spark) | 35.0 to 40.4 s | 60.4 to 66.9 s | 94 to 97 % / 97 % | 6 s | 17.2 GB |
+| int8 PyTorch token loop (`YUE2_BACKEND=torch`, other GPUs) | 45.7 to 47.6 s | 76.0 to 78.8 s | 68 to 97 % / 79 to 99 % | 21 s | 17.3 GB |
+| bf16 (`YUE2_QUANT=bf16 YUE2_BACKEND=torch`) | 94.9 s | 146.7 s | 98 and 97 % (60 s, seeds 7 and 11) | about 15 s | 19.4 GB (the process's own) |
 
-Through the app (a test studio), a 45 s song with the default settings, the model loading first, took 76.9 s and
-Whisper heard 92 % of its words. The score comes first and takes about 20 s (int8) whatever the length; the song itself then makes about two seconds of
-song a second. Four instrumentals of 65 and 70 s took 47 to 76 s.
+The score comes first, about 1,200 to 1,800 tokens whatever the length (11 to 17 s on the engine, 17 to 19 s on the
+PyTorch loop); the song then takes about 0.4 s a second of song (0.5 s on the PyTorch loop). Through the app (a test
+studio), a 45 s song on the PyTorch loop, the model loading first, took 76.9 s and Whisper heard 92 % of its words.
+Four instrumentals of 65 and 70 s took 47 to 76 s on the PyTorch loop.
 
 **Licence.** YuE2's code is Apache 2.0. Its weights are CC BY-NC 4.0 with the YuE2 authors' additional permission for
 individual creators: personal users, content creators and musicians may publish, sell and license the songs they make,

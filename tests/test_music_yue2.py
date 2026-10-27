@@ -237,6 +237,30 @@ def test_the_server_command_and_its_weights():
         assert one.argv()[one.argv().index("--backend") + 1] == "blocks"
 
 
+def test_the_tokens_go_to_tensorfolds_engine_where_it_is_built():
+    """With libtf_yue2.so built under PREFIX (spark/build-yue2-engine.sh, a GB10 only) the server runs with
+    ``--backend blocks`` and the tab's estimates are the engine's; YUE2_BACKEND=torch keeps YuE2's own loop."""
+
+    saved = os.environ.pop("TF_YUE2_LIB", None)
+    try:
+        with Linux(Path(tempfile.mkdtemp())) as here:
+            plain = music_yue2.Yue2()
+            assert plain.backend == "torch" and plain.label == "PyTorch CUDA · NVIDIA" and not music_yue2.engine_built()
+            lib = here.folder / "prefix" / "tf-yue2" / "libtf_yue2.so"
+            lib.parent.mkdir(parents=True)
+            lib.write_bytes(b"")
+            one = music_yue2.Yue2()
+            assert music_yue2.engine_built() and one.backend == "blocks" and one.label == "TensorFold CUDA · DGX Spark"
+            assert one.argv()[one.argv().index("--backend") + 1] == "blocks" and one.RTF < plain.RTF
+            assert one.estimate(60) < plain.estimate(60) and one.load_s < plain.load_s
+            os.environ["YUE2_BACKEND"] = "torch"
+            mine = music_yue2.Yue2()
+            assert mine.backend == "torch" and mine.estimate(60) == plain.estimate(60)
+    finally:
+        if saved is not None:
+            os.environ["TF_YUE2_LIB"] = saved
+
+
 def test_the_memory_guard_sizes_yue2_from_its_measured_line():
     import memory_guard
 

@@ -116,6 +116,28 @@ first 66 semantic tokens were the same in the 1,500-token run); the engine itsel
 same request drew the same 874 and 2,600 tokens). Memory: the engine holds 2.42 GiB (int8 body and lm_head with group
 scales, bf16 embeddings) beside PyTorch's 7.9 GiB peak; bf16 weights hold 4.03 GiB.
 
+### Through the Studio's YuE2 server
+
+`spark/yue2_server.py` end to end, the model loaded, the same English indie-pop request (style and lyrics) at
+seeds 7, 11 and 21, the GPU to itself. "PyTorch int8" is the server's shipped token loop (int8 weight-only copies of
+the projections, a Triton matrix-vector kernel, in YuE2's CUDA-graph GraphAR); "engine" is `--backend blocks` on this
+library (int8, groups of 128). Times are the server's own stage stamps; the score's length is the model's draw.
+
+| Song | Seed | PyTorch int8: score / song / flow / VAE / total | engine: score / song / flow / VAE / total |
+| --- | --- | --- | --- |
+| 60 s | 7 | 17.5 / 18.6 / 8.2 / 1.4 / 45.7 s (1,452 score tokens) | 11.9 / 13.5 / 8.0 / 1.4 / 35.0 s (1,236) |
+| 60 s | 11 | 19.0 / 18.9 / 8.2 / 1.2 / 47.3 s (1,618) | 15.0 / 13.9 / 8.3 / 1.1 / 38.4 s (1,611) |
+| 60 s | 21 | 19.5 / 18.7 / 8.2 / 1.2 / 47.6 s (1,653) | 16.8 / 14.0 / 8.3 / 1.1 / 40.4 s (1,788) |
+| 120 s | 7 | 16.8 / 38.1 / 18.7 / 2.3 / 76.0 s | 11.4 / 28.3 / 18.4 / 2.3 / 60.4 s |
+| 120 s | 11 | 19.1 / 38.4 / 18.6 / 2.3 / 78.4 s | 15.1 / 28.9 / 18.5 / 2.2 / 64.8 s |
+| 120 s | 21 | 19.4 / 38.4 / 18.6 / 2.3 / 78.8 s | 16.8 / 29.2 / 18.6 / 2.3 / 66.9 s |
+
+Tokens a second: score 83 to 86 (PyTorch int8) against 104 to 108 (engine), song 78 to 81 against 103 to 111. A
+60 s song is 19% faster end to end, a 120 s song 18%; the server is ready in 6.0 s instead of 21.1 s (the engine
+quantizes on the GPU at load; the Triton loop tunes its kernels). Whisper (faster-whisper large-v3-turbo, the
+Studio's lyric check) heard, per song in the order above: PyTorch int8 68, 97, 97 / 79, 87, 99 %; engine 97, 94,
+97 / 97, 97, 97 %. The flow matching and the VAE are the same code in both (8.2 s and 1.1 to 1.4 s for 60 s).
+
 ## Not done
 
 - The NAR flow matching (64 passes of ~2,700 rows) and the VAE stay PyTorch. Profiled: a NAR pass is 400 ms, of which

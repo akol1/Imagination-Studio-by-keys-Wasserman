@@ -95,6 +95,10 @@ class Yue2(music.Cuda):
     SONG_RTF_OF = {"bf16": 0.85, "int8": 0.5}
     # free memory wanted before it loads: the song's peak (19.4 GB bf16, 19.1 GB int8 at 120 s) and the guard's 8 GB
     NEED_OF = {"bf16": 28.0, "int8": 28.0}
+    # with TensorFold's decode engine for the tokens (``--backend blocks``, spark/build-yue2-engine.sh: a GB10 only),
+    # through the server on a GB10, the model loaded, the same lyrics at seeds 7, 11 and 21: 60 s in 35.0 to 40.4 s,
+    # 120 s in 60.4 to 66.9 s (int8 Triton loop: 45.7 to 47.6 s and 76.0 to 78.8 s), ready in 6 s instead of 21
+    BLOCKS_RTF_OF, BLOCKS_PLAN_S_OF, BLOCKS_SONG_RTF_OF, BLOCKS_LOAD_S = {"int8": 0.65}, {"int8": 15.0}, {"int8": 0.4}, 6.0
 
     def __init__(self) -> None:
         voice.Served.__init__(self)
@@ -105,15 +109,22 @@ class Yue2(music.Cuda):
         self.server = Path(os.environ.get("YUE2_SERVER", music.PACK / "spark" / "yue2_server.py")).expanduser()
         weights = os.environ.get("YUE2_QUANT", "int8").strip().lower() or "int8"
         self.weights = weights if weights in self.RTF_OF else "int8"
-        self.backend = (os.environ.get("YUE2_BACKEND") or "torch").strip().lower()
+        # the tokens on TensorFold's decode engine where it is built (the server falls back to its own loop if it
+        # cannot use it), else YuE2's PyTorch loop; YUE2_BACKEND=torch|blocks chooses
+        self.backend = (os.environ.get("YUE2_BACKEND") or ("blocks" if engine_built() else "torch")).strip().lower()
         self.RTF, self.NEED_GB = self.RTF_OF[self.weights], self.NEED_OF[self.weights]
+        self.plan_s, self.song_rtf = self.PLAN_S_OF[self.weights], self.SONG_RTF_OF[self.weights]
+        if self.backend == "blocks" and self.weights in self.BLOCKS_RTF_OF:
+            self.RTF, self.load_s = self.BLOCKS_RTF_OF[self.weights], self.BLOCKS_LOAD_S
+            self.plan_s, self.song_rtf = self.BLOCKS_PLAN_S_OF[self.weights], self.BLOCKS_SONG_RTF_OF[self.weights]
+            self.label = "TensorFold CUDA · DGX Spark"
         self.guard_route = "music-yue2-" + self.weights
 
     def python(self) -> Path:
         return self.venv / "bin" / "python"
 
     def estimate(self, seconds: float) -> int:
-        return int((0 if self.loaded() else self.load_s) + self.PLAN_S_OF[self.weights] + seconds * self.SONG_RTF_OF[self.weights] + 2)
+        return int((0 if self.loaded() else self.load_s) + self.plan_s + seconds * self.song_rtf + 2)
 
     def argv(self) -> list[str]:
         return [str(self.python()), "-I", str(self.server), "--model", str(self.model / "YuE2-3B"), "--vae",
@@ -178,6 +189,12 @@ class Yue2(music.Cuda):
                 "instrumental": answer.get("instrumental"), "load_s": job.get("load_s"),
                 "weights": self.ready.get("weights") or self.weights,
                 "total_s": round(time.time() - began, 1), "made_s": round(time.time() - loaded, 1)}
+
+
+def engine_built() -> bool:
+    """Whether TensorFold's YuE2 decode engine is built here (spark/build-yue2-engine.sh, a GB10 only)."""
+
+    return Path(os.environ.get("TF_YUE2_LIB") or music.PREFIX / "tf-yue2" / "libtf_yue2.so").expanduser().is_file()
 
 
 _engine: Yue2 | None = None

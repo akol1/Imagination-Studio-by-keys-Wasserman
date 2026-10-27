@@ -23,8 +23,10 @@ default (``--backend torch``): bf16 weights, static KV cache, CUDA graphs and Fl
 GraphAR), PyTorch SDPA for the flow matching. ``--quant int8`` adds int8 weight-only copies of the token loop's
 projections and output head (per output channel, a Triton matrix-vector kernel), used only for one or two rows at a
 time: the score's and song's tokens. The prompt, the flow matching and the decoder keep the checkpoint's own bf16 and
-fp32 weights. ``--backend blocks`` is the seam for a decoder-block engine of another runtime: it imports
-``tensorfold_yue2`` from the environment and lets its ``prepare(model)`` take over the token loop's layers.
+fp32 weights. ``--backend blocks`` runs the token loop on TensorFold's CUDA decode engine (``spark/tensorfold_yue2``
+beside this file, ``libtf_yue2.so`` from spark/build-yue2-engine.sh; the Music tab's choice on a DGX Spark where it is
+built): its ``prepare(model)`` copies the AR weights into the engine and takes over each token's pass; where the engine
+cannot be used the int8 loop above runs instead.
 """
 
 from __future__ import annotations
@@ -271,9 +273,17 @@ class TorchEngine:
         self.vae = YuE2VAE.from_pretrained(self.vae_dir, decoder_only=True, device="cuda", local_files_only=True)
         self.info = {"weights": self.quant, "backend": self.backend}
         if self.backend == "blocks":
-            import tensorfold_yue2  # another runtime's decoder blocks: not part of this repository
+            # TensorFold's decode engine (spark/tensorfold_yue2, beside this file: -I leaves this folder off the path)
+            here = str(Path(__file__).resolve().parent)
+            if here not in sys.path:
+                sys.path.append(here)
+            import tensorfold_yue2
 
             self.info.update(tensorfold_yue2.prepare(model, quant=self.quant) or {})
+            if self.info.get("decode") != "tensorfold-cuda":
+                note(f"decoding in PyTorch: {self.info.get('decode_reason', 'no engine')}")
+                if self.quant == "int8":  # no engine here: the int8 token loop as with --backend torch
+                    self.info.update(int8_linears(model))
         elif self.quant == "int8":
             self.info.update(int8_linears(model))
         torch.cuda.synchronize()
