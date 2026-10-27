@@ -80,7 +80,7 @@ if [ "$(uname -s)" = Linux ]; then
   SPARK_ARGS=()
   for arg in "$@"; do
     case "$arg" in
-      --all|--yes|-y|--image-only|--no-render|--verify|--motion|--upgrade|--voice|--flux3|--music|--moss|--bolt|--sound|--graphics|--no-graphics|--finish|--no-finish|--train|--ref2va|--image-edit|--h3-base|--loras|--loras=*|--no-loras|--lora-bundle=*) SPARK_ARGS+=("$arg");;
+      --all|--yes|-y|--image-only|--no-render|--verify|--motion|--upgrade|--voice|--flux3|--music|--moss|--bolt|--sound|--graphics|--no-graphics|--finish|--no-finish|--train|--ref2va|--image-edit|--h3-base|--yue2|--swap|--loras|--loras=*|--no-loras|--lora-bundle=*) SPARK_ARGS+=("$arg");;
       --upscale|--remove)
         if [ "$ON_CARD" = 1 ]; then echo "note: on this GPU $arg comes with --ref2va (spark/setup-workflows.sh): adding --ref2va"
         else echo "note: on a DGX Spark $arg comes with --ref2va (spark/setup-workflows.sh): adding --ref2va"; fi
@@ -159,6 +159,7 @@ for arg in "$@"; do
     --graphics) GRAPHICS=1;; --no-graphics) GRAPHICS=0;;
     --finish) FINISH=1;; --no-finish) FINISH=0;;
     --train) TRAIN=1;;  # a CUDA machine's (spark/setup-train.sh): said below and left out
+    --yue2|--swap) echo "  $arg: YuE2 and Character Swap run on Linux with an NVIDIA GPU (oneshot-setup-spark.sh $arg): left out on this Mac";;
     --upscale|--remove|--moss) COMFY_ARGS+=("$arg");;
     --image-edit) IMAGE_EDIT=1;;
     --app) APP=1;;

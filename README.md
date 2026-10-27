@@ -169,13 +169,56 @@ Full recipes, every option and the measured memory of each job: [Install, and th
 design and build the studio in collaboration with Keys, made Wasserman's Filmmaker Suite, and shaped the production side (Slate, the Sharp Spec, Motion Previs). See
 [Big credit: Sam Wasserman and Wasserman Productions](#big-credit-sam-wasserman-and-wasserman-productions-wassermanproductionscom), below the release notes, and [CREDITS.md](CREDITS.md).*
 
-**3.3.3** · Apple-silicon Macs (measured on a Mac Studio M5 Ultra 256 GB), the NVIDIA DGX Spark, and the NVIDIA RTX Pro
+**3.4.0** · Apple-silicon Macs (measured on a Mac Studio M5 Ultra 256 GB), the NVIDIA DGX Spark, and the NVIDIA RTX Pro
 6000 (96 GB) ·
 [TensorFold](https://github.com/ashhart/TensorFold) **0.6.5** + two families, and TensorFold **1.0**'s native Zig
 runtime for FastH3 on Metal and on CUDA, TensorFold **1.1.5** for the music engines and both Bolt engines:
 **Qwen 2.1 Turbo**, **Qwen 2.1 Full**, **FLUX3-K Fast** and **FLUX3-K Full** (text to image, and Edit a picture) · **MOSS-Image** (text to image, DGX Spark) · **MiniMax H3**
-(video with sound) · **Fish Audio Drama 3** (Voice) · **MiniMax-Music3** (Music: songs with sung vocals) · int8 kernels on the M5 tensor units and on the GB10's tensor
+(video with sound) · **Fish Audio Drama 3** (Voice) · **YuE2** and **MiniMax-Music3** (Music: songs with sung vocals) · int8 kernels on the M5 tensor units and on the GB10's tensor
 cores · a 2x video decoder for 2K finals on the Mac
+
+## New in 3.4.0 (2026-10-27)
+
+Two new things to make, both on this machine with no account and no cloud: songs by **YuE2**, now the Music tab's
+default on Linux with an NVIDIA GPU, and **Character Swap**, a Library action that puts the character in one picture in
+place of the person in a part of a clip. Add them to a DGX Spark (both are ticked in the installer's checklist and part
+of `--all`), then restart the app; after that, `--upgrade` keeps them up to date:
+
+```bash
+git pull && bash oneshot-setup-spark.sh --yue2 --swap --no-render
+```
+
+A Mac has nothing new to install: neither runs on a Mac, and its Music tab stays on MiniMax Music 3.
+
+- **YuE2 songs.** m-a-p's YuE2-3B and its YuE2-Vae decoder write the song's score first (melody and chords), then the
+  song: sung vocals and accompaniment, 48 kHz stereo, up to five minutes. It runs as a resident server in an
+  environment of its own (`$PREFIX/yue2`), with an int8 copy of the model's projections for the token loop. Measured
+  on one DGX Spark: a 60 s song in about **48 s**, a 2-minute song in about **80 s**, the model loaded in 12 to 15 s,
+  and Whisper heard **96 to 98 %** of the words sung. MiniMax Music 3 stays one click away: the **engine picker**
+  above the Music tab's form (YuE2 · MiniMax Music 3) chooses for each song, and Settings → Presets → *Song engine* sets
+  the default (*Best here*: YuE2 where it is installed, MiniMax Music 3 on a Mac). Each take keeps its score
+  (*Download score*). `--yue2` is about 13 GB. [YuE2 songs](#yue2-songs).
+- **Character Swap.** *Swap the character…* under a clip in the Library: choose a picture of the character and a part
+  of the clip (5 to 15 seconds), and the person in it is drawn again as that character, with the clip's own scene,
+  performance and sound kept. **Fast** (480p, the default) or **High** (768p); the picture model first puts the
+  character into the part's first frame and the swap starts from it (*Put the character in the first frame first*).
+  It runs on the studio's own MiniMax H3 Ref2VA (int8), with LightX2V's 8-step Turbo LoRA, Akatz Labs' Character Swap
+  LoRA v1.5 and SAM 3.1 to find and follow the person. Measured on a DGX Spark with the GPU to itself: a 5 s part in
+  about **6 minutes** at Fast and about **12 minutes** at High. A part with a hard cut, or with nobody in its first
+  frame, is refused before anything is drawn. DGX Spark and CUDA only. `--swap` is 2.1 GB beside Ref2VA (it ticks
+  `--ref2va` when Ref2VA is not there). [Character Swap](#character-swap).
+
+Licences, also in Settings → About and beside each choice in the app:
+
+- **YuE2:** the code is Apache 2.0; the weights are CC BY-NC 4.0 with the YuE2 authors' additional permission for
+  creators: personal users, content creators and musicians may publish, sell and license the songs they make, free and
+  with no royalties; a company needs a commercial licence from the authors. Do not redistribute the weights.
+- **Character Swap:** MiniMax H3 and Akatz Labs' Character Swap LoRA are under the MiniMax H3 Community License, which
+  does not cover use in the EU, the UK, South Korea or the US; LightX2V's Turbo LoRA is Apache 2.0; SAM 3.1 is under
+  Meta's SAM License. The idea and its settings come from Comfy Org's Openjutsu and Akatz Labs' workflow (MIT).
+
+The TUTORIAL and the app's **Learn** tab have a lesson for each: *A song with YuE2 or MiniMax-Music3* and
+*Character Swap*.
 
 ## New in 3.3.3 (2026-10-26)
 
@@ -2198,6 +2241,8 @@ returns the first job and `revise`, the steps so far; `GET /api/revise/<id>` fol
 picture. The scene, the performance and the clip's own sound stay: the person's moves, gaze and timing carry over, the
 room and the other people are the clip's own, and the part keeps its soundtrack.
 
+![Character Swap in the Library: the clip, the character's picture, the part, Fast or High, the first-frame switch, a direction and the licence line](docs/screenshots/character-swap.webp)
+
 1. Press **Swap the character…** under a clip. The panel opens with the clip beside its settings.
 2. Choose **the character**: upload a picture or pick one from the Library. Head to toe if you can: the face, the hair
    and the whole outfit come from it.
@@ -3014,6 +3059,8 @@ the song itself, sung vocals and accompaniment, 48 kHz stereo WAV, up to five mi
 stays one click away: the **engine picker** above the form (YuE2 · MiniMax Music 3) chooses for each song, and
 Settings → Presets → *Song engine* sets the default (*Best here*: YuE2 where it is installed, MiniMax Music 3 on a Mac,
 which YuE2 does not run on). Each engine's licence line shows under the picker.
+
+![The Music tab on a DGX Spark: the engine picker (YuE2 · MiniMax Music 3), YuE2's licence line and the song form](docs/screenshots/music-yue2.webp)
 
 - **Install.** `bash oneshot-setup-spark.sh --yue2` (in `--all`, and ticked in the install checklist): about 13 GB,
   the YuE2-3B model and its YuE2-Vae decoder at pinned revisions with their checksums, in an environment of their own
