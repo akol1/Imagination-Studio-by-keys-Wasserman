@@ -116,6 +116,13 @@ def main() -> int:
                 child.kill()  # our unresponsive server child only; never a renderer or unrelated process
                 child.wait(timeout=5)
 
+    try:  # copies a `git pull` left behind follow the code before the first render (the updater only syncs its own updates)
+        refreshed = sync_prefix(pack, "HEAD")
+    except OSError as error:
+        refreshed = []
+        print("PREFIX copies were not checked: " + str(error), file=sys.stderr)
+    if refreshed:
+        print("Refreshed in PREFIX: " + ", ".join(refreshed), file=sys.stderr)
     child, session = launch()
     # A worker's PID contract and start/stop commands depend on server.py being the managed process.
     while True:

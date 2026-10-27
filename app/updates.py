@@ -449,10 +449,21 @@ def prefix_of() -> Path:
     return Path(os.environ.get("PREFIX", Path.home() / ".local/opt/tensorfold-studio"))
 
 
+def released(pack: Path, name: str, copy: Path) -> bool:
+    """Whether COPY is NAME as some commit of this checkout had it: a copy left behind by an earlier version (a
+    `git pull` without `oneshot-setup.sh --upgrade`, or several updates ago), not one a person edited."""
+
+    try:
+        blob = git(pack, "hash-object", str(copy), timeout=10)
+        return bool(git(pack, "log", "--all", "-1", "--format=%H", f"--find-object={blob}", "--", name, timeout=30))
+    except UpdateError:
+        return False
+
+
 def sync_prefix(pack: Path, old: str, prefix: Path | None = None) -> list[str]:
-    """After an update: each PREFIX copy the update changed is replaced by the new version, the one it replaced kept
-    beside it as NAME.before-update. A copy that matches neither the old nor the new version was edited by a person and
-    is left as it is. Returns the names refreshed."""
+    """After an update, and when the launcher starts: each PREFIX copy that differs from this version is replaced by
+    it, the one it replaced kept beside it as NAME.before-update. A copy that no commit ever had was edited by a person
+    and is left as it is. Returns the names refreshed."""
 
     prefix = prefix or prefix_of()
     done = []
@@ -466,8 +477,8 @@ def sync_prefix(pack: Path, old: str, prefix: Path | None = None) -> list[str]:
         try:
             before = git(pack, "show", f"{old}:{name}", timeout=10)
         except UpdateError:
-            continue
-        if now.decode(errors="replace").strip() != before:
+            before = None
+        if now.decode(errors="replace").strip() != before and not released(pack, name, mine):
             continue  # edited here: not ours to replace
         mine.with_name(name + ".before-update").write_bytes(now)
         temp = mine.with_name(name + "." + uuid.uuid4().hex + ".tmp")
