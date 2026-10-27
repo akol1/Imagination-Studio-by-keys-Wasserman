@@ -54,6 +54,9 @@ def rebuild_engine(pack: Path, pin: str, port: str) -> None:
     shutil.rmtree(kept, ignore_errors=True)
     staged = prefix_of() / ("zig-engine." + uuid.uuid4().hex)
     shutil.copytree(built, staged)
+    # h3_case.py imports the renderer as h3_generate_dev from its own folder: oneshot-setup.sh links it there, the build does not
+    (staged / "h3_generate_dev.py").unlink(missing_ok=True)
+    (staged / "h3_generate_dev.py").symlink_to("../h3_generate.py")
     engine.rename(kept)
     staged.rename(engine)
     print(f"[launcher] native engine rebuilt at {pin[:8]}", file=sys.stderr, flush=True)
