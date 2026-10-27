@@ -53,6 +53,15 @@ die() { echo "FATAL: $*" >&2; exit 1; }
 ok()  { echo "  ✓ $*"; }
 step(){ echo; echo "==> $*"; }
 CHECKPOINT="${DRAMA3_CHECKPOINT:-$HOME/models/drama-3}"
+# a folder the weights go into must be this user's to write: a root-owned ~/models stops here, before the engine is
+# built, not after it with the checkpoint quietly missing
+writable_for() {
+  local dir="$1"
+  while [ ! -e "$dir" ] && [ "$dir" != / ]; do dir="$(dirname "$dir")"; done
+  [ -d "$dir" ] && [ -w "$dir" ] && return 0
+  die "$dir is not writable by $(id -un) (it belongs to $(stat -c %U "$dir" 2>/dev/null || stat -f %Su "$dir")), so $1 cannot be made there. \
+Make it yours (sudo chown $(id -un) \"$dir\") or point DRAMA3_CHECKPOINT (DRAMA3_MODEL on a Mac) at a folder of your own, then run this again."
+}
 
 licence() {
   echo "  Fish Audio Drama 3 (39 GB) is licensed under the Fish Audio Community License v1.0: research, non-commercial"
@@ -77,6 +86,7 @@ if [ "$(uname -s)" = Linux ]; then
 sys.exit(0 if os.path.isfile(os.path.join(d, "config.json")) and all(os.path.isfile(os.path.join(d, f)) for f in set(m.values())) else 1)' "$MODEL" 2>/dev/null
   }
 
+  if [ "$VERIFY" = 0 ] && [ "$UPGRADE" = 0 ] && ! have_model; then writable_for "$MODEL"; fi
   step "TensorFold's Drama 3 engine for CUDA ($CUDA_BRANCH @ $CUDA_COMMIT) -> $(dirname "$(dirname "$BIN")")"
   if [ "$VERIFY" = 0 ] && [ -z "${DRAMA3_CUDA_BIN:-}" ]; then
     # spark/build-drama3.sh: the carrier image's prebuilt engine (checksums checked), else a build from source
@@ -182,6 +192,10 @@ fi
 VENV="${DRAMA3_VENV:-$HOME/drama3-venv}"
 MODEL="${DRAMA3_MODEL:-$HOME/models/drama-3-mlx}"
 PY="$VENV/bin/python"
+if [ "$VERIFY" = 0 ] && ! { [ -f "$MODEL/config.json" ] && [ -f "$MODEL/codec.safetensors" ]; }; then
+  [ -f "$CHECKPOINT/model.safetensors.index.json" ] || writable_for "$CHECKPOINT"
+  writable_for "$MODEL"
+fi
 
 step "TensorFold $MLX_BRANCH @ $MLX_COMMIT in $SRC"
 if [ -d "$SRC/.git" ]; then

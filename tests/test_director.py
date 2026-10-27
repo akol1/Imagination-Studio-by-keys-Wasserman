@@ -346,6 +346,14 @@ def test_the_panel_in_the_first_ad_tab():
     DR.st[SL.p.id] = { state: "done", running: false, done: ["writing", "casting", "rendering", "cutting"], asked: { cut: true }, counts: { shots: 9, rendered: 9, settled: 9, retakes: 2 },
       cut: { files: { mp4: "exports/x.mp4", fcpxml: "/api/export/timeline/p1.fcpxml", edl: "/api/export/timeline/p1.edl", zip: "/api/export/timeline/p1.zip" } }, log: [] };
     out.done = text(directorPanel(SL.p));
+    DR.st[SL.p.id] = { state: "done", running: false, done: ["writing", "casting", "rendering", "cutting"], asked: { cut: true },
+      counts: { shots: 3, rendered: 2, settled: 3, passed: 1, failedCheck: 1, refused: 1, retakes: 0 }, order: ["a", "b", "c"],
+      shots: { a: { name: "Wide", settled: true, outcome: "passed" }, b: { name: "Pier Fall", settled: true, outcome: "refused", why: "needs about 77 GB" },
+               c: { name: "Night Ferry", settled: true, outcome: "failed", why: "the face changes" } }, log: [] };
+    out.left = text(directorPanel(SL.p));
+    DR.st[SL.p.id] = { state: "none" }; out.form = text(directorPanel(SL.p));
+    out.sheet = slSheetPicture({ name: "Wren", age: "40", clothing: "a long wool overcoat and a felt hat" });
+    out.plain = slSheetPicture({ name: "Ada", clothing: "a grey sweater" });
     calls.length = 0; DR.st[SL.p.id] = { state: "none" }; await drStart(SL.p);
     out.posted = calls.find(c => c[0] === "/api/slate/direct");
     """
@@ -364,6 +372,12 @@ def test_the_panel_in_the_first_ad_tab():
     assert "Stop" in out["running"] and "Rendering: One · Close" in out["running"] and "The log · 1 lines" in out["running"]
     assert "Direct it" not in out["running"]  # the form is put away while it runs
     assert "Watch the cut" in out["done"] and "FCPXML" in out["done"] and "Review takes" in out["done"]
+    assert "1 passed the check" in out["left"] and "1 failed the check" in out["left"] and "1 refused by the queue" in out["left"]
+    assert "Left out of the cut · 2" in out["left"] and "Pier Fall: refused by the queue: no clip was made (needs about 77 GB)" in out["left"]
+    assert "Night Ferry: failed the check: its take is in the Library" in out["left"] and "Wide:" not in out["left"]
+    assert "No retake" in out["form"] and "Keep it" not in out["form"]
+    # the page's portrait prompt frames a costume as the Director's does
+    assert "knees up" in out["sheet"] and "no props" not in out["sheet"] and "no props" in out["plain"]
     posted = out["posted"][1]
     assert posted["project"] == "p-test" and posted["logline"] == "A keeper finds a letter." and posted["scenes"] == 3 and posted["cut"] is True and posted["retakes"] == 1
 
@@ -401,3 +415,206 @@ def test_with_a_song_the_cut_is_the_rough_cut_on_the_beat(studio, monkeypatch):
     client.post("/api/slate/direct", json={"project": third, "scenes": 1, "shotsPerScene": 1, "seconds": 5, "song": "song-1"})
     run = until(third)
     assert run["state"] == "done" and run["cut"]["files"]["fcpxml"].endswith(".fcpxml") and any("no steady beat" in l["text"] for l in run["log"])
+
+
+class Picky(Queue):
+    """A queue that refuses the clips whose prompt has ``refuse`` (the memory guard's refusal, before the job starts)
+    and stops the ones whose prompt has ``stop`` (the workload limits, mid-render), ``stops`` times."""
+
+    def __init__(self, refuse="", stop="", stops=0, **kw):
+        super().__init__(**kw)
+        self.refuse, self.stop, self.stops = refuse, stop, stops
+
+    def submit(self, body):
+        prompt = (body.get("params") or {}).get("prompt") or ""
+        if body["kind"] == "video" and self.refuse and self.refuse in prompt:
+            raise director.HTTPException(400, "a clip from references needs about 77 GB at its peak; this machine has 89 GB for it "
+                                              "and keeps 12 GB free as its floor, so it is refused")
+        job = super().submit(body)
+        if body["kind"] == "video" and self.stop and self.stop in prompt and self.stops:
+            self.stops -= 1
+            (HOME / job["outputs"][0]).unlink()
+            job.update(status="failed", outputs=[], error="the render was stopped by this machine's workload limits: GPU temperature ceiling or thermal slowdown")
+        return job
+
+
+def test_a_refused_shot_is_never_called_rendered_and_a_failed_take_stays_out_of_the_cut_but_in_the_library(studio):
+    # Bo's wide is refused by the queue; Ada's close fails its check with no retakes asked
+    queue, brain = Picky(refuse="Bo walks", fail_qa="lifts a letter"), Brain()
+    made = studio(queue, brain)
+    project = new_film()
+    assert client.post("/api/slate/direct", json={"project": project, "scenes": 2, "shotsPerScene": 2, "seconds": 5, "retakes": 0, "cut": True}).status_code == 200
+    run = until(project)
+    assert run["state"] == "done", run
+    film = slate.get_project(project)
+    (wide, close), (bo_wide, bo_close) = [sc["shots"] for sc in film["scenes"]]
+    c = run["counts"]
+    assert c["shots"] == 4 and c["passed"] == 2 and c["refused"] == 1 and c["failedCheck"] == 1 and c["leftOut"] == 2 and c["retakes"] == 0
+    assert c["rendered"] == 3  # the refused shot made no clip and is not counted as one
+    assert run["shots"][bo_wide["id"]]["outcome"] == "refused" and "77 GB" in run["shots"][bo_wide["id"]]["why"]
+    assert run["shots"][close["id"]]["outcome"] == "failed"
+    assert len([v for v in queue.videos() if v["params"]["slate"]["shot"] == bo_wide["id"]]) == 0  # never queued again at another seed
+    done = next(line["text"] for line in run["log"] if line["text"].startswith("Done:"))
+    assert "rendered and checked" not in done and "2 of 4 shots passed the check" in done
+    assert f"1 refused by the queue: {bo_wide['name']}" in done and "1 failed the check (in the Library, out of the cut)" in done
+    assert done.endswith("cut without 2 shots")
+    assert any(line["text"].startswith("Left out of the cut:") and "refused by the queue" in line["text"] for line in run["log"])
+    # the cut: only the takes that passed; the failed take is rated no-good, among the shot's takes and in the Library
+    failed_take = close["takes"][0]
+    assert failed_take["rating"] == "no-good"
+    assert [c_["path"] for c_ in made["saved"]["timeline"]] == [wide["takes"][0]["mediaPath"], bo_close["takes"][0]["mediaPath"]]
+    listed = {m["path"]: m for m in client.get("/api/library").json()}
+    assert listed[failed_take["mediaPath"]].get("failed") is True and not listed[wide["takes"][0]["mediaPath"]].get("failed")
+    # circled, the failed take is cut in when the film is directed again
+    film["scenes"][0]["shots"][1]["takes"][0]["rating"] = "circled"
+    slate.write(film)
+    client.post("/api/slate/direct", json={"project": project, "retakes": 0, "cut": True})
+    until(project)
+    assert failed_take["mediaPath"] in [c_["path"] for c_ in made["saved"]["timeline"]]
+
+
+def test_a_render_the_workload_limits_stopped_is_queued_once_more_and_is_not_a_retake(studio):
+    queue, brain = Picky(stop="Ada walks", stops=1), Brain()
+    studio(queue, brain)
+    project = new_film()
+    client.post("/api/slate/direct", json={"project": project, "scenes": 1, "shotsPerScene": 2, "seconds": 5, "retakes": 0, "cut": False})
+    run = until(project)
+    film = slate.get_project(project)
+    wide = film["scenes"][0]["shots"][0]
+    tries = [v for v in queue.videos() if v["params"]["slate"]["shot"] == wide["id"]]
+    assert len(tries) == 2 and tries[0]["params"]["seed"] == tries[1]["params"]["seed"]  # the same take again
+    assert run["shots"][wide["id"]]["outcome"] == "passed" and run["counts"]["retakes"] == 0
+    # stopped twice: left out with the reason, no third try
+    queue, brain = Picky(stop="Ada walks", stops=5), Brain()
+    studio(queue, brain)
+    again = new_film()
+    client.post("/api/slate/direct", json={"project": again, "scenes": 1, "shotsPerScene": 2, "seconds": 5, "retakes": 2, "cut": False})
+    run = until(again)
+    wide = slate.get_project(again)["scenes"][0]["shots"][0]
+    assert len([v for v in queue.videos() if v["params"]["slate"]["shot"] == wide["id"]]) == director.WORKLOAD_STOPS
+    assert run["shots"][wide["id"]]["outcome"] == "stopped" and run["counts"]["stopped"] == 1 and "workload limits" in run["shots"][wide["id"]]["why"]
+
+
+def test_one_render_is_queued_for_each_machine(monkeypatch):
+    monkeypatch.setattr(director, "machines", lambda: 1)
+    assert director.at_once() == 1
+    monkeypatch.setattr(director, "machines", lambda: 2)
+    assert director.at_once() == 2
+    monkeypatch.setattr(director, "machines", lambda: 9)
+    assert director.at_once() == director.AT_ONCE
+    monkeypatch.setattr(director, "machines", lambda: "?")
+    assert director.at_once() == 1
+
+
+def test_the_shot_check_wants_the_cast_and_the_lines_in_their_fields():
+    film = {"characters": [{"name": "Ada"}, {"name": "Bo"}], "locations": [{"name": "The Harbour"}]}
+    check = director.check_shots(film, 5)
+    good = {"prompt": "# Subject\nAda walks the wall.", "cast": ["Ada"], "lines": []}
+    assert check({"shots": [good]}) == ""
+    # the names only in the prompt: the pictures would never be attached
+    said = check({"shots": [{**good, "cast": []}]})
+    assert "names ada" in said.lower() and "\"cast\"" in said
+    # speech written into the prompt with no lines
+    said = check({"shots": [{**good, "prompt": "# Subject\nAda turns and says, \"Who left this here?\""}]})
+    assert "speech inside its prompt" in said
+    # a sign's words are not speech, and a shot of the empty place needs no cast
+    assert check({"shots": [{**good, "prompt": "# Subject\nAda passes a sign that reads \"NO FISHING HERE TODAY\"."}]}) == ""
+    assert check({"shots": [{"prompt": "# Subject\nWaves break on the harbour wall.", "cast": [], "lines": []}]}) == ""
+    assert isinstance(said, director.Soft)  # asked to fix once; a second answer with only this is taken
+    # not the cast speaking: a sign that says, a diner called, a radio announcer
+    for words in ("A neon sign says \"OPEN ALL NIGHT\" above Ada.", "Ada sits in a diner called \"The Last Drop\".",
+                  "Ada listens. The radio announcer says \"storm warning tonight\"."):
+        assert check({"shots": [{**good, "prompt": "# Subject\n" + words}]}) == "", words
+    # a name as a common word, or inside a place's name, is not that character
+    roses = director.check_shots({"characters": [{"name": "Rose"}, {"name": "Will"}], "locations": [{"name": "Rose House"}]}, 5)
+    assert roses({"shots": [{"prompt": "# Subject\nPetals of a rose drift past Rose House. The rain will not stop.", "cast": [], "lines": []}]}) == ""
+    # a possessive is about someone, not of them, and a name inside a longer word is not that character
+    assert check({"shots": [{"prompt": "# Subject\nAda's boat rocks at the quay.", "cast": [], "lines": []}]}) == ""
+    assert check({"shots": [{"prompt": "# Subject\nA boat bobs at the quay.", "cast": [], "lines": []}]}) == ""
+
+
+def test_a_new_angle_opens_on_the_cast_and_a_carried_on_beat_on_the_shot_before(monkeypatch):
+    wide = {"size": "WS", "angle": "eye level", "cast": ["Ada"]}
+    on = lambda shot, before: director.opening(shot, before)
+    monkeypatch.setattr(director, "ref2va", lambda: True)
+    assert on(wide, None) == "cast"
+    assert on({"size": "CU", "angle": "eye level", "cast": ["Ada"], "continues": True}, wide) == "cast"  # a new size is a cut
+    assert on({"size": "CU", "angle": "eye level", "cast": ["Ada"]}, wide) == "cast"
+    assert on({"size": "WS", "angle": "eye level", "cast": ["Ada"], "continues": True}, wide) == "previous"
+    assert on({"size": "WS", "angle": "eye level", "cast": [], "continues": False}, wide) == "previous"  # no one to pin
+    monkeypatch.setattr(director, "ref2va", lambda: False)
+    assert on({"size": "CU", "cast": ["Ada"]}, wide) == "previous" and on(wide, None) == "text"
+
+
+def test_a_costume_portrait_shows_the_costume():
+    period = director.sheet_picture({"name": "Wren", "age": "40", "clothing": "a long wool overcoat and a felt hat"})
+    assert "knees up" in period and "hat and coat included" in period and "no props" not in period
+    plain = director.sheet_picture({"name": "Ada", "clothing": "a grey sweater"})
+    assert "head-and-shoulders" in plain and "no props" in plain
+
+
+def test_a_run_written_before_outcomes_were_kept_still_counts_true():
+    run = {"order": ["a", "b", "c", "d"], "shots": {
+        "a": {"settled": True, "best": "x.mp4", "attempts": [{"status": "done", "passed": True}]},
+        "b": {"settled": True, "best": None, "fallback": "y.mp4", "attempts": [{"status": "done", "passed": False}]},
+        "c": {"settled": True, "best": None, "attempts": [{"job": None, "status": "failed", "passed": False}]},
+        "d": {"settled": True, "best": "z.mp4", "kept": True, "attempts": []}}}
+    c = director.counts(run)
+    assert (c["passed"], c["kept"], c["failedCheck"], c["refused"], c["leftOut"]) == (1, 1, 1, 1, 2)
+
+
+def test_a_second_answer_with_only_a_soft_problem_is_taken(studio):
+    """Asked once to cast the people its prompt names, a brain that answers the same again is taken at its word:
+    two refusals would stop the whole run."""
+
+    class Stubborn(Brain):
+        def __call__(self, backend, system, prompt, tier, endpoint="", model=""):
+            if "Write exactly" in prompt:
+                self.asked.append(prompt)
+                return json.dumps({"shots": [{"name": "Wide", "prompt": "# Subject\nAda walks the harbour wall.", "cast": [], "location": "The Harbour", "lines": []}]})
+            return super().__call__(backend, system, prompt, tier, endpoint, model)
+
+    queue, brain = Queue(), Stubborn()
+    studio(queue, brain)
+    project = new_film()
+    client.post("/api/slate/direct", json={"project": project, "scenes": 1, "shotsPerScene": 1, "seconds": 5, "cut": False})
+    run = until(project)
+    assert run["state"] == "done", run
+    assert len([p for p in brain.asked if "Write exactly" in p]) == 2 and "empty \"cast\"" in brain.asked[-1]
+
+
+def test_a_heat_stop_queued_again_survives_a_restart_and_a_kept_take_that_failed_its_check_is_not_kept(studio):
+    queue, brain = Picky(stop="Ada walks", stops=1, hold=True), Brain()
+    studio(queue, brain)
+    project = new_film()
+    client.post("/api/slate/direct", json={"project": project, "scenes": 1, "shotsPerScene": 1, "seconds": 5, "retakes": 0, "cut": False})
+    end = time.time() + 10
+    while time.time() < end and len(queue.videos()) < 2:  # the pictures are made; the clip is stopped and queued again
+        for job in queue.jobs.values():
+            if job["kind"] != "video":
+                job["status"] = "done"
+        time.sleep(0.02)
+    assert len(queue.videos()) == 2
+    assert client.post(f"/api/slate/direct/{project}/stop", json={}).json()["stopped"] is True
+    until(project)
+    # a restart: the queue knows none of it; the take queued again is lost, and is queued once more, not left out
+    director.runs.clear()
+    (HOME / queue.videos()[1]["params"]["output"]).unlink()  # the clip queued again was never made
+    fresh = Queue()
+    studio(fresh, brain)
+    saved = json.loads(director.status_file(project).read_text())
+    saved["state"] = "rendering"
+    director.status_file(project).write_text(json.dumps(saved))
+    director.resume_all()
+    run = until(project)
+    wide = slate.get_project(project)["scenes"][0]["shots"][0]
+    mine = [v for v in fresh.videos() if v["params"]["slate"]["project"] == project]  # a restart picks up every film left at work
+    assert run["shots"][wide["id"]]["outcome"] == "passed" and len(mine) == 1, run["shots"][wide["id"]]
+    assert mine[0]["params"]["seed"] == queue.videos()[0]["params"]["seed"]
+
+    # a take Slate rated good when it queued it, which its own QA gate then failed, is not kept as the shot's clip
+    (HOME / "slate-old.mp4").write_bytes(b"x")
+    shot = {"takes": [{"mediaPath": "slate-old.mp4", "rating": "good", "qa": {"passed": False}}]}
+    assert director.kept_take(shot) is None
+    shot["takes"][0]["rating"] = "circled"
+    assert director.kept_take(shot) == "slate-old.mp4"

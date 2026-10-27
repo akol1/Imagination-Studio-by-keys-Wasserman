@@ -2454,8 +2454,9 @@ def library() -> list[dict]:
     found = []
     for folder, kinds in (("renders", (".mp4",)), ("exports", (".mp4",)), ("scouts", (".png",)), ("sound", (".mp4",)),
                           ("uploads", (".png", ".jpg", ".jpeg", ".webp", ".mp4", ".mov")), ("projects", (".mp4",)), ("slate", (".mp4",)),
-                          ("agent", (".png", ".jpg", ".jpeg", ".webp", ".mp4", ".mov"))):
-        for path in (HOME / folder).rglob("*"):
+                          ("agent", (".png", ".jpg", ".jpeg", ".webp", ".mp4", ".mov")), ("qa", (".mp4",))):
+        # qa: the takes the QA gate and the shot check kept when they failed (not the clips fetched to be checked)
+        for path in ((HOME / folder).glob("*") if folder == "qa" else (HOME / folder).rglob("*")):
             if path.suffix.lower() in kinds and not hidden(path.relative_to(HOME)) and path.is_file():
                 try:
                     stat = path.stat()
@@ -2467,10 +2468,40 @@ def library() -> list[dict]:
     found += library_sounds()
     found = sorted(found, key=lambda item: -item["modified"])[:400]
     made = hub.takes()  # which Spark rendered a clip, and at which seed (sparks.py)
+    failed = failed_takes()
     for item in found:
         if item["path"] in made:
             item.update(spark=made[item["path"]].get("spark"), seed=made[item["path"]].get("seed"))
+        if item["path"] in failed or item["folder"] == "qa":
+            item["failed"] = True  # shown in the Library to look at; the Director never cuts it in unless it is circled
     return found
+
+
+FAILED_SEEN: dict = {}  # project.json -> (its mtime, the failed takes in it): a film is read again only when it changed
+
+
+def failed_takes() -> set[str]:
+    """The clips of Slate shots that failed their check: a take whose own QA gate or shot check failed it, and one the
+    Director rated no-good (it rates a failed take so). A take rated no-good by hand is the user's call, not a check's."""
+
+    out, seen = set(), set()
+    for file in (HOME / "slate").glob("*/project.json"):
+        seen.add(file)
+        try:
+            stamp = file.stat().st_mtime_ns
+            if FAILED_SEEN.get(file, (None,))[0] != stamp:
+                film, found = json.loads(file.read_text()), set()
+                for scene in (film.get("scenes") or []) if isinstance(film, dict) else []:
+                    for shot in scene.get("shots") or [] if isinstance(scene, dict) else []:
+                        found.update(take["mediaPath"] for take in shot.get("takes") or [] if isinstance(take, dict) and isinstance(take.get("mediaPath"), str)
+                                     and (director.failed_check(take) or take.get("rating") == "no-good" and str(take.get("origin") or "").startswith("The Director")))
+                FAILED_SEEN[file] = (stamp, found)
+        except (OSError, ValueError):
+            continue
+        out |= FAILED_SEEN[file][1]
+    for gone in set(FAILED_SEEN) - seen:
+        FAILED_SEEN.pop(gone, None)
+    return out
 
 
 SOUND_FILES = (".wav", ".mp3", ".flac", ".m4a", ".ogg")
@@ -2517,7 +2548,7 @@ def discard(path: str) -> dict:
     """Take a clip or still out of the library: it is moved to the studio's trash folder, not erased."""
 
     target = inside(path)
-    if not target.is_file() or relative(target).split("/")[0] not in ("renders", "exports", "scouts", "uploads", "projects", "slate") \
+    if not target.is_file() or relative(target).split("/")[0] not in ("renders", "exports", "scouts", "uploads", "projects", "slate", "qa") \
             or target.suffix.lower() not in (".mp4", ".mov", ".png", ".jpg", ".jpeg", ".webp"):
         raise HTTPException(400, "not a library file")
     with lock:
@@ -2845,8 +2876,18 @@ def slate_room(plan: dict, lora: bool) -> dict:
 app.include_router(slate.attach(HOME, DURATIONS, compose, compose_references, REFERENCE_LIMIT,
                                 lambda: {"ref2va": ref2va_ready(), "ref2va_turbo": ref2va_turbo_ready()}, slate_room, within=inside))
 import director  # noqa: E402  (the Director: a logline to a checked, cut film, beside this file)
+
+
+def resident_words() -> str:
+    """What the Studio has loaded beside the queue now, in words, for a refusal the Director reports."""
+
+    return ", ".join(name for name, loaded in (("Fish Audio Drama 3", voice.room_mb()), ("MiniMax Music 3", music.room_mb()),
+                                               (bolt.NAME, bolt.room_mb())) if loaded)
+
+
 app.include_router(director.attach(HOME, queue=queue_job, lookup=jobs.get, stop_job=cancel, check=qa_gate, new_project=new_project,
-                                   save_project=save_project, presets={k: v[1] for k, v in PRESETS.items()}, app=app, references=ref2va_ready))
+                                   save_project=save_project, presets={k: v[1] for k, v in PRESETS.items()}, app=app, references=ref2va_ready,
+                                   renderers=lambda: 1 + sum(1 for w in hub.workers() if w.get("enabled", True)), loaded=resident_words))
 import agents  # noqa: E402  (Brains and agents: the user's own CLI sign-ins and MCP tools, beside this file)
 app.include_router(agents.attach(HOME))
 

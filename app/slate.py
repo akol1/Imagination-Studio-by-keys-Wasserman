@@ -372,9 +372,23 @@ def find_local(given: str = "") -> tuple[str | None, list[str]]:
 
 
 def extract_json(text: str):
-    """The first complete JSON value in a reply that may carry fences or a preamble (Slate's extractJson)."""
+    """The first complete JSON value in a reply that may carry fences, a preamble or a model's thinking (Slate's
+    extractJson). With a ``</think>`` in it, the text after the last one is read first: a reply with thinking off can
+    still splice a think tag into its answer and start the answer again after it. A reply cut off inside its JSON has
+    none, and says so: a value nested inside the broken one is never taken for the answer."""
 
-    cleaned = re.sub(r"```(?:json)?", "", text).strip()
+    cleaned = re.sub(r"```(?:json)?", "", text)
+    after = cleaned.rsplit("</think>", 1)[-1] if "</think>" in cleaned else None
+    for part in ([after] if after is not None else []) + [cleaned]:
+        found = first_json(part.strip())
+        if found is not None:
+            return found[0]
+    raise ValueError("no valid JSON in the reply")
+
+
+def first_json(cleaned: str):
+    """(value,) of the first complete JSON object (else list) in ``cleaned``, or None."""
+
     for opener, closer in (("{", "}"), ("[", "]")):
         start = cleaned.find(opener)
         if start == -1:
@@ -394,10 +408,10 @@ def extract_json(text: str):
                 depth -= 1
                 if depth == 0:
                     try:
-                        return json.loads(cleaned[start:at + 1])
+                        return (json.loads(cleaned[start:at + 1]),)
                     except ValueError:
                         break
-    raise ValueError("no valid JSON in the reply")
+    return None
 
 
 def resolve_brain(backend: str, endpoint: str = "", model: str = "") -> tuple[str, str, str]:
@@ -821,6 +835,12 @@ def compile_shot(project: dict, shot_id: str, chain: str | None = None) -> dict:
         warnings.append(f"The prompt is {len(prompt)} characters; MiniMax H3's guide suggests at most {limit}. Tighten the shot.")
     if not (shot.get("prompt") or "").strip():
         warnings.append("The shot has no prompt yet.")
+    # a character named only in the prompt's words: not cast, so their pictures are not attached and no line is theirs
+    uncast = [c.get("name") for c in project.get("characters") or [] if c.get("name") and c.get("id") not in (extra.get("cast") or [])
+              and re.search(r"(?<!\w)" + re.escape(c["name"].strip().lower()) + r"(?!\w)", (shot.get("prompt") or "").lower())]
+    if uncast:
+        warnings.append(", ".join(uncast) + (" is" if len(uncast) == 1 else " are") + " named in the prompt but not cast in this shot: "
+                        "cast them so their pictures and lines go with the shot.")
     # a LoRA for this shot alone (the hub's, as a job carries them): it stands in for the film's on this shot. The
     # bible's LoRAs (a character's, the place's) join it in every mode: the shot's own first, at most 4, none twice
     own = lora_list(extra.get("loras"))

@@ -752,3 +752,26 @@ def test_an_engine_the_kernel_wont_release_still_gives_the_gpu_lock_back(monkeyp
     one.process = Corpse()
     one.stop("the engine hung")  # must not raise out of the wedged wait
     assert one.process is None and one.owner == "" and not voice.LOCK.exists()
+
+
+def test_voice_setup_stops_before_the_engine_when_the_weights_folder_is_not_writable(tmp_path):
+    """A root-owned ~/models: setup-voice.sh fails at once and says how to fix it, before the engine step, instead of
+    building the engine and leaving the checkpoint missing for the next boot to find."""
+
+    if os.geteuid() == 0:
+        pytest.skip("root can write anywhere")
+    script = (ROOT / "scripts" / "setup-voice.sh").read_text()
+    function = script[script.index("writable_for() {"):]
+    function = function[:function.index("\n}\n") + 3]
+    assert script.index('writable_for "$MODEL"; fi\n  step "TensorFold\'s Drama 3 engine') > 0  # Linux: before the engine is built
+    locked = tmp_path / "models"
+    locked.mkdir()
+    locked.chmod(0o555)
+    try:
+        run = lambda target: subprocess.run(["bash", "-c", 'die() { echo "FATAL: $*" >&2; exit 1; }\n' + function + f'writable_for "{target}" && echo fine'],
+                                            capture_output=True, text=True)
+        stopped = run(locked / "drama-3")
+        assert stopped.returncode == 1 and "is not writable by" in stopped.stderr and "DRAMA3_CHECKPOINT" in stopped.stderr
+        assert run(tmp_path / "mine" / "drama-3").stdout.strip() == "fine"
+    finally:
+        locked.chmod(0o755)

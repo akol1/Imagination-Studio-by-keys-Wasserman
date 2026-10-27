@@ -169,13 +169,47 @@ Full recipes, every option and the measured memory of each job: [Install, and th
 design and build the studio in collaboration with Keys, made Wasserman's Filmmaker Suite, and shaped the production side (Slate, the Sharp Spec, Motion Previs). See
 [Big credit: Sam Wasserman and Wasserman Productions](#big-credit-sam-wasserman-and-wasserman-productions-wassermanproductionscom), below the release notes, and [CREDITS.md](CREDITS.md).*
 
-**3.4.0** · Apple-silicon Macs (measured on a Mac Studio M5 Ultra 256 GB), the NVIDIA DGX Spark, and the NVIDIA RTX Pro
+**4.1.0** · Apple-silicon Macs (measured on a Mac Studio M5 Ultra 256 GB), the NVIDIA DGX Spark, and the NVIDIA RTX Pro
 6000 (96 GB) ·
 [TensorFold](https://github.com/ashhart/TensorFold) **0.6.5** + two families, and TensorFold **1.0**'s native Zig
 runtime for FastH3 on Metal and on CUDA, TensorFold **1.1.5** for the music engines and both Bolt engines:
 **Qwen 2.1 Turbo**, **Qwen 2.1 Full**, **FLUX3-K Fast** and **FLUX3-K Full** (text to image, and Edit a picture) · **MOSS-Image** (text to image, DGX Spark) · **MiniMax H3**
 (video with sound) · **Fish Audio Drama 3** (Voice) · **YuE2** and **MiniMax-Music3** (Music: songs with sung vocals) · int8 kernels on the M5 tensor units and on the GB10's tensor
 cores · a 2x video decoder for 2K finals on the Mac
+
+## New in 4.1.0 (2026-10-27)
+
+The Director tells you what really happened, and shows you what did not work. Nothing to install: update the clone
+and restart the app (`git pull`, then quit and reopen the Mac app, or `bash scripts/app.sh`).
+
+- **An honest run report.** The run's last line counts what passed the check, what was not checked, and by name what
+  the queue refused, what failed to render and what failed its check, then says what the cut is missing
+  (*5 of 11 shots passed the check, 3 refused by the queue: Gull Strike, Pier Fall, Night Ferry, ..., cut
+  without 6 shots*). A shot the memory guard refused is never counted as rendered, and the refusal says what the
+  Studio had loaded beside the queue at the time. When the run is done the panel lists each shot left out of the cut
+  with its reason.
+- **A failed take stays where you can see it, out of the cut.** A take that fails its check is rated *no good* and
+  kept among the shot's takes and in the **Library**, marked *failed check* (type "failed" in the Library's search to
+  list them). So are the takes the QA gate and the shot check keep when they render a clip again. The Director cuts in
+  only takes that passed, or not checked, unless you circle a failed one in Slate. With no retakes the choice reads
+  *No retake* (it said *Keep it*).
+- **Shots keep their people.** The shot check sends the brain's shots back when a character is named in the prompt
+  and the shot's cast is empty, or when someone speaks inside the prompt and the shot has no lines: their pictures and
+  voices would never reach the clip. Slate's preflight says so too when a character is named in a prompt but not cast.
+- **A new angle opens on the cast.** A new size or angle is a cut, opening on the cast's stills (same pictures, same
+  order, no first frame) where Ref2VA is installed; only a beat carried on in the same size and angle opens on the
+  shot before. "The shots of a scene follow each other without a cut" is gone from what the brain is asked.
+- **Costumes in the reference stills.** When a character's clothing names a hat, a coat or a uniform, the reference
+  portrait is from the knees up with all of it in frame, instead of a head-and-shoulders with "no props".
+- **A brain reply with a stray think tag still reads.** When a reply carries `</think>`, the answer after it is read;
+  when the first JSON in a reply is broken, the longest whole one is.
+- **One render in the queue for each machine.** The Director keeps one clip in the queue for each machine that renders
+  (this one and its Sparks, at most three), so on one Spark a retake no longer waits behind the next shots. A render
+  the machine's workload limits stopped (heat, memory pressure) is not a take: it is queued once more, at the same
+  seed, after the queue's own cool-down gate, and left out after a second stop. The limits themselves are unchanged.
+- **Setup.** `scripts/setup-voice.sh` stops at once, before the engine, when the folder for Fish's checkpoint is not
+  yours to write (a root-owned `~/models`), and says how to fix it. An app that is already running picks up the Bolt
+  engine within a minute of `oneshot-setup-spark.sh --bolt`, with no restart (before, it stayed *external* until one).
 
 ## New in 3.4.0 (2026-10-27)
 
@@ -2678,15 +2712,21 @@ In the **Director** room of the sidebar (or at the bottom of the First AD tab), 
 the film's logline and a few numbers (scenes, shots a scene, seconds a shot, quality, how many retakes a failed take
 gets, whether to cut it and a song from the Music tab under the cut) and runs the whole production while you watch.
 The film's brain writes what the film lacks: characters with their voices and places when it has none, then the
-scenes, then each scene's shots with their sectioned prompts, cast, place and short spoken lines (the first shot of a
-scene is a cut, on the cast's stills where Ref2VA is installed; the rest carry on from the shot before). Each
-character without a pinned picture gets a reference still and a turnaround of it, each place a plate, pinned to their
-sheets. Then every shot is rendered in order, at most three in the queue at once, and each take is checked by the QA
-gate; a take that fails is rendered again at the next seed. The take that passes is rated *good* and a failed one
-*no good*. Last, the best take of every shot is cut: with a song, by the rough cut on the song's beats (each shot near its own length) with the
+scenes, then each scene's shots with their sectioned prompts, cast, place and short spoken lines. A shot that names a
+character in its prompt has them in its cast, and what anyone says is in its lines, or the brain is asked again. A new
+size or angle is a cut, on the cast's stills where Ref2VA is installed (the same pictures in the same order, no first
+frame); a beat carried on in the same size and angle opens on the shot before. Each character without a pinned
+picture gets a reference still (from the knees up when the clothing names a hat, a coat or a uniform) and a turnaround
+of it, each place a plate, pinned to their sheets. Then every shot is rendered in order, one in the queue for each
+machine that renders (at most three), and each take is checked by the QA gate; a take that fails is rendered again at
+the next seed. The take that passes is rated *good* and a failed one *no good*: it stays among the shot's takes and in
+the Library, marked *failed check*, and out of the cut unless you circle it. A render the workload limits stopped is
+queued once more at the same seed; a shot the queue refused (the memory guard) is left out, with the reason. Last, the
+take of every shot that passed (or was not checked, or is circled) is cut: with a song, by the rough cut on the song's beats (each shot near its own length) with the
 song under it, its FCPXML, EDL and Resolve zip in exports/; without one, on an Editor timeline that is exported, with
-the timeline's FCPXML, EDL and package beside it. The panel shows the stage, the counts (*7 of 9 shots rendered, 2 retakes*), the job at
-work and the run's log; *Stop* takes the jobs still waiting out of the queue, and *Direct it again* carries on: what
+the timeline's FCPXML, EDL and package beside it. The panel shows the stage, the counts (*7 of 9 shots rendered, 6 passed the check,
+1 refused by the queue, 2 retakes*), the job at work and the run's log, and at the end each shot left out of the cut
+with its reason; the log's last line says the same (*cut without 1 shot*). *Stop* takes the jobs still waiting out of the queue, and *Direct it again* carries on: what
 is written, cast and rendered is kept, and so are shots that had a take before the Director came to them. A restart
 of the app picks a run up where it was. For scripts and agents: `POST /api/slate/direct {"project", "logline",
 "scenes", "shotsPerScene", "seconds", "quality", "retakes", "cut", "song"}`, `GET /api/slate/direct/{project}`,

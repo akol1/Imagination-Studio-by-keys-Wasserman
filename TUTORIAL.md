@@ -156,6 +156,11 @@ press *Make line art of Video 1*, and write Scene "A young martial artist with s
 jacket on a rooftop at dusk, red paper lanterns", Action "He strikes a wooden training dummy". The clip comes back
 drawn as anime on the same outlines and timing.
 
+A take that failed its check stays in the **Library**, marked *failed check*: the takes the QA gate and the shot
+check render again keep the failed one there, and the Director's failed takes are rated *no good* among the shot's
+takes. Type "failed" in the Library's search to list them. The Director's cut leaves them out unless you circle one
+in Slate.
+
 ## 8.6 Library actions: turn a picture round, make a clip larger, take a person out
 
 Three LoRAs of the hub have a job of their own, and the Library has a button for each. On a DGX Spark they come with

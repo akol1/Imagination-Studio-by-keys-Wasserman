@@ -413,6 +413,37 @@ def test_a_takes_sound_becomes_a_characters_voice():
         assert none.status_code == 400 and "no sound" in none.json()["error"]
 
 
+def test_a_reply_with_a_think_tag_spliced_in_gives_the_copy_after_it():
+    """A brain with thinking off can still splice a think tag into its answer and start the answer again after it: the
+    first copy breaks off inside a prompt, the whole one follows the tag."""
+
+    whole = {"shots": [{"scene": "The Keeper Waves", "name": "Keeper Waves Lamp", "prompt": "# Subject\nThe keeper waves a lamp.\n# Mood\nDread."}]}
+    reply = '{"shots":[{"scene":"The Keeper Waves","name":"Keeper Waves Lamp","prompt":"# Subject\\nThe keeper waves a lamp.\\n# Mood</think>' + __import__("json").dumps(whole)
+    assert slate.extract_json(reply) == whole
+    # a reply cut off inside its JSON says so: a value nested in the broken one is not taken for the answer
+    for cut in ('{"issues":[{"severity":"warn","text":"a"},{"severity":', '{"shots":[{"name":"cut off" ... then {"shots": [{"name": "A"}]}'):
+        try:
+            slate.extract_json(cut)
+            raise AssertionError("a fragment was taken for the answer: " + cut)
+        except ValueError:
+            pass
+    # the usual fences and preamble still work
+    assert slate.extract_json('Here you go:\n```json\n{"a": [1, {"b": 2}]}\n```') == {"a": [1, {"b": 2}]}
+    assert slate.extract_json("[1, 2] and nothing else") == [1, 2]
+    try:
+        slate.extract_json("no json at all </think> still none")
+        raise AssertionError("no JSON was found and none was made up")
+    except ValueError:
+        pass
+
+
+def test_a_character_named_only_in_the_prompt_is_said():
+    made = slate.compile_shot(film(tf={"start": "text", "cast": ["char-leo"], "location": "loc-1", "lines": [], "soundscape": "", "music": "N/A", "seed": 1}), "shot-1")
+    assert any(w.startswith("Mia is named in the prompt but not cast") for w in made["warnings"])
+    cast = slate.compile_shot(film(), "shot-1")
+    assert not any("named in the prompt" in w for w in cast["warnings"])
+
+
 if __name__ == "__main__":
     for name, test in list(globals().items()):
         if name.startswith("test_"):
