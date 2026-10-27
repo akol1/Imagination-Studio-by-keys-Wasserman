@@ -8,6 +8,10 @@
 #   bash oneshot-setup-spark.sh --image-only  # Qwen-Image-2.1 only (26 GB)
 #   bash oneshot-setup-spark.sh --no-render   # skip the test clip
 #   bash oneshot-setup-spark.sh --ref2va      # add MiniMax H3 Ref2VA (reference pictures hold a face), 39 GB more
+#   bash oneshot-setup-spark.sh --swap        # add the Library's Swap the character, 2.1 GB more beside Ref2VA (which it adds):
+#                                             # Akatz Labs' Character Swap LoRA v1.5 and LightX2V's 8-step Turbo LoRA, and
+#                                             # SAM 3.1 when it is not here yet (spark/setup-swap.sh). MiniMax H3 Community
+#                                             # License: not licensed for use in the EU, the UK, South Korea or the US
 #   bash oneshot-setup-spark.sh --h3-base     # add MiniMax H3's own first-and-last-frame transformer, 40 GB more:
 #                                             # what keyframe LoRAs (360 Orbit, Transformation) were trained on
 #                                             # and, with it, the Library's actions (Turnaround sheet, Upscale, Remove a person:
@@ -100,11 +104,11 @@ fi
 # written down in this repo to copy, and the resolver keeps them beside the torch pinned here.
 TORCH_PIN=(torch==2.14.1 torchvision==0.29.1)  # requirements.lock; scripts/setup-comfy.sh pins the same pair
 STUDIO_PIN=(huggingface_hub==1.33.0 fastapi==0.142.2 uvicorn==0.54.0 python-multipart==0.0.32 pillow==12.3.0)  # requirements.lock
-IMAGE_ONLY=0; RENDER=1; VERIFY=0; REF2VA=0; MOTION=0; VOICE=0; UPGRADE=0; LORAS=""; H3_BASE=0; WORKFLOWS=1; IMAGE_EDIT=0; FLUX3=0; MOSS=0; MUSIC=0; SOUND=0; BOLT=0; TRAIN=0; GRAPHICS=""; FINISH=""
+IMAGE_ONLY=0; RENDER=1; VERIFY=0; REF2VA=0; MOTION=0; VOICE=0; UPGRADE=0; LORAS=""; H3_BASE=0; WORKFLOWS=1; IMAGE_EDIT=0; FLUX3=0; MOSS=0; MUSIC=0; SOUND=0; BOLT=0; TRAIN=0; GRAPHICS=""; FINISH=""; SWAP=0
 for arg in "$@"; do
   case "$arg" in
-    --ref2va) REF2VA=1;; --h3-base) H3_BASE=1;; --image-edit) IMAGE_EDIT=1;; --flux3) FLUX3=1;; --moss) MOSS=1;; --music) MUSIC=1;; --bolt) BOLT=1;; --train) TRAIN=1;; --graphics) GRAPHICS=1;; --no-graphics) GRAPHICS=0;; --finish) FINISH=1;; --no-finish) FINISH=0;; --sound) SOUND=1;; --motion) MOTION=1;; --voice) VOICE=1;; --image-only) IMAGE_ONLY=1;; --no-render) RENDER=0;; --verify) VERIFY=1; RENDER=0;; --upgrade) UPGRADE=1; RENDER=0; MOTION=1;;
-    --all) REF2VA=1; H3_BASE=1; IMAGE_EDIT=1; FLUX3=1; MOSS=1; MUSIC=1; SOUND=1; BOLT=1; VOICE=1; MOTION=1; TRAIN=1; GRAPHICS=1; FINISH=1;;  # every feature
+    --ref2va) REF2VA=1;; --swap) SWAP=1; REF2VA=1;; --h3-base) H3_BASE=1;; --image-edit) IMAGE_EDIT=1;; --flux3) FLUX3=1;; --moss) MOSS=1;; --music) MUSIC=1;; --bolt) BOLT=1;; --train) TRAIN=1;; --graphics) GRAPHICS=1;; --no-graphics) GRAPHICS=0;; --finish) FINISH=1;; --no-finish) FINISH=0;; --sound) SOUND=1;; --motion) MOTION=1;; --voice) VOICE=1;; --image-only) IMAGE_ONLY=1;; --no-render) RENDER=0;; --verify) VERIFY=1; RENDER=0;; --upgrade) UPGRADE=1; RENDER=0; MOTION=1;;
+    --all) SWAP=1; REF2VA=1; H3_BASE=1; IMAGE_EDIT=1; FLUX3=1; MOSS=1; MUSIC=1; SOUND=1; BOLT=1; VOICE=1; MOTION=1; TRAIN=1; GRAPHICS=1; FINISH=1;;  # every feature
     --no-workflows) WORKFLOWS=0;;
     --yes|-y) ;;  # the plain install without the checklist
     --loras) LORAS=all;; --loras=*) LORAS="${arg#--loras=}";; --no-loras) LORAS=none;; --lora-bundle=*) LORA_BUNDLE="${arg#--lora-bundle=}";;
@@ -132,6 +136,7 @@ if [ "$UPGRADE" = 1 ]; then
   [ -x "$PREFIX/venv/bin/python" ] || die "nothing to upgrade at $PREFIX: run oneshot-setup-spark.sh without --upgrade"
   [ -s "$MODELS/FastH3-Comfy/diffusion_models/fastvideo_fasth3_8step_v2_pruned_bf16.safetensors" ] || IMAGE_ONLY=1
   [ ! -s "$MODELS/MiniMax-H3-Comfy/diffusion_models/minimax_h3_ref2va_pruned_bf16.safetensors" ] || REF2VA=1
+  [ ! -s "$MODELS/MiniMax-H3-Comfy/loras/h3_character_swap_v1.5.safetensors" ] || SWAP=1
   [ ! -s "$MODELS/FLUX3-K-Comfy/diffusion_models/flux3-image-klein-bf16.safetensors" ] || FLUX3=1
   [ ! -s "$MODELS/FLUX3-K-Comfy/diffusion_models/flux3_image_klein_sd_bf16.safetensors" ] || FLUX3=1
   [ ! -s "$MODELS/MOSS-Image-Comfy/diffusion_models/moss_image_sft_bf16.safetensors" ] || MOSS=1
@@ -184,6 +189,10 @@ if [ "$UPGRADE" = 0 ]; then
   if [ "$SOUND" = 1 ] && [ ! -s "$MODELS/Sound-Comfy/stable-audio-open-1.0/model.safetensors" ]; then
     checklist_gate_part "$GATE_MODE" --sound "Sound effects and foley" "$GATE_CMD" https://huggingface.co/stabilityai/stable-audio-open-1.0/resolve/main/model_index.json || SOUND=0
   fi
+  if [ "$SWAP" = 1 ] && [ ! -s "$MODELS/MiniMax-H3-Comfy/loras/h3_character_swap_v1.5.safetensors" ]; then
+    checklist_gate_part "$GATE_MODE" --swap "Swap the character" "$GATE_CMD" \
+      https://huggingface.co/akatz-ai/MiniMax-H3-Character-Swap-LoRA/resolve/main/h3_character_swap_v1.5.safetensors || SWAP=0
+  fi
 fi
 [ "${STUDIO_GATE_DRY:-0}" != 1 ] || { echo "flux3=$FLUX3 sound=$SOUND"; exit 0; }
 # disk for what is still to fetch (GB, with room): each part asked for whose weights are not here yet, by the file that
@@ -195,6 +204,7 @@ if [ "$IMAGE_ONLY" = 0 ]; then
   missing "$MODELS/FastH3-Comfy/diffusion_models/fastvideo_fasth3_8step_v2_pruned_bf16.safetensors" && NEED=$((NEED + 75))
   [ "$REF2VA" = 0 ] || ! missing "$MODELS/MiniMax-H3-Comfy/diffusion_models/minimax_h3_ref2va_pruned_bf16.safetensors" || NEED=$((NEED + 40))
   [ "$H3_BASE" = 0 ] || ! missing "$MODELS/MiniMax-H3-Comfy/diffusion_models/minimax_h3_fl2va_pruned_bf16.safetensors" || NEED=$((NEED + 42))
+  [ "$SWAP" = 0 ] || ! missing "$MODELS/MiniMax-H3-Comfy/loras/h3_character_swap_v1.5.safetensors" || NEED=$((NEED + 4))
   [ "$IMAGE_EDIT" = 0 ] || ! missing "$MODELS/Qwen-Image-2.1-Comfy/diffusion_models/qwen_image_2.1_bf16.safetensors" || NEED=$((NEED + 15))
   [ "$FLUX3" = 0 ] || [ -s "$MODELS/FLUX3-K-Comfy/diffusion_models/flux3_image_klein_sd_bf16.safetensors" ] \
     || [ -s "$MODELS/FLUX3-K-Comfy/diffusion_models/flux3-image-klein-bf16.safetensors" ] || NEED=$((NEED + 42))
@@ -496,6 +506,13 @@ if [ "$IMAGE_ONLY" = 0 ] && [ "$WORKFLOWS" = 1 ] && [ -s "$MODELS/MiniMax-H3-Com
     || echo "  ! the Library actions are not fully set up: the Library says which one is missing what"
 fi
 
+# The Library's Swap the character: two LoRAs and SAM 3.1 beside Ref2VA, on ComfyUI's own nodes (spark/setup-swap.sh)
+if [ "$IMAGE_ONLY" = 0 ] && [ "$SWAP" = 1 ]; then
+  say "Swap the character: Akatz Labs' Character Swap LoRA, LightX2V's 8-step Turbo LoRA and SAM 3.1 (2.1 GB) -> $MODELS"
+  PREFIX="$PREFIX" SPARK_MODELS="$MODELS" bash "$HERE/spark/setup-swap.sh" $([ "$VERIFY" = 0 ] && [ "$UPGRADE" = 0 ] || echo --verify) \
+    || echo "  ! Swap the character is not fully set up: the Library says what is missing"
+fi
+
 if [ "$IMAGE_ONLY" = 0 ]; then
   say "TensorFold's H3 engine for CUDA -> $PREFIX/tf-h3"
   if [ "$VERIFY" = 1 ]; then
@@ -550,7 +567,7 @@ elif [ "$VERIFY" = 1 ]; then echo "  - Finish is not installed (--finish adds it
 [ "$VERIFY" = 1 ] || cp "$HERE/VERSION" "$PREFIX/VERSION"
 if [ "$UPGRADE" = 1 ]; then
   say "Upgraded: $INSTALLED -> $(cat "$PREFIX/VERSION"). Checking the install (restart the app to serve the new pages: scripts/app.sh)"
-  exec bash "$HERE/oneshot-setup-cuda.sh" --verify $([ "$IMAGE_ONLY" = 0 ] || echo --image-only) $([ "$REF2VA" = 0 ] || echo --ref2va) $([ "$FLUX3" = 0 ] || echo --flux3) $([ "$MOSS" = 0 ] || echo --moss) $([ "$MUSIC" = 0 ] || echo --music) $([ "$SOUND" = 0 ] || echo --sound) $([ "$BOLT" = 0 ] || echo --bolt) $([ "$VOICE" = 0 ] || echo --voice) $([ "$TRAIN" = 0 ] || echo --train) $([ "$GRAPHICS" = 0 ] && echo --no-graphics || echo --graphics) $([ "$FINISH" = 0 ] && echo --no-finish || echo --finish)
+  exec bash "$HERE/oneshot-setup-cuda.sh" --verify $([ "$IMAGE_ONLY" = 0 ] || echo --image-only) $([ "$REF2VA" = 0 ] || echo --ref2va) $([ "$SWAP" = 0 ] || echo --swap) $([ "$FLUX3" = 0 ] || echo --flux3) $([ "$MOSS" = 0 ] || echo --moss) $([ "$MUSIC" = 0 ] || echo --music) $([ "$SOUND" = 0 ] || echo --sound) $([ "$BOLT" = 0 ] || echo --bolt) $([ "$VOICE" = 0 ] || echo --voice) $([ "$TRAIN" = 0 ] || echo --train) $([ "$GRAPHICS" = 0 ] && echo --no-graphics || echo --graphics) $([ "$FINISH" = 0 ] && echo --no-finish || echo --finish)
 fi
 # The essential LoRA bundle: every preset of the LoRA hub, fetched once from its author's page into one folder laid out
 # by the hub's groups, then installed (oneshot-essential-bundle.sh). --loras=GROUPS takes some groups, --lora-bundle=PATH

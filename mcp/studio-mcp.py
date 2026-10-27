@@ -126,6 +126,18 @@ TOOLS = [
                                  "image_model": {"type": "string", "enum": ["qwen", "qwen-full", "flux3k-fast", "flux3k-full"]},
                                  "keep_sound": {"type": "boolean", "description": "keep the clip's own sound (default true)"},
                                  "seed": {"type": "integer"}}, ("video", "instruction"))},
+    {"name": "swap_character", "description": "Character Swap: replace the person in a 5 to 15 s part of a Library clip (one "
+                                              "continuous shot, the person in view in its first frame) with the character in a "
+                                              "Library picture. The scene, the performance and the clip's own sound stay; with "
+                                              "several people the largest is swapped. One job: its first output is the swapped part.",
+     "inputSchema": text_schema({"clip": {"type": "string", "description": "Library path of the clip"},
+                                 "picture": {"type": "string", "description": "Library path of the character's picture, outfit included"},
+                                 "start": {"type": "number", "description": "where the part starts, in seconds (default 0)"},
+                                 "seconds": {"type": "number", "description": "how long the part is, 5 to 15 (default 5)"},
+                                 "quality": {"type": "integer", "enum": [480, 768], "description": "the short side, 768 (default) or 480 (faster)"},
+                                 "direction": {"type": "string", "description": "optional words for the model, e.g. she keeps her hands in her pockets"},
+                                 "anchor": {"type": "boolean", "description": "put the character in the first frame first (default true)"},
+                                 "seed": {"type": "integer"}}, ("clip", "picture"))},
     {"name": "queue_sound", "description": "Queue a sound: kind sfx is a sound effect from words (Stable Audio Open, 1 to 47 s, a .wav); "
                                            "kind foley makes a clip's sound for its picture (MMAudio: a .wav and the clip with it).",
      "inputSchema": text_schema({"kind": {"type": "string", "enum": ["sfx", "foley"]},
@@ -487,6 +499,10 @@ def run(name: str, args: dict):
                 "fix_clip": ("video", "instruction", "image_model", "keep_sound", "seed")}[name]
         made = call("POST", "/api/revise", {"kind": name.split("_")[0], "params": {k: args[k] for k in keys if args.get(k) not in (None, "")}})
         return {**job_summary(made), "revise": made.get("revise")}
+    if name == "swap_character":  # Character Swap (app/swap.py): one job of kind swap
+        params = {"video": args.get("clip"), "image": args.get("picture"),
+                  **{k: args[k] for k in ("start", "seconds", "quality", "direction", "anchor", "seed") if args.get(k) not in (None, "")}}
+        return job_summary(call("POST", "/api/jobs", {"kind": "swap", **({"title": args["title"]} if args.get("title") else {}), "params": params}))
     if name == "queue_sound":
         kind = args.get("kind")
         if kind not in ("sfx", "foley"):

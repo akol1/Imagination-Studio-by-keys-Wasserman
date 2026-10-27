@@ -293,7 +293,7 @@
   "what": "Replaces a person in a source clip with the person in a reference picture, keeping the scene.",
   "status": "ready",
   "why": "",
-  "notes": "Works on a clip from references: your clip as Video 1 and a picture of the new character as Picture 1. Strength 1.0, no trigger: under Video 1 say who is replaced. Shots of 4 to 5 seconds worked best for the author. On a DGX Spark the clip runs on the full-precision reference model.",
+  "notes": "Works on a clip from references: your clip as Video 1 and a picture of the new character as Picture 1. Strength 1.0, no trigger: under Video 1 say who is replaced. Shots of 4 to 5 seconds worked best for the author. On a DGX Spark the clip runs on the full-precision reference model. On a DGX Spark the Library also has Swap the character under every clip: the person is found and followed for you, and it uses the author's version 1.5 (oneshot-setup-spark.sh --swap).",
   "flow": "character-swap",
   "tested": "Mac, DGX Spark"
  },

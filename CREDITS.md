@@ -102,6 +102,12 @@ repository at a pinned commit when the Studio is installed; none of their code i
 - **Remove a person:** the Person Remover LoRA and H3 Relay (the windowed removal with its green mask and its relay
   of history frames, GPL-3.0) by Akatz Labs (akatz-ai); the person is found and followed by SAM 3.1 from Meta, in
   the build Comfy-Org repackaged for ComfyUI, under the SAM License.
+- **Character Swap:** the idea and the app it comes from are Comfy Org's **Openjutsu** (comfy-openjutsu, MIT), built
+  on **Akatz Labs**' (akatz-ai) H3 Character Swap workflow (MIT) and their **Character Swap LoRA** version 1.5 (MiniMax
+  H3 Community License). It runs with **LightX2V**'s 8-step Turbo LoRA for MiniMax H3 (Apache-2.0), **SAM 3.1** from
+  Meta for the person (SAM License) and **MiniMax H3** Ref2VA. The settings are the ones Akatz Labs published; the
+  code is this pack's own, on ComfyUI's own nodes (no node pack). The first frame is drawn by FLUX3-K (Black Forest
+  Labs) where Openjutsu used a paid picture service.
 
 ## The Motion Previs tab: Sam Wasserman's Motion Previs Studio
 

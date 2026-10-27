@@ -128,6 +128,7 @@ FastH3 video with sound (125 GB), motion graphics, Finish and phone notification
 | `--all` | Every feature below, about 400 GB (on a Mac, every feature its memory runs, without `--train`) |
 | `--image-only` | Qwen-Image-2.1 only (26 GB) |
 | `--ref2va` | Reference pictures to video (39 GB more) |
+| `--swap` | The Library's Character Swap: two LoRAs and SAM 3.1 beside Ref2VA (2.1 GB more; adds `--ref2va`). DGX Spark and CUDA only |
 | `--h3-base` | MiniMax H3's own transformer, for keyframe LoRAs and the Library actions (40 GB more) |
 | `--image-edit` | Qwen-Image-2.1's 40-step model (14 GB more) |
 | `--flux3` | FLUX3-K pictures (41 GB more, gated) |
@@ -2189,6 +2190,46 @@ Restyle and Fix need the Ref2VA model (`--ref2va` on a DGX Spark, a Mac with 128
 Agents have the same three as `restyle_clip`, `extend_clip` and `fix_clip`; over the API they are
 `POST /api/revise {kind: "restyle" | "extend" | "fix", params}` (or `POST /api/jobs` with the same kind), which
 returns the first job and `revise`, the steps so far; `GET /api/revise/<id>` follows them.
+
+### Character Swap
+
+*Swap the character…* under a clip in the Library replaces the person in a part of the clip with the character in one
+picture. The scene, the performance and the clip's own sound stay: the person's moves, gaze and timing carry over, the
+room and the other people are the clip's own, and the part keeps its soundtrack.
+
+1. Press **Swap the character…** under a clip. The panel opens with the clip beside its settings.
+2. Choose **the character**: upload a picture or pick one from the Library. Head to toe if you can: the face, the hair
+   and the whole outfit come from it.
+3. Choose **the part**: where it starts and how long it is (5 to 15 seconds).
+4. Choose **480p** (faster) or **768p** (sharper), and leave **Put the character in the first frame first** on: the
+   picture model draws the character into the part's first frame and the swap starts from that frame (FLUX3-K Fast,
+   or Qwen-Image-2.1 where FLUX3-K is not installed). A **direction** (optional) adds your own words.
+5. Press **Swap the character**. The job card shows the stages: the part, finding the person, following them, the
+   first frame, each window, and the assembly. The result is in the Library (`renders/<job>.mp4`), beside the part
+   with the swapped person tinted green, so you can see who was swapped, and the first frame it started from.
+
+How it works: SAM 3.1 finds the people in the part's first frame and the largest one is swapped; it follows them
+through the part, and the mask is grown by 64 pixels so hair, hands and the outfit's edges are inside it. Only that
+person is drawn again: the rest of each frame is the clip's own. MiniMax H3 Ref2VA with Akatz Labs' Character Swap
+LoRA and LightX2V's 8-step Turbo LoRA draws the person, 8 passes a window, in windows of 124 frames (5.2 s), each
+carrying the last 18 frames of the window before so the joins hold. It all runs on this machine on the studio's own
+engine: no ComfyUI to open, no account, no cloud.
+
+Limits:
+
+- **One continuous shot.** A part with a hard cut in it is refused (choose a part before or after the cut).
+- **A person in the first frame.** A part that opens on nobody (a title, a fade from black) is refused before
+  anything is drawn.
+- **The largest person is swapped** when several are in the first frame.
+- A clip without sound gives a result without sound. Lip sync and identity can still drift on long parts: the model
+  is an experimental one.
+
+Needs: a DGX Spark (or another CUDA machine) with MiniMax H3 Ref2VA, and `bash oneshot-setup-spark.sh --swap` (it adds
+Ref2VA when it is not there, Akatz Labs' Character Swap LoRA v1.5, LightX2V's 8-step Turbo LoRA and SAM 3.1, about
+2.1 GB beside Ref2VA; ticked in the installer's checklist). Not on a Mac. MiniMax H3 and the LoRA are under the
+MiniMax H3 Community License, which does not cover use in the EU, the UK, South Korea or the US; the panel says so
+beside the button. Agents have it as `swap_character` (clip, picture, start, seconds, quality, direction); over the
+API it is `POST /api/jobs {kind: "swap", params: {video, image, start, seconds, quality, anchor, direction, seed}}`.
 
 ### Clearing prompts and deleting clips
 
