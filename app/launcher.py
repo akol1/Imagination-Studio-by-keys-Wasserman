@@ -54,6 +54,9 @@ def rebuild_engine(pack: Path, pin: str, port: str) -> None:
     shutil.rmtree(kept, ignore_errors=True)
     staged = prefix_of() / ("zig-engine." + uuid.uuid4().hex)
     shutil.copytree(built, staged)
+    # h3_case.py imports the renderer as h3_generate_dev from its own folder: oneshot-setup.sh links it there, the build does not
+    (staged / "h3_generate_dev.py").unlink(missing_ok=True)
+    (staged / "h3_generate_dev.py").symlink_to("../h3_generate.py")
     engine.rename(kept)
     staged.rename(engine)
     print(f"[launcher] native engine rebuilt at {pin[:8]}", file=sys.stderr, flush=True)
@@ -116,6 +119,13 @@ def main() -> int:
                 child.kill()  # our unresponsive server child only; never a renderer or unrelated process
                 child.wait(timeout=5)
 
+    try:  # copies a `git pull` left behind follow the code before the first render (the updater only syncs its own updates)
+        refreshed = sync_prefix(pack, "HEAD")
+    except OSError as error:
+        refreshed = []
+        print("PREFIX copies were not checked: " + str(error), file=sys.stderr)
+    if refreshed:
+        print("Refreshed in PREFIX: " + ", ".join(refreshed), file=sys.stderr)
     child, session = launch()
     # A worker's PID contract and start/stop commands depend on server.py being the managed process.
     while True:
