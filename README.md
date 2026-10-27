@@ -1857,6 +1857,17 @@ mouths stayed closed in the frames looked at. A prompt that still carries the ol
 No route of the app has a negative prompt field: FastH3, MiniMax H3 Turbo and Qwen-Image-2.1-Turbo all run one forward a pass.
 `POST /api/prompt/check {"prompt": "..."}` gives the same list for a prompt written by hand.
 
+`scripts/video.sh` does one further thing for a prompt that never went through the app. A prompt with no spoken line
+(`<d>...</d>`) and no `overall_soundscape:` heading is given the Studio's own line under that heading before the model
+sees it (`ensure_ambient` in `app/negation.py`): "Only ambient sound is heard." The sentences already in the prompt
+stay, including anything they forbid by name. A prompt that asks for a spoken line, that already has the heading,
+that names a reference (`<Picture>`, `<Video>` or `<Audio>`, or `REF_IMAGES` / `REF_VIDEOS` / `REF_AUDIOS`), that
+sets `REF_PLAIN=1`, or that rides with `REF_VIDEO_SOUND=1` (the reference clip's own sound may hold speech) is sent
+as written. A first-frame lead ("For the target video…") stays ahead of the new heading, as `compose()` writes it.
+On Linux the same script hands over to `spark/video.sh`, which applies the same rule. A prompt the app composed
+already has the heading, so that job is unchanged. A Nodes clip or Train's Try sends its own prompt and is left
+alone when it carries a reference.
+
 **The shot check.** After a single clip is rendered the app looks at its frames (`app/shot.py`) and writes the
 verdict beside the clip in the queue:
 

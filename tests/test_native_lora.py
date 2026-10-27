@@ -16,8 +16,10 @@ pytestmark = pytest.mark.skipif(
     or "Apple M5" not in subprocess.run(["sysctl", "-n", "machdep.cpu.brand_string"], capture_output=True, text=True).stdout,
     reason="scripts/video.sh picks the native engine on an M5 only")
 
-FAKE_PYTHON = """#!/bin/bash
-echo "$*" >> "$CALLS"
+FAKE_PYTHON = r"""#!/bin/bash
+# one invocation, one line. ensure_ambient's prompt holds newlines, and echo would split that call across lines.
+flat=$(printf '%s' "$*" | paste -sd ' ' -)
+printf '%s\n' "$flat" >> "$CALLS"
 case "$1" in *zig_fasth3.py) exit "${ZIG_STATUS:-0}";; esac
 exit 0
 """
