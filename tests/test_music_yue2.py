@@ -76,15 +76,21 @@ def install(folder: Path) -> Path:
 
 
 class Linux:
-    """music.py on a Linux machine with an NVIDIA GPU, YuE2 installed under ``folder`` when ``installed``."""
+    """music.py on a Linux machine with an NVIDIA GPU, YuE2 installed under ``folder`` when ``installed``. The memory
+    guard sees an idle DGX Spark, not the machine the tests run on (a CI runner has 16 GB)."""
 
     def __init__(self, folder: Path, installed: bool = True, **env):
         self.folder, self.installed = folder, installed
         self.env = {"YUE2_HOME": str(folder / "yue2"), "FAKE_YUE2_LOG": str(folder / "requests.jsonl"), "YUE2_GUARD_GB": "0", **env}
 
     def __enter__(self):
+        import memory_guard
+
         self.had = (music.SPARK, music.PREFIX, music._engine, music_yue2._engine, music_yue2.nvidia,
                     {k: os.environ.get(k) for k in [*self.env, "STUDIO_MUSIC_ENGINE", "YUE2_QUANT", "YUE2_BACKEND"]})
+        self.guard = memory_guard, memory_guard.meminfo, memory_guard.device_room_mb
+        memory_guard.meminfo = lambda text=None: {"MemTotal": 124_500, "MemAvailable": 118_000, "MemFree": 118_000}
+        memory_guard.device_room_mb = lambda: None
         if self.installed:
             install(self.folder)
         music.SPARK, music.PREFIX, music._engine, music_yue2._engine = True, self.folder / "prefix", None, None
@@ -98,6 +104,7 @@ class Linux:
         for one in music.loaded_engines():
             one.release("test over")
         music.SPARK, music.PREFIX, music._engine, music_yue2._engine, music_yue2.nvidia, saved = self.had
+        guard, guard.meminfo, guard.device_room_mb = self.guard
         for key, value in saved.items():
             if value is None:
                 os.environ.pop(key, None)
