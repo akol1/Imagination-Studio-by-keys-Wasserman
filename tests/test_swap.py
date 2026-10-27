@@ -401,6 +401,11 @@ def test_the_agents_swap_a_character_through_the_studio_tools(monkeypatch):
     assert not reply.get("isError"), reply
     assert sent[-1] == ("POST", "/api/jobs", {"kind": "swap", "params": {"video": "renders/a.mp4", "image": "scouts/b/hero.png",
                                                                           "start": 2, "seconds": 10, "quality": 480}})
+    quality = listed["swap_character"]["inputSchema"]["properties"]["quality"]["description"]
+    assert quality.startswith(f"the short side, {swap.QUALITY} (default") and "title" in listed["swap_character"]["inputSchema"]["properties"]
+    mcp.answer({"method": "tools/call", "params": {"name": "swap_character", "arguments": {"clip": "renders/a.mp4", "picture": "scouts/b/hero.png",
+                                                                                        "title": "Hero swap"}}})
+    assert sent[-1][2]["title"] == "Hero swap"
     import agents
     assert "swap_character" in agents.MAKERS and "swap_character" in agents.STUDIO_TOOLS
 
