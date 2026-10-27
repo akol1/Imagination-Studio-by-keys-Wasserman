@@ -284,9 +284,11 @@ def test_studio_room_mb_stands_in_for_the_cards_room_and_never_beyond_the_ram():
         G.device_room_mb = lambda: 25_000  # a 32 GB card
         os.environ.pop("STUDIO_ROOM_MB", None)
         unset = G.room_mb()
-        assert unset == 25_000 + G.floor_mb(91_000)  # as before
+        assert unset == 25_000  # the card's own room (the checks hold it to the RAM: card_pool)
+        assert G.card_room_applies()
         os.environ["STUDIO_ROOM_MB"] = "70000"
         assert G.room_mb() == 70_000  # used instead of the card's room
+        assert not G.card_room_applies()  # the checks keep the Spark's arithmetic on that RAM budget
         os.environ["STUDIO_ROOM_MB"] = "200000"
         assert G.room_mb() == 80_000  # never more than the RAM has
         for bad in ("", "  ", "abc", "0", "-5", "7.5"):

@@ -840,9 +840,10 @@ def checked(body: dict) -> dict:
         import memory_guard
 
         # a loaded Drama 3 or MiniMax Music 3 server gives its memory back before the song loads (or is the song's).
-        # On a card that is the card's raw free before the engine loaded. The margin is applied once. Bolt is not
-        # in this set. A RAM room is not mixed in.
-        if memory_guard.device_room_mb() is not None:
+        # On a card that is the card's raw free before the engine loaded. The margin is applied once, and the
+        # check holds it to the RAM (memory_guard.card_pool). Bolt is not in this set. With STUDIO_ROOM_MB the
+        # budget is the RAM and the Spark's arithmetic below is kept.
+        if memory_guard.card_room_applies():
             have = memory_guard.card_room_for_job([voice.room_mb(), room_mb()])
             found = memory_guard.music_check(seconds, available_mb=have, route=getattr(engine(), "guard_route", "music"), card=True)
         else:

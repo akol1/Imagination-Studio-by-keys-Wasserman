@@ -138,8 +138,8 @@ def studio_tools() -> str:
     A failed import keeps the Spark sentence, which is what a GB10 and a Mac already say."""
 
     try:
-        import server
-        if server.card_face():
+        import sparks  # looks the running server up; importing server here would start a second app
+        if sparks.card_face():
             return STUDIO_TOOLS.replace("a LoRA trained on a DGX Spark from Library clips, for hours",
                                          "a LoRA trained on this GPU from Library clips, for hours")
     except Exception:

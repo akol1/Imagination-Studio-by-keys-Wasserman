@@ -438,7 +438,7 @@ A LoRA on FastH3 is merged into TensorFold's int8 engine and takes what a clip w
 1376x768 at 10 seconds. A Spark whose engine predates 2.7.1 renders LoRA clips on ComfyUI's own blocks, and refuses
 them above 1280x736 at 124 frames.
 
-On a GPU the clip is loaded onto the GPU, and that is the memory that moves. System RAM stays put and is not the pool. Before you queue a clip, the estimate in step 1 and step 5 adds *about N GB of this GPU's memory*, from measured peaks. A clip that would leave the GPU under its floor (2 GB kept free) shows **This clip will be refused: memory**, with the reason and the nearest size and length that fit. The one-pool lesson above is a DGX Spark's.
+On a GPU the clip is loaded onto the GPU, and that is the memory that moves. The models are still read through system RAM, so a clip also has to leave a tenth of the RAM free; when the RAM is the one that runs out, the message says so. Before you queue a clip, the estimate in step 1 and step 5 adds *about N GB of this GPU's memory*, from measured peaks. A clip that would leave the GPU under its floor (2 GB kept free) shows **This clip will be refused: memory**, with the reason and the nearest size and length that fit. The one-pool lesson above is a DGX Spark's.
 
 ## 14. Without the app
 

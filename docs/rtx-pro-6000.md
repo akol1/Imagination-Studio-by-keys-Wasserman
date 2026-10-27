@@ -67,13 +67,19 @@ The Studio reads the card's own memory (`nvidia-smi`) wherever it decides whethe
 - **Before a clip is queued**, the room is the card's free memory, including what a loaded Drama 3, Music, or Bolt
   will give back (each is unloaded before the job). **Before anything loads**, those engines are already gone, so the
   room is the card's free memory then. The card keeps 2 GB free (`VRAM_MARGIN_MB`), already taken out of that room.
-  System RAM is not mixed in.
-- **Voice (Drama 3, about 42 GB)** stops the studio's ComfyUI first when the card's free memory is under what Drama 3
-  needs. So Voice never loads beside the video models it would not fit with.
+  The machine's RAM still caps it: the models are read through RAM and ComfyUI's guard stops a render on RAM, so a
+  job also has to leave the usual tenth of RAM free. Whichever runs out first refuses the job, and the message names
+  it ("this GPU" or "this machine"). `STUDIO_ROOM_MB` (a card smaller than the models, [rtx-5090.md](rtx-5090.md))
+  replaces the card's room with a RAM budget.
+- **Voice (Drama 3, about 42 GB)** stops the studio's ComfyUI first when the smaller of the card's free memory and
+  the machine's available RAM is under what Drama 3 needs. So Voice never loads beside the video models it would not fit with.
 - **Bolt** is held beside a job only when the card has room for both. Otherwise it is unloaded first, as on a Spark.
 - **ComfyUI offloads by itself.** When a model does not fit the card's free memory, it stages the weights in RAM and
   streams them to the card. That is slower; the first load after a LoRA job took minutes in the simulation.
 - **The status bar** leads with the card's memory. It does not also quote system RAM as a second memory.
+- **No time estimate yet.** The times the page shows were measured on a GB10. A card shows none until it has a warm
+  sample of its own for that canvas (`CARD_WARM` in `app/server.py`, empty for now), so a clip on a card says only
+  how much memory it needs.
 
 ## The simulation
 

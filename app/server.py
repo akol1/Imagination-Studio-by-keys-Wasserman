@@ -1413,8 +1413,9 @@ def bolt_need(job: dict, resident_gb: float) -> tuple[bool, str] | None:
     if room is None:
         return None
     # On a card the floor is the 2 GB margin, once. bolt_room_mb is that room after the margin, so the voice
-    # branch adds the margin back and compares it once. A Spark keeps a tenth of its RAM.
-    on_card = memory_guard.discrete()
+    # branch adds the margin back and compares it once (memory_guard.card_pool, which holds it to the RAM too).
+    # A Spark keeps a tenth of its RAM, and so does a card with STUDIO_ROOM_MB (its budget is the RAM).
+    on_card = memory_guard.card_room_applies()
     floor = memory_guard.VRAM_MARGIN_MB if on_card else memory_guard.floor_mb()
     try:
         if kind in ("video", "studio", "long"):
@@ -1435,8 +1436,8 @@ def bolt_need(job: dict, resident_gb: float) -> tuple[bool, str] | None:
             one = voice.backend()
             need = 0 if one.loaded() else int(float(getattr(one, "NEED_GB", 50)) * 1024)
             if on_card:
-                have = room + memory_guard.VRAM_MARGIN_MB
-                said = {"fits": have - need >= memory_guard.VRAM_MARGIN_MB, "need_mb": need, "available_mb": have}
+                have, floor, _ = memory_guard.card_pool(room)
+                said = {"fits": have - need >= floor, "need_mb": need, "available_mb": have}
             else:
                 said = {"fits": room - need >= floor, "need_mb": need, "available_mb": room}
         else:
@@ -1446,6 +1447,7 @@ def bolt_need(job: dict, resident_gb: float) -> tuple[bool, str] | None:
     if said.get("route") is None and said.get("need_mb") is None:
         return None
     need, have = said.get("need_mb") or 0, said.get("available_mb") or room
+    floor = said.get("floor_mb") or floor
     return bool(said.get("fits")), (f"{have / 1000:.0f} GB for the job with Bolt resident, the job's estimated peak about "
                                     f"{need / 1000:.0f} GB, the floor {floor / 1000:.0f} GB")
 
@@ -1471,7 +1473,8 @@ def memory_of(params: dict, env: dict, frames: int, lora: bool, found: dict | No
     # On a card that memory is the card's raw free before the engine loaded. held_room() mixes it with the
     # after-margin card room, so it is not passed in. A caller that already adjusted the card's room (Bolt beside
     # the job) passes it through and the margin is applied once.
-    on_card = memory_guard.device_room_mb() is not None
+    # With STUDIO_ROOM_MB the budget is the machine's RAM and the job keeps the Spark's arithmetic (held_room).
+    on_card = memory_guard.card_room_applies()
     if on_card and available_mb is None:
         room = memory_guard.card_room_for_job([voice.room_mb(), music.room_mb(), bolt.room_mb()])
         card = True

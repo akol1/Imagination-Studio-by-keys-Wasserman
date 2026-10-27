@@ -152,8 +152,8 @@ def adaln_basis(folder: Path):
                      "MiniMax H3 from MiniMax's page once (or ref2va-adaln-basis.npy in the LoRA bundle); LORA_OFFLINE=1 keeps this off the network")
         on_card = False
         try:
-            import server
-            on_card = bool(server.card_face())
+            import sparks  # looks the running server up; importing server here would start a second app
+            on_card = sparks.card_face()
         except Exception:
             on_card = False
         raise RuntimeError(card_line if on_card else spark_line)

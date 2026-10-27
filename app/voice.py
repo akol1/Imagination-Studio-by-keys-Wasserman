@@ -94,8 +94,8 @@ def mem_available_gb() -> float:
     back without compressing (telemetry.parse_vm_stat: free, file-backed and purgeable pages), 0 while macOS says its
     memory pressure is critical; -1 when unknown.
 
-    On a discrete card the number is that card's free memory alone (``gpu_free_gb``), including when system RAM is
-    the smaller one. System RAM is used only when the GPU has no memory of its own."""
+    On a discrete card the smaller of that card's free memory (``gpu_free_gb``) and MemAvailable: the weights are
+    read through system RAM, so a short RAM is still the limit. ``has_card_memory`` says when the card is the one."""
 
     if sys.platform == "darwin":
         import telemetry
@@ -107,10 +107,8 @@ def mem_available_gb() -> float:
             return 0.0 if telemetry.mac_pressure_critical() else mb / 1024
         except (OSError, ValueError, subprocess.TimeoutExpired):
             return -1.0
-    card = gpu_free_gb()
-    if card is not None:
-        return card
-    return _linux_ram_gb()
+    ram, card = _linux_ram_gb(), gpu_free_gb()
+    return ram if card is None or ram < 0 else min(ram, card)
 
 
 def gpu_free_gb() -> float | None:
@@ -129,10 +127,11 @@ def gpu_free_gb() -> float | None:
 
 
 def has_card_memory() -> bool:
-    """True when ``gpu_free_gb`` is a number: this GPU has memory of its own.
+    """True when the number ``mem_available_gb`` gives is a card's free memory: this GPU has memory of its own and it
+    is no more than MemAvailable. A sentence then names the GPU; where the RAM is the smaller, it names the machine.
 
     A Mac is never that, and this does not ask nvidia-smi there. On Linux a reading ``mem_available_gb`` just took
-    is reused, so a kill loop does not ask twice. A stale reading is taken again."""
+    is reused (``memory_guard.recent_device``), so a kill loop does not ask twice. A stale reading is taken again."""
 
     if sys.platform == "darwin":
         return False
@@ -141,11 +140,15 @@ def has_card_memory() -> bool:
         if spark not in sys.path:
             sys.path.insert(0, spark)
         import memory_guard
-        if time.monotonic() - memory_guard._DEVICE["at"] >= 2:
-            return gpu_free_gb() is not None
-        return memory_guard._DEVICE["value"] is not None
+        fresh, card = memory_guard.recent_device()
+        if not fresh:
+            card = memory_guard.device(fresh=True)
     except Exception:  # noqa: BLE001  (a reading, never a reason to fail)
         return False
+    if card is None:
+        return False
+    ram = _linux_ram_gb()
+    return ram < 0 or card["free_mb"] / 1024 <= ram
 
 
 def comfy_up(port: int | None = None) -> bool:

@@ -47,6 +47,7 @@ import shutil
 import signal
 import socket
 import subprocess
+import sys
 import threading
 import time
 import urllib.error
@@ -393,21 +394,31 @@ def speedup(used: int, clips: int) -> tuple[float, bool]:
     return max(1.0, clips / math.ceil(clips / used) * kept), measured
 
 
+def card_face() -> bool:
+    """``server.card_face()`` of the Studio running in this process: the discrete-card face of the CUDA build (its
+    banner starts ``CUDA · ``). The app runs server.py as ``__main__``, so the server is looked up among the loaded
+    modules and never imported again: a second import would run the whole app a second time (its queue among it).
+    False where no server is loaded (a script), and where the reading fails."""
+
+    for name in ("server", "__main__"):
+        face = getattr(sys.modules.get(name), "card_face", None)
+        if callable(face):
+            try:
+                return bool(face())
+            except Exception:  # noqa: BLE001 - a reading, never a reason to fail the queue
+                return False
+    return False
+
+
 def machine_word(spark: bool) -> str:
     """What this machine is called. A Mac is a Mac. A GB10 is a Spark. A discrete card is a GPU.
 
-    ``device()`` is None where nvidia-smi has no memory of its own (a GB10's ``[N/A]``) and where nvidia-smi
-    fails. The word then stays Spark, which is the same banner the page treats as unified."""
+    The banner decides (``card_face``), so the word and the banner agree: a Spark with ``STUDIO_VRAM_GB`` set (the
+    RTX Pro 6000 simulation) keeps its "DGX SPARK" banner and stays a Spark, and a failed nvidia-smi is a Spark too."""
 
     if not spark:
         return "Mac"
-    try:
-        import memory_guard
-        if memory_guard.device() is not None:
-            return "GPU"
-    except Exception:  # noqa: BLE001 - a reading, never a reason to fail the queue
-        return "Spark"
-    return "Spark"
+    return "GPU" if card_face() else "Spark"
 
 
 class Hub:
@@ -1173,13 +1184,7 @@ class Hub:
             if len(found["workers"]) >= LIMIT - 1:
                 # said() rewrites "this Spark" only. This sentence does not say that, so the card branch is its own.
                 # A GB10 and a Mac keep the Spark sentence. A card does not call this machine a Spark.
-                on_card = False
-                try:
-                    import server
-                    on_card = bool(server.card_face())
-                except Exception:
-                    on_card = False
-                if on_card:
+                if card_face():
                     raise HTTPException(400, f"at most {LIMIT} machines, this GPU included")
                 raise HTTPException(400, f"at most {LIMIT} Sparks, this one included")
             found["workers"].append({"address": address, "name": str(body.get("name") or "").strip()[:60] or address, "folder": folder, "enabled": True,

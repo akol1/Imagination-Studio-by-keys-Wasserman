@@ -229,7 +229,7 @@ def server_pid() -> int | None:
 # ---------- a discrete GPU: an NVIDIA card with memory of its own (an RTX Pro 6000 Blackwell, 96 GB) ----------
 # A DGX Spark's GB10 has one memory for the CPU and the GPU (nvidia-smi says [N/A] for the GPU's), and everything above
 # reads it as /proc/meminfo. A card with its own memory is full long before the machine's RAM is: there a job's room is
-# the card's own (device_room_mb, the 2 GB margin already taken out). The estimates stay the Spark's, measured as the fall of the whole machine's memory: a card
+# the card's own (device_room_mb, the 2 GB margin already taken out), held to the RAM as well (card_pool). The estimates stay the Spark's, measured as the fall of the whole machine's memory: a card
 # holds a part of that (the rest is the processes' own RAM), so they are an upper bound there.
 # STUDIO_VRAM_GB pretends to be such a card on a Spark (the RTX Pro 6000 simulation, docs/rtx-pro-6000.md): its total
 # is that, its used memory what the CUDA processes hold (nvidia-smi's compute apps).
@@ -293,6 +293,28 @@ def discrete() -> bool:
     return device() is not None
 
 
+def recent_device(within_s: float = 2.0) -> tuple[bool, dict | None]:
+    """(whether ``device`` read the card less than ``within_s`` seconds ago, that reading). A caller that only needs
+    to know whether there is a card reuses a fresh reading instead of asking nvidia-smi again."""
+
+    return time.monotonic() - _DEVICE["at"] < within_s, _DEVICE["value"]
+
+
+def room_budget_mb() -> int | None:
+    """STUDIO_ROOM_MB (MB) when it is set to a whole number above 0, else None (room_mb says what it is for)."""
+
+    asked = os.environ.get("STUDIO_ROOM_MB", "").strip()
+    return int(asked) if asked.isdigit() and int(asked) > 0 else None
+
+
+def card_room_applies() -> bool:
+    """Whether a job's room is the card's own (``device_room_mb``, the 2 GB margin as its floor): a discrete card with
+    no STUDIO_ROOM_MB. With STUDIO_ROOM_MB the budget is the machine's RAM and the checks keep the Spark's arithmetic,
+    as they did before the card had its own pool. False on a Spark."""
+
+    return device_room_mb() is not None and room_budget_mb() is None
+
+
 def device_room_mb() -> int | None:
     """What the card has for a render with none of the Studio's ComfyUI models counted against it (its server's
     memory counts as the job's, as room_mb counts it on a Spark); None on a Spark."""
@@ -310,8 +332,8 @@ def card_room_for_job(raw_befores: list | None = None) -> int | None:
 
     ``device_room_mb`` adds back only the ComfyUI server. Each engine's ``room_mb`` is the card's raw free memory
     just before that engine loaded, which the job gets back. The room is the larger of those, and the margin is
-    taken out once. None on a Spark (``device_room_mb`` is None). System RAM is not mixed in. A caller that already
-    holds an after-margin room (Bolt beside the job) does not use this."""
+    taken out once. None on a Spark (``device_room_mb`` is None). The checks hold it to the RAM (``card_pool``). A
+    caller that already holds an after-margin room (Bolt beside the job) does not use this."""
 
     base = device_room_mb()
     if base is None:
@@ -329,13 +351,30 @@ def room_mb() -> int | None:
     wrote that down). A server from before the guard has no such note: the machine is then taken as otherwise
     idle. None where there is no /proc/meminfo.
 
-    On a discrete card, that card's room only (``device_room_mb``, the 2 GB margin already taken out). The Spark
-    branch, ``device_room_mb`` None, returns the RAM figure above and is not mixed.
+    On a discrete card, that card's room (``device_room_mb``, the 2 GB margin already taken out). The checks still
+    hold it to the machine's RAM (``card_pool``): the models are read through RAM and ComfyUI's guard kills on it.
+    The Spark branch, ``device_room_mb`` None, returns the RAM figure above and is not mixed.
 
     STUDIO_ROOM_MB (MB) stands in for the card's room on a discrete card, for a card smaller than the video models
     when ComfyUI offloads them to RAM and streams blocks to the card (docs/rtx-5090.md). It is a budget of the
     machine's RAM, so it never gives more than the RAM room above; unset, empty or not a number, it is ignored.
     A Spark has no card to stand in for."""
+
+    ram = ram_room_mb()
+    if ram is None:
+        return None
+    card = device_room_mb()
+    if card is None:
+        return ram
+    asked = room_budget_mb()
+    if asked:
+        return min(ram, asked)
+    return card
+
+
+def ram_room_mb() -> int | None:
+    """The machine's RAM for a render (``room_mb`` on a Spark): MemAvailable now, or, while the ComfyUI server runs,
+    what was available when it started. None where there is no /proc/meminfo."""
 
     info = meminfo()
     now = info.get("MemAvailable")
@@ -352,13 +391,7 @@ def room_mb() -> int | None:
     except (OSError, ValueError):
         if server_pid():
             ram = max(now, info["MemTotal"] - IDLE_MB)
-    card = device_room_mb()
-    if card is None:
-        return ram
-    asked = os.environ.get("STUDIO_ROOM_MB", "").strip()
-    if asked.isdigit() and int(asked) > 0:
-        return min(ram, int(asked))
-    return card
+    return ram
 
 
 # ---------- layer 1: the estimate ----------
@@ -406,23 +439,40 @@ def says(frames: int) -> str:
     return f"{frames} frames ({frames / FPS:.1f} s)"
 
 
+def card_pool(card_mb: int, total_mb: int | None = None) -> tuple[int, int, bool]:
+    """(available MB, floor MB, whether the sentence names the GPU) for a job on a discrete card whose room is
+    ``card_mb`` (after the 2 GB margin), held to the machine's RAM as ``min(ram, card + floor)`` held it.
+
+    The card's side compares its room plus the margin against the margin as the floor; the RAM side compares
+    ``ram_room_mb`` against ``floor_mb``. Whichever runs out first is the pool, and the sentence names that one:
+    the GPU, or the machine. A job fits exactly where it fitted under ``min(ram, card + floor)``."""
+
+    ram = ram_room_mb()
+    if total_mb is None:
+        total_mb = meminfo().get("MemTotal", 0)
+    if ram is not None and total_mb:
+        floor = floor_mb(total_mb)
+        if ram - floor < card_mb:
+            return ram, floor, False
+    return card_mb + VRAM_MARGIN_MB, VRAM_MARGIN_MB, True
+
+
 def _pool(available_mb: int | None, total_mb: int, card: bool = False) -> tuple[int, int, bool]:
     """(available MB, floor MB, whether the sentence names the GPU).
 
     A caller that omits ``available_mb`` on a discrete card gets the card's free memory, with what the studio's
-    ComfyUI server holds counted back, and the 2 GB margin as the floor. ``room_mb`` on a card is that room after
-    the margin, so the margin is added back here and compared once.
+    ComfyUI server holds counted back, and the 2 GB margin as the floor (``card_pool``, held to the RAM).
 
-    ``card`` is for a caller that already passed that after-margin room (a job beside Bolt). A passed
-    ``available_mb`` without it keeps the Spark arithmetic, so a test that names a Spark's pool stays on it even
-    when this machine has a card.
+    ``card`` is for a caller that already passed that after-margin room (a job beside Bolt, or one that unloads an
+    engine first). A passed ``available_mb`` without it keeps the Spark arithmetic, so a test that names a Spark's
+    pool stays on it even when this machine has a card. With STUDIO_ROOM_MB the Spark arithmetic is kept too: the
+    budget is the machine's RAM (``room_mb``).
     """
 
-    live = device_room_mb()
-    if live is not None and available_mb is None:
-        return live + VRAM_MARGIN_MB, VRAM_MARGIN_MB, True
+    if card_room_applies() and available_mb is None:
+        return card_pool(device_room_mb(), total_mb)
     if card and available_mb is not None:
-        return available_mb + VRAM_MARGIN_MB, VRAM_MARGIN_MB, True
+        return card_pool(available_mb, total_mb)
     if available_mb is None:
         available_mb = room_mb() or total_mb - IDLE_MB
     return available_mb, floor_mb(total_mb), False

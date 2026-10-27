@@ -1,5 +1,5 @@
 """A card with memory of its own (an RTX Pro 6000 Blackwell, 96 GB; docs/rtx-pro-6000.md): the Studio's room for a
-job is that card's memory, the card is read from nvidia-smi (or pretended with
+job is that card's memory, held to the machine's RAM, STUDIO_ROOM_MB (a 32 GB card) keeps the RAM budget, the card is read from nvidia-smi (or pretended with
 STUDIO_VRAM_GB on a Spark), a DGX Spark reads as it always did, and Bolt points an x86_64 machine at llama.cpp.
 Run: STUDIO_HOME=$(mktemp -d) python3 -m pytest tests/test_rtx.py"""
 import os
@@ -25,6 +25,13 @@ def fresh(monkeypatch):
     monkeypatch.setattr(memory_guard, "_DEVICE", {"at": 0.0, "value": None})
     monkeypatch.delenv("STUDIO_VRAM_GB", raising=False)
     monkeypatch.delenv("STUDIO_GPU", raising=False)
+    monkeypatch.delenv("STUDIO_ROOM_MB", raising=False)
+    monkeypatch.delenv("SPARK_MEMORY_FLOOR_MB", raising=False)
+    monkeypatch.setattr(memory_guard, "state_file", lambda: "/nonexistent/studio-comfy.mem")
+
+
+LINUX = sys.platform.startswith("linux")
+spark_only = pytest.mark.skipif(not LINUX, reason="the CUDA build's memory checks run on Linux only (server.SPARK)")
 
 
 def answers(monkeypatch, gpu=None, apps=None):
@@ -80,14 +87,14 @@ def test_the_comfyui_servers_own_memory_counts_as_the_jobs(monkeypatch):
 
 
 def test_room_is_the_cards_on_a_card_and_the_rams_on_a_spark(monkeypatch):
-    """A card's room is device_room_mb alone. A smaller RAM is not the limit. A Spark (no card) stays on its RAM."""
+    """A card's room_mb is device_room_mb (the checks hold it to the RAM: card_pool). A Spark (no card) stays on its RAM."""
 
     monkeypatch.setattr(memory_guard, "meminfo", lambda: {"MemAvailable": 200 * GB, "MemTotal": 256 * GB})
     monkeypatch.setattr(memory_guard, "server_pid", lambda: None)
     monkeypatch.setattr(memory_guard, "device_room_mb", lambda: 60 * GB)
     assert memory_guard.room_mb() == 60 * GB
     monkeypatch.setattr(memory_guard, "meminfo", lambda: {"MemAvailable": 50 * GB, "MemTotal": 64 * GB})
-    assert memory_guard.room_mb() == 60 * GB  # a smaller RAM is not the limit
+    assert memory_guard.room_mb() == 60 * GB  # the card's figure; the checks hold it to the RAM
     monkeypatch.setattr(memory_guard, "device_room_mb", lambda: None)  # a Spark: as before
     assert memory_guard.room_mb() == 50 * GB
 
@@ -106,18 +113,27 @@ def test_the_largest_measured_clip_fits_a_96_gb_card(monkeypatch):
     assert said["floor_mb"] == memory_guard.VRAM_MARGIN_MB and "this machine has" not in said["reason"]
 
 
-def test_voice_and_bolt_see_the_cards_free_memory(monkeypatch):
-    """Drama 3 and Bolt decide whether to stop ComfyUI from mem_available_gb: on a card, its free memory alone,
-    not the smaller of that and system RAM."""
+@spark_only
+def test_voice_and_bolt_see_the_smaller_of_the_card_and_the_ram(monkeypatch):
+    """Drama 3 and Bolt decide whether to stop ComfyUI from mem_available_gb: on a card, the smaller of its free
+    memory and MemAvailable (the weights are read through RAM). has_card_memory says when the card is that one."""
 
+    monkeypatch.setattr(voice, "_linux_ram_gb", lambda: 80.0)
     monkeypatch.setattr(voice, "gpu_free_gb", lambda: 0.25)
     assert voice.mem_available_gb() == 0.25
     monkeypatch.setattr(voice, "gpu_free_gb", lambda: 500.0)
-    assert voice.mem_available_gb() == 500.0  # a smaller RAM is not the limit
+    assert voice.mem_available_gb() == 80.0  # a smaller RAM is the limit
     monkeypatch.setattr(voice, "gpu_free_gb", lambda: None)
-    monkeypatch.setattr(voice, "_linux_ram_gb", lambda: 80.0)
-    if sys.platform.startswith("linux"):
-        assert voice.mem_available_gb() == 80.0  # no card reading: the machine's RAM, not the 500 GB just above
+    assert voice.mem_available_gb() == 80.0  # a Spark: the machine's RAM
+
+    answers(monkeypatch, gpu=["97887", "500", "97387"])
+    memory_guard.device()  # the reading mem_available_gb just took
+    assert not voice.has_card_memory()  # 95 GB free on the card, 80 in RAM: the RAM is the number
+    monkeypatch.setattr(voice, "_linux_ram_gb", lambda: 120.0)
+    assert voice.has_card_memory()
+    answers(monkeypatch, gpu=["[N/A]", "[N/A]", "[N/A]"])
+    memory_guard.device(fresh=True)
+    assert not voice.has_card_memory()  # a GB10
 
 
 def test_an_x86_64_workstation_is_pointed_at_llama_cpp(monkeypatch):
@@ -132,6 +148,7 @@ def test_an_x86_64_workstation_is_pointed_at_llama_cpp(monkeypatch):
     assert "CUDA" in bolt.Llamacpp.label or sys.platform == "darwin"
 
 
+@spark_only
 def test_a_loaded_engine_counts_once_on_a_card(monkeypatch):
     """Queue time is before the unload. The room is the larger of the live card and each engine's raw free, and the
     2 GB margin is taken once. A raw before under the live free does not shrink the room. A passed room is kept.
@@ -204,6 +221,142 @@ def test_drama_3_names_the_gpu_when_the_card_is_short(monkeypatch):
     monkeypatch.setattr(voice, "has_card_memory", lambda: False)
     with pytest.raises(RuntimeError, match="this machine has 10 GB"):
         one.make_room({})
+
+
+def rtx_pro_6000_with_40_gb_free(monkeypatch):
+    """An RTX Pro 6000 (96 GB, idle) in a machine with 64 GB of RAM, 40 GB of it available."""
+
+    monkeypatch.setattr(memory_guard, "meminfo", lambda text=None: {"MemTotal": 65_000, "MemAvailable": 40_000, "MemFree": 40_000})
+    monkeypatch.setattr(memory_guard, "server_pid", lambda: None)
+    answers(monkeypatch, gpu=["97887", "500", "97387"])
+
+
+def as_main(width, height, frames=124):
+    """main's arithmetic before the card had its own pool: min(ram, card + floor) against floor_mb."""
+
+    info = memory_guard.meminfo()
+    room = memory_guard.room_budget_mb()
+    card = memory_guard.device_room_mb()
+    ram = info["MemAvailable"]
+    pool = min(ram, room) if room else min(ram, card + memory_guard.floor_mb(info["MemTotal"]))
+    return memory_guard.check(width, height, frames, available_mb=pool, total_mb=info["MemTotal"])
+
+
+@spark_only
+def test_an_rtx_pro_6000_with_40_gb_of_ram_free_refuses_what_main_refused(monkeypatch):
+    """The card has 95 GB, the machine 40 GB available: the RAM is what runs out, so a 1344x768 clip is refused as
+    it was, and the sentence names the machine, not the GPU."""
+
+    rtx_pro_6000_with_40_gb_free(monkeypatch)
+    big = memory_guard.check(1344, 768, 124)
+    assert not big["fits"] and big["fits"] == as_main(1344, 768)["fits"]
+    assert "this machine has" in big["reason"] and "this GPU" not in big["reason"]
+    assert big["floor_mb"] == memory_guard.floor_mb(65_000) and big["available_mb"] == 40_000
+    for width, height in ((864, 480), (1280, 720), (1344, 768)):
+        assert memory_guard.check(width, height, 124)["fits"] == as_main(width, height)["fits"], (width, height)
+    # through the app, as a job is queued: no engine loaded
+    import music
+    import server
+    monkeypatch.setattr(server, "SPARK_ENGINE_LIB", Path(__file__))  # TensorFold's engine is there
+    monkeypatch.setattr(voice, "room_mb", lambda: None)
+    monkeypatch.setattr(music, "room_mb", lambda: None)
+    monkeypatch.setattr(server.bolt, "room_mb", lambda: None)
+    assert server.memory_of({}, {"WIDTH": 1344, "HEIGHT": 768}, 124, False)["fits"] is False
+    # beside Bolt the RAM still binds
+    beside = memory_guard.check(1344, 768, 124, available_mb=60 * GB, card=True)
+    assert not beside["fits"] and "this machine has" in beside["reason"]
+    # songs and sound effects are held to the RAM the same way
+    song = memory_guard.music_check(300, available_mb=90 * GB, card=True)
+    assert song["available_mb"] == 40_000 and song["floor_mb"] == memory_guard.floor_mb(65_000)
+
+
+@spark_only
+def test_with_plenty_of_ram_the_card_is_the_pool(monkeypatch):
+    """128 GB of RAM, 120 available: the card runs out first, and its arithmetic (the 2 GB margin) and words stay."""
+
+    monkeypatch.setattr(memory_guard, "meminfo", lambda text=None: {"MemTotal": 128 * GB, "MemAvailable": 120 * GB})
+    monkeypatch.setattr(memory_guard, "server_pid", lambda: None)
+    answers(monkeypatch, gpu=["97887", "500", "97387"])
+    said = memory_guard.check(1344, 768, 124)
+    assert said["floor_mb"] == memory_guard.VRAM_MARGIN_MB and said["available_mb"] == 97_387
+    assert said["fits"] == as_main(1344, 768)["fits"]
+    half = memory_guard.check(1376, 768, 243, available_mb=40 * GB, card=True)
+    assert not half["fits"] and "this GPU has" in half["reason"]
+
+
+@spark_only
+def test_a_32_gb_5090_with_studio_room_mb_fits_video_as_main_does(monkeypatch):
+    """#147: STUDIO_ROOM_MB is a RAM budget for a card smaller than the models. It is the pool, with the Spark's
+    floor, exactly as on main; the card's own 30 GB is not asked."""
+
+    import music
+    import server
+    monkeypatch.setattr(memory_guard, "meminfo", lambda text=None: {"MemTotal": 93_000, "MemAvailable": 80_000})
+    monkeypatch.setattr(memory_guard, "server_pid", lambda: None)
+    answers(monkeypatch, gpu=["32607", "600", "32007"])
+    monkeypatch.setattr(server, "SPARK_ENGINE_LIB", Path(__file__))  # TensorFold's engine is there
+    monkeypatch.setattr(voice, "room_mb", lambda: None)
+    monkeypatch.setattr(music, "room_mb", lambda: None)
+    monkeypatch.setattr(server.bolt, "room_mb", lambda: None)
+    without = memory_guard.check(1344, 768, 124)
+    assert not without["fits"] and "this GPU" in without["reason"]  # the card alone is too small
+    monkeypatch.setenv("STUDIO_ROOM_MB", "84000")  # docs/rtx-5090.md; the RAM has 80 GB, so 80 GB is the room
+    assert not memory_guard.card_room_applies() and memory_guard.room_mb() == 80_000
+    for width, height in ((864, 480), (1344, 768)):
+        said, main = memory_guard.check(width, height, 124), as_main(width, height)
+        assert said["fits"] == main["fits"] and said["available_mb"] == 80_000 and said["floor_mb"] == main["floor_mb"]
+        assert server.memory_of({}, {"WIDTH": width, "HEIGHT": height}, 124, False)["fits"] == main["fits"]
+    assert memory_guard.check(864, 480, 124)["fits"] and memory_guard.check(1344, 768, 124)["fits"]
+    assert server.memory_of({}, {"WIDTH": 864, "HEIGHT": 480}, 124, False)["available_mb"] == 80_000
+
+
+@spark_only
+def test_a_gb10_is_unchanged(monkeypatch):
+    """[N/A] from nvidia-smi: no card pool, RAM and floor_mb as before, Voice reads MemAvailable, and the machine is a
+    Spark, also with STUDIO_VRAM_GB unset or STUDIO_ROOM_MB set."""
+
+    import server
+    import sparks
+    monkeypatch.setattr(memory_guard, "meminfo", lambda text=None: {"MemTotal": 124_000, "MemAvailable": 110_000})
+    monkeypatch.setattr(memory_guard, "server_pid", lambda: None)
+    answers(monkeypatch, gpu=["[N/A]", "[N/A]", "[N/A]"])
+    monkeypatch.setattr(server, "GPU_NAME", ["NVIDIA GB10"])
+    monkeypatch.setattr(voice, "_linux_ram_gb", lambda: 107.4)
+    for room in (None, "84000"):
+        if room:
+            monkeypatch.setenv("STUDIO_ROOM_MB", room)
+        assert not memory_guard.card_room_applies() and memory_guard.room_mb() == 110_000
+        for width, height in ((864, 480), (1344, 768)):
+            said = memory_guard.check(width, height, 124)
+            spark = memory_guard.check(width, height, 124, available_mb=110_000, total_mb=124_000)
+            assert {k: said[k] for k in ("fits", "available_mb", "floor_mb", "need_mb")} == \
+                   {k: spark[k] for k in ("fits", "available_mb", "floor_mb", "need_mb")}
+        assert voice.mem_available_gb() == 107.4 and not voice.has_card_memory()
+        assert server.machine()[1].startswith("DGX SPARK") and sparks.machine_word(True) == "Spark"
+
+
+@spark_only
+def test_a_spark_pretending_a_card_keeps_its_word_with_its_banner(monkeypatch):
+    """STUDIO_VRAM_GB on a GB10 (the RTX Pro 6000 simulation): the banner stays DGX SPARK, so the word stays Spark."""
+
+    import server
+    import sparks
+    monkeypatch.setenv("STUDIO_VRAM_GB", "96")
+    answers(monkeypatch, apps={})
+    monkeypatch.setattr(server, "GPU_NAME", ["NVIDIA GB10"])
+    assert memory_guard.device() is not None
+    assert server.machine()[1].startswith("DGX SPARK") and sparks.machine_word(True) == "Spark"
+    monkeypatch.setattr(server, "GPU_NAME", ["NVIDIA GeForce RTX 5090"])
+    assert sparks.machine_word(True) == "GPU" and sparks.machine_word(False) == "Mac"
+
+
+def test_no_module_imports_the_server_again():
+    """The app runs server.py as __main__: importing server from another module would run the app a second time.
+    The card face is looked up among the loaded modules (sparks.card_face) instead."""
+
+    for name in ("sparks.py", "agents.py", "loras.py", "voice.py", "music.py", "bolt.py", "sound.py"):
+        source = (ROOT / "app" / name).read_text()
+        assert "import server\n" not in source and "import server " not in source, name
 
 
 def test_the_page_cache_is_left_alone_on_a_card():
