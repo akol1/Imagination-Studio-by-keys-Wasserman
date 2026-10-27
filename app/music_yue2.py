@@ -35,7 +35,6 @@ LICENCE = ("YuE2 runs on this machine. Its code is Apache 2.0; its weights are C
            "permission: personal users, content creators and musicians may publish, sell and license the songs they make, "
            "royalty-free; a company needs a commercial licence from the YuE2 authors; no illegal, harmful or deceptive use.")
 SECONDS = (10, 300)  # as MiniMax Music 3's: the longest a song may be (YuE2's own limit is 360 s, 9000 tokens)
-STYLE_LIMIT, LYRICS_LIMIT = 2000, 6000  # characters, as the tab's form
 # the section tags YuE2 was trained with (the yue2-music skill's native labels); the Music tab's others are named as
 # the nearest of them
 NATIVE = {"intro": "Intro", "verse": "Verse", "pre-chorus": "Pre-Chorus", "chorus": "Chorus", "bridge": "Bridge",
@@ -111,6 +110,12 @@ class Yue2(music.Cuda):
 
     def python(self) -> Path:
         return self.venv / "bin" / "python"
+
+    def environment(self) -> dict:
+        """The studio's environment as it is: YuE2's PyTorch brings its own CUDA libraries, which the system toolkit's
+        folder (music.Cuda.environment, for MiniMax Music 3's engine) put first would override."""
+
+        return voice.Served.environment(self)
 
     def estimate(self, seconds: float) -> int:
         return int((0 if self.loaded() else self.load_s) + self.PLAN_S_OF[self.weights] + seconds * self.SONG_RTF_OF[self.weights] + 2)

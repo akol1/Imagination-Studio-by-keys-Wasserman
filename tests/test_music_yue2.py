@@ -257,10 +257,25 @@ def test_checked_takes_the_engine_and_refuses_what_is_wrong():
             music.checked({"caption": "pop", "seconds": 400, "engine": "yue2"})
         assert "10 to 300" in long.value.detail
         assert music.guard_route({"engine": "yue2"}) == "music-yue2-int8"
+        for body, said in (({"caption": "p" * (music.CAPTION_LIMIT + 1)}, "the style is at most"),
+                           ({"caption": "pop", "lyrics": "l" * (music.LYRICS_LIMIT + 1)}, "the lyrics are at most")):
+            with pytest.raises(HTTPException) as over:  # the tab's limits, the same for both engines
+                music.checked({**body, "engine": "yue2"})
+            assert said in over.value.detail
         one.known = (time.time(), "No YuE2 weights at /x")
         with pytest.raises(HTTPException) as missing:
             music.checked({"caption": "pop", "engine": "yue2"})
         assert "No YuE2 weights" in missing.value.detail
+
+
+def test_yue2_runs_with_its_own_cuda_libraries_not_the_system_toolkit(monkeypatch):
+    monkeypatch.setenv("LD_LIBRARY_PATH", "/opt/own/lib")
+    real = Path.is_dir
+    monkeypatch.setattr(Path, "is_dir", lambda self: True if str(self).startswith("/usr/local/cuda") else real(self))
+    assert music.Cuda().environment()["LD_LIBRARY_PATH"].startswith("/usr/local/cuda/lib64")  # MiniMax Music 3's engine
+    env = music_yue2.Yue2().environment()
+    assert env["LD_LIBRARY_PATH"] == "/opt/own/lib" and "/usr/local/cuda" not in env["LD_LIBRARY_PATH"]
+    assert env["PATH"] == os.environ["PATH"]
 
 
 def test_the_server_command_and_its_weights():
