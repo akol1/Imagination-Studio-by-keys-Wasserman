@@ -2973,12 +2973,16 @@ which YuE2 does not run on). Each engine's licence line shows under the picker.
 - **Speed.** The score and the song's tokens are written with an int8 copy of the model's projections (twice as fast
   as bf16, the same words heard); everything else runs on YuE2's own bf16 weights. `YUE2_QUANT=bf16` runs bf16 only.
 
-Measured on one DGX Spark (GB10), the model loaded, a 60 s indie-pop song with English lyrics and a 60 s instrumental:
+Measured on one DGX Spark (GB10), the model loaded, English indie-pop lyrics at seed 21 (each song ran longer than its
+length and was cut there); Whisper's check on two 60 s songs at seeds 7 and 11; the peak is the server's own memory:
 
-| Setting | 60 s song made in | Tokens a second | Whisper heard | At the peak |
-|---|---|---|---|---|
-| int8 token loop (default) | 41.5 s (0.69 of its length) | 79 | 96 and 97 % of the words sung | 15.3 GB |
-| bf16 | 92.7 s (1.54 of its length) | 36 | 98 and 97 % | 13.9 GB |
+| Setting | 30 s song | 60 s song | 120 s song | Whisper heard (60 s) | At the peak (120 s) |
+|---|---|---|---|---|---|
+| int8 token loop (default) | 34.6 s | 48.1 s | 79.8 s | 96 and 97 % of the words sung | 19.1 GB |
+| bf16 (`YUE2_QUANT=bf16`) | 70.8 s | 94.9 s | 146.7 s | 98 and 97 % | 19.4 GB |
+
+The score comes first and takes about 20 s (int8) whatever the length; the song itself then makes about two seconds of
+song a second. Four instrumentals of 65 and 70 s took 47 to 76 s.
 
 **Licence.** YuE2's code is Apache 2.0. Its weights are CC BY-NC 4.0 with the YuE2 authors' additional permission for
 individual creators: personal users, content creators and musicians may publish, sell and license the songs they make,
