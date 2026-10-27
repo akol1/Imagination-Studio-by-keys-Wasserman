@@ -1,0 +1,44 @@
+diff --git a/zig/src/families/h3/cuda.zig b/zig/src/families/h3/cuda.zig
+index fd0935c..678607d 100644
+--- a/zig/src/families/h3/cuda.zig
++++ b/zig/src/families/h3/cuda.zig
+@@ -173,6 +173,9 @@ pub const Model = struct {
+     loaded_seconds: f64 = 0,
+     /// The int8 projections came from the copy saved by an earlier load.
+     from_cache: bool = false,
++    /// The checkpoint has no attn.to_gate_compress (MiniMax H3's own transformers: Ref2VA, FL2VA, not FastH3): the gate
++    /// rows are zero and only dense attention runs, which never reads them.
++    gateless: bool = false,
+ 
+     fn function(self: *const Model, comptime name: []const u8) cuda.Function {
+         inline for (kernel_names, 0..) |n, i| if (comptime std.mem.eql(u8, n, name)) return self.functions[i];
+@@ -221,6 +224,7 @@ pub const Model = struct {
+         while (std.mem.indexOf(u8, ck.header, try std.fmt.bufPrint(&name, "\"blocks.{d}.norm1.weight\"", .{layers})) != null) layers += 1;
+         const hidden = self.hidden;
+         const inner = self.inner;
++        self.gateless = std.mem.indexOf(u8, ck.header, "\"blocks.0.attn.to_gate_compress.weight\"") == null;
+ 
+         self.blocks = try gpa.alloc(Block, layers);
+         for (self.blocks) |*b| {
+@@ -236,7 +240,12 @@ pub const Model = struct {
+             defer scratch.free();
+             for (self.blocks, 0..) |*b, i| {
+                 try self.quantize(&scratch, try ck.bf16(try std.fmt.bufPrint(&name, "blocks.{d}.attn.qkv_proj.weight", .{i})), b.qkvc, 0, 0);
+-                try self.quantize(&scratch, try ck.bf16(try std.fmt.bufPrint(&name, "blocks.{d}.attn.to_gate_compress.weight", .{i})), b.qkvc, 3 * inner, 0);
++                if (!self.gateless) {
++                    try self.quantize(&scratch, try ck.bf16(try std.fmt.bufPrint(&name, "blocks.{d}.attn.to_gate_compress.weight", .{i})), b.qkvc, 3 * inner, 0);
++                } else {
++                    try self.driver.check(self.driver.api.cuMemsetD8_v2(try b.qkvc.w.at(3 * inner * hidden), 0, inner * hidden), "cuMemsetD8");
++                    try self.driver.check(self.driver.api.cuMemsetD8_v2(try b.qkvc.s.at(3 * inner * 4), 0, inner * 4), "cuMemsetD8");
++                }
+                 try self.quantize(&scratch, try ck.bf16(try std.fmt.bufPrint(&name, "blocks.{d}.attn.out_proj.weight", .{i})), b.out, 0, 0);
+                 // the SwiGLU's first projection is stored [gate; value]: its rows are laid out value, gate, value, gate
+                 try self.quantize(&scratch, try ck.bf16(try std.fmt.bufPrint(&name, "blocks.{d}.mlp.fc1.weight", .{i})), b.fc1, 0, self.mlp);
+@@ -628,6 +637,7 @@ pub const Model = struct {
+         const rows: usize = in.rows;
+         const tiles: usize = in.tiles;
+         const dense = in.keep == 0 or in.prefix_tiles >= in.tiles;
++        if (self.gateless and !dense) return error.SparseNeedsGate;
+         const prefix: usize = if (dense) tiles else in.prefix_tiles;
+         const keep: usize = if (dense) 0 else in.keep;
+         try self.prepare(rows, tiles, prefix, keep, in.slot);

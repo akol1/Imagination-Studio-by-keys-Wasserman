@@ -2308,7 +2308,7 @@ def queue_job(body: dict) -> dict:
     job = {"id": job_id, "kind": kind, "status": "queued", "title": body.get("title") or (action_title(kind, params) if kind in actions.KINDS else sound_title(kind, params) if kind in sound.KINDS else kind), "params": params,
            "source": action_source(kind, params) if kind in actions.KINDS else swap_source(params) if kind in swap.KINDS else sound_source(kind, params) if kind in sound.KINDS else None,
            "outputs": [], "progress": None, "error": None, "log": "", "created": time.time(), "started": None,
-           "finished": None, "estimate": clip_estimate(kind, params, referenced, ref_media)}
+           "finished": None, "estimate": swap_estimate(params) if kind in swap.KINDS else clip_estimate(kind, params, referenced, ref_media)}
     if referenced:  # the passes a reference clip runs: the number set by hand, or the model's 20, or the adapter's 4
         job["passes"] = int(params["steps"]) if params.get("steps") not in (None, "") else 4 if params.get("ref_turbo") else 20
     if kind in ("video", "studio", "long"):
@@ -2881,7 +2881,7 @@ app.include_router(motion.attach(HOME, PACK, SPARK))
 import actions  # noqa: E402  (Turnaround sheet, Upscale and Remove a person: Library actions, beside this file)
 action_router, action_build, action_title, action_source = actions.attach(HOME, PACK, SPARK, inside, relative)
 import swap  # noqa: E402  (Character Swap: the person in a part of a clip replaced by a character, a Library action, beside this file)
-swap_router, swap_build, swap_title, swap_source = swap.attach(HOME, PACK, SPARK, inside, relative, media_seconds)
+swap_router, swap_build, swap_title, swap_source, swap_estimate = swap.attach(HOME, PACK, SPARK, inside, relative, media_seconds)
 app.include_router(swap_router)
 import sound  # noqa: E402  (sound effects and foley: Stable Audio Open and MMAudio, run locally, beside this file)
 sound_router, sound_build, sound_title, sound_source = sound.attach(HOME, PACK, SPARK, inside, relative, held_room, media_seconds)

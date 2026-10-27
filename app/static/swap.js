@@ -5,7 +5,7 @@
    Credit: the idea and its settings are Comfy Org's Openjutsu and Akatz Labs' Character Swap workflow (MIT); Akatz
    Labs' Character Swap LoRA and LightX2V's Turbo LoRA on MiniMax H3 Ref2VA, Meta's SAM 3.1 for the person. */
 const SWAP = { state: null, lib: null, picking: false, length: null, for: null,
-  f: { image: null, start: 0, seconds: 5, quality: "768", anchor: true, direction: "", seed: 904239 } };
+  f: { image: null, start: 0, seconds: 5, quality: "480", anchor: true, direction: "", seed: 904239 } };
 async function swapLoad() { try { SWAP.state = await api("/api/swap"); } catch { SWAP.state = { ready: false, why: "" }; } }
 // the button a clip's Library tile gets
 function swapButtons(m) { if (m.kind !== "video") return [];
@@ -15,6 +15,9 @@ function swapButtons(m) { if (m.kind !== "video") return [];
 const swapAnchorBy = () => SWAP.state && SWAP.state.anchor_model === "qwen" ? "Qwen-Image-2.1" : "FLUX3-K Fast";
 // the windows a part is made in (spark/swap_plan.py): 124 frames, then 123 more for each further window
 const swapWindows = seconds => { const n = Math.round(Number(seconds) * 24); return n <= 124 ? 1 : 1 + Math.ceil((n - 124) / 123); };
+// the time a swap takes on a DGX Spark, from the studio's measured stages (/api/swap estimates, app/swap.py)
+const swapMinutes = (f, st) => { const q = (st.estimates || {})[f.quality] || {}, n = Math.min(15, Math.max(5, Math.round(Number(f.seconds))));
+  const s = q[String(n)]; if (!s) return ""; const t = s - (f.anchor ? 0 : ((st.anchor_seconds || {})[f.quality] || 0)); return "about " + Math.max(1, Math.round(t / 60)) + " min"; };
 const swapEnd = f => Math.round((Number(f.start) + Number(f.seconds)) * 100) / 100;
 function swapPick(path) { SWAP.f.image = path; SWAP.picking = false; render(); }
 function swapPanel(o) { const f = SWAP.f, st = SWAP.state || {}, redraw = () => render();
@@ -33,10 +36,12 @@ function swapPanel(o) { const f = SWAP.f, st = SWAP.state || {}, redraw = () => 
   const start = el("input", { type: "number", min: 0, step: 0.1, value: f.start, style: "max-width:110px", "aria-label": "Where the part starts, in seconds", ...(most != null ? { max: most } : {}),
     oninput: e => { f.start = Math.max(0, Number(e.target.value) || 0); said.textContent = swapSaid(); } });
   const length = el("input", { type: "range", min: 5, max: 15, step: 1, value: f.seconds, "aria-label": "How long the part is, 5 to 15 seconds",
-    oninput: e => { f.seconds = Number(e.target.value); said.textContent = swapSaid(); } });
+    oninput: e => { f.seconds = Number(e.target.value); said.textContent = swapSaid(); took.textContent = time(); } });
   const swapSaid = () => f.seconds + " s, from " + Number(f.start).toFixed(1) + " s to " + swapEnd(f).toFixed(1) + " s" + (swapWindows(f.seconds) > 1 ? " · " + swapWindows(f.seconds) + " windows" : " · one window");
   const said = el("b", {}, swapSaid());
-  const anchor = el("input", { type: "checkbox", checked: !!f.anchor, onchange: e => { f.anchor = e.target.checked; } });
+  const time = () => { const m = swapMinutes(f, st); return m ? m + " on a DGX Spark" : ""; };
+  const anchor = el("input", { type: "checkbox", checked: !!f.anchor, onchange: e => { f.anchor = e.target.checked; took.textContent = time(); } });
+  const took = el("span", { class: "note", style: "margin:0" }, time());
   put(box, el("div", { class: "row", style: "align-items:flex-start" }, el("div", { style: "flex:0 0 260px" }, clip),
     el("div", {}, el("div", { class: "note", style: "margin-top:0" }, "Replaces the person in a part of this clip with the character in one picture. The scene, the performance and the clip’s own sound stay. SAM 3.1 finds the largest person in the part’s first frame and follows them; only that person is drawn again, the rest of each frame is the clip’s own. Best on one continuous shot with the person in view from the first frame."),
       field("The character", el("div", { class: "row" }, el("div", { class: "fit" }, up), pick, el("span"))),
@@ -45,8 +50,8 @@ function swapPanel(o) { const f = SWAP.f, st = SWAP.state || {}, redraw = () => 
       SWAP.picking ? (stills.length ? el("div", { class: "grid", style: "margin-top:10px" }, stills.map(m => el("div", { class: "tile" + (f.image === m.path ? " on" : ""), style: "cursor:pointer", title: m.path, onclick: () => swapPick(m.path) }, media(m.path))))
         : el("div", { class: "note" }, SWAP.lib ? "No pictures in the Library yet: upload one." : "Reading the Library…")) : null,
       el("div", { class: "row" }, field("Part starts at (s)", start), el("div", {}, el("label", {}, "Part length"), length, said)),
-      field("Quality", el("div", { class: "seg-ctl", role: "radiogroup", "aria-label": "Quality" }, [["480", "480", "faster"], ["768", "768", "sharper"]].map(([v, t, s]) =>
-        el("button", { type: "button", role: "radio", "aria-checked": f.quality === v ? "true" : "false", class: f.quality === v ? "on" : "", title: s, onclick: () => { f.quality = v; redraw(); } }, t + "p")))),
+      field("Quality", el("div", { class: "row", style: "align-items:center" }, el("div", { class: "seg-ctl", role: "radiogroup", "aria-label": "Quality" }, [["480", "Fast", "480p"], ["768", "High", "768p, about two and a half times as long"]].map(([v, t, s]) =>
+        el("button", { type: "button", role: "radio", "aria-checked": f.quality === v ? "true" : "false", class: f.quality === v ? "on" : "", title: s, onclick: () => { f.quality = v; redraw(); } }, t + " · " + v + "p"))), took)),
       el("label", { class: "switch", style: "margin-top:8px" }, anchor, el("span", {}, "Put the character in the first frame first",
         el("small", {}, swapAnchorBy() + " draws the character into the part’s first frame, and the swap starts from that frame. Off: the swap starts from the clip’s own first frame."))),
       el("div", { class: "row" }, field("Direction (optional)", bind(f, "direction", el("input", { maxlength: (st.direction_most || 500), placeholder: "she keeps her hands in her coat pockets · the character’s cape moves in the wind" }))),

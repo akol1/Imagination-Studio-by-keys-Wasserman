@@ -63,10 +63,11 @@ SHIFT_VIDEO, SHIFT_AUDIO = 12.0, 3.0
 DETECT, REFINE, TRACK, GROW = 0.35, 2, 0.5, 64
 EMPTY = 64  # pixels: a mask smaller than this is a frame where the tracker lost the person
 SOUND_RATE = 48000
-# <Video 1>, the part as the model reads its performance, at 384 pixels on its short side (never more than the canvas):
-# its rows ride through every pass. Measured on a DGX Spark, 864x480, 124 frames: 20.9 s a pass against 35.2 with it at
-# the canvas's own size, the person's moves and timing followed as closely. SWAP_REF_SIDE=0 keeps the canvas's size.
-REF_SIDE = int(os.environ.get("SWAP_REF_SIDE", "384") or 0)
+# <Video 1>, the part as the model reads its performance, at half the canvas (448x256 for 864x480, 672x384 for
+# 1344x768): its rows ride through every pass. Measured on a DGX Spark, 124 frames: at 864x480 21 to 23 s a pass
+# against 31.5 with it at 384 and 35 at the canvas's own size; at 1344x768 65 s against 146. The person's moves and
+# timing were followed as closely. SWAP_REF_SIDE sets its short side in pixels instead (0: the canvas's size).
+REF_SIDE = os.environ.get("SWAP_REF_SIDE", "half")
 
 
 def say(text: str) -> None:
@@ -209,11 +210,11 @@ def collect(prompt_id: str, node: str) -> list[dict]:
     return [item for item in items if isinstance(item, dict) and item.get("filename")]
 
 
-def run_graph(workflow: dict, sampler: str, named: dict | None = None) -> str:
+def run_graph(workflow: dict, sampler: str, named: dict | None = None, stages: list | None = None) -> str:
     import urllib.error
 
     try:
-        return asyncio.run(sg.run(workflow, sampler, named))
+        return asyncio.run(sg.run(workflow, sampler, named, stages))
     except urllib.error.HTTPError as error:  # the server refused the workflow: its own words say which node and why
         try:
             said = json.loads(error.read() or b"{}")
@@ -413,6 +414,19 @@ def anchor(args, part: dict, work: Path, mask=None) -> Path | None:
 
 # ---------------------------------------------------------------- 5. the windows
 
+def engine_blocks() -> str | None:
+    """The bf16 Ref2VA checkpoint for TensorFold's int8 blocks, with SWAP_ENGINE=tensorfold where this server has the
+    node and the file; None (the default) runs ComfyUI's own blocks."""
+
+    # measured on a DGX Spark (5 s at 1344x768, 54.5K rows a pass, dense): 72 s a pass on the engine against 67 s on
+    # ComfyUI's own int8 blocks. The engine's speed is FastH3's sparse attention, which needs gate weights Ref2VA has
+    # not; and it takes Ref2VA only with a build that allows a checkpoint without them. So it is asked for by name.
+    if os.environ.get("SWAP_ENGINE", "comfy") != "tensorfold" or "TensorFoldH3Blocks" not in sg.call("/object_info/TensorFoldH3Blocks"):
+        return None
+    have = sg.call("/object_info/UNETLoader")["UNETLoader"]["input"]["required"]["unet_name"][0]
+    return sg.REF2VA["bf16"] if sg.REF2VA["bf16"] in have else None
+
+
 def weights() -> str:
     have = sg.call("/object_info/UNETLoader")["UNETLoader"]["input"]["required"]["unet_name"][0]
     asked = os.environ.get("SWAP_WEIGHTS", "int8")
@@ -444,7 +458,7 @@ def window_inputs(one: dict, part: dict, masks: list, made: list[Path], work: Pa
             link.unlink(missing_ok=True)
             link.symlink_to(path)
     lossless(str(pixels / "%05d.png"), folder / "pixels.mp4")
-    scale = min(1.0, REF_SIDE / min(part["width"], part["height"])) if REF_SIDE else 1.0
+    scale = 0.5 if REF_SIDE == "half" else min(1.0, int(REF_SIDE) / min(part["width"], part["height"])) if int(REF_SIDE or 0) else 1.0
     same = one["held"] == 0 and scale == 1.0
     if not same:
         if scale == 1.0:
@@ -483,7 +497,8 @@ def window_inputs(one: dict, part: dict, masks: list, made: list[Path], work: Pa
             "sound": sound, "cells": len(grid), "anchor": anchored if one["index"] == 1 else None}
 
 
-def window_graph(one: dict, files: dict, part: dict, args, unet: str, loras: list[tuple[str, float]], character: str) -> dict:
+def window_graph(one: dict, files: dict, part: dict, args, unet: str, loras: list[tuple[str, float]], character: str,
+                 blocks: str | None = None) -> dict:
     prompt = PROMPT + (" " + ANCHOR_SAYS if files["anchor"] else "") + (" " + args.direction.strip() if args.direction.strip() else "")
     w = {
         "1": {"class_type": "UNETLoader", "inputs": {"unet_name": unet, "weight_dtype": "default"}},
@@ -524,6 +539,11 @@ def window_graph(one: dict, files: dict, part: dict, args, unet: str, loras: lis
         w[str(3 + index if index < 2 else 80 + index)] = {"class_type": "LoraLoaderModelOnly",
                                                          "inputs": {"model": model, "lora_name": name, "strength_model": strength}}
         model = [str(3 + index if index < 2 else 80 + index), 0]
+    if blocks:
+        # the 50 blocks of every pass on TensorFold's CUDA engine, int8 on the tensor cores, dense attention: the LoRAs'
+        # block projections are merged into the engine's weights (from the bf16 checkpoint) once, ComfyUI keeps the rest
+        w["8"] = {"class_type": "TensorFoldH3Blocks", "inputs": {"model": model, "unet_name": blocks, "sparsity": 0.0}}
+        model = ["8", 0]
     positive = ["20", 0]
     if files["sound"]:
         # the part's own sound: a reference beside <Video 1>, and the guide of the window's sound from its first frame
@@ -544,9 +564,18 @@ def window_graph(one: dict, files: dict, part: dict, args, unet: str, loras: lis
     return w
 
 
-def window(one: dict, files: dict, part: dict, args, unet, loras, character, work: Path) -> list[Path]:
-    w = window_graph(one, files, part, args, unet, loras, character)
-    frames = fetch_all(collect(run_graph(w, "34"), "37"), work / f"window{one['index']}" / "made")
+def window(one: dict, files: dict, part: dict, args, unet, loras, character, work: Path, blocks: str | None = None) -> list[Path]:
+    w = window_graph(one, files, part, args, unet, loras, character, blocks)
+    took: list = []
+    frames = fetch_all(collect(run_graph(w, "34", stages=took), "37"), work / f"window{one['index']}" / "made")
+    spent: dict = {}
+    for node, seconds in took:
+        spent[node] = spent.get(node, 0.0) + seconds
+    loads = sum(v for k, v in spent.items() if k in ("UNETLoader", "CLIPLoader", "VAELoader", "LoraLoaderModelOnly", "TensorFoldH3Blocks", "MiniMaxH3SigmaShift"))
+    passes = spent.get("SamplerCustomAdvanced", 0.0)
+    say(f"window {one['index']}: loading {loads:.1f} s, the prompt and references encoded {spent.get('MiniMaxH3ReferenceToVideo', 0.0):.1f} s, "
+        f"frames encoded {spent.get('VAEEncode', 0.0):.1f} s, {STEPS} passes {passes:.1f} s ({passes / STEPS:.1f} s a pass), "
+        f"decoded {spent.get('VAEDecode', 0.0):.1f} s")
     forget_upload(files["pixels"])
     if len(frames) < one["length"] - 2:
         sys.exit(f"window {one['index']} gave {len(frames)} frames of {one['length']}")
@@ -640,10 +669,7 @@ def main() -> None:
             f"{len(windows)} window{'s' if len(windows) > 1 else ''}" + ("" if part["sound"] else ", no sound of its own"))
 
         stages.next("finding the person in the first frame")
-        if not sg.MAC:
-            freed = sg.memory_guard.release_cache(sg.memory_guard.model_files())
-            say(f"gave back the page cache of {freed} model files before loading")
-        server("swap-sam")
+        server("swap")
         need(("SAM3_Detect", "SAM3_VideoTrack", "SAM3_TrackToMask", "MiniMaxH3ReferenceToVideo", "MiniMaxH3AddGuide",
               "LTXVConcatAVLatent", "LTXVSeparateAVLatent", "SetLatentNoiseMask"))
         if SAM not in sg.call("/object_info/CheckpointLoaderSimple")["CheckpointLoaderSimple"]["input"]["required"]["ckpt_name"][0]:
@@ -666,20 +692,23 @@ def main() -> None:
             if anchored is not None and args.anchor_out:
                 shutil.copy(anchored, args.anchor_out)
 
-        server("swap-h3")
-        unet = weights()
+        # SAM and MiniMax H3 share one server kind: a swap after a swap finds H3 still loaded (only the anchor's picture
+        # model, a kind of its own, unloads it)
+        server("swap")
+        unet, blocks = weights(), engine_blocks()
         loras = [sg.hub_loras([f"{args.turbo_lora}:1"])[0], sg.hub_loras([f"{args.swap_lora}:1"])[0]]
         for name, _ in loras:
             if not sg.installed("lora", name):
                 sys.exit(f"ComfyUI does not list the LoRA {name}")
-        say(f"engine: cuda (ComfyUI, MiniMax H3 Ref2VA {unet.split('pruned_')[1].split('.')[0]}), the Character Swap and "
+        say(f"engine: cuda ({'TensorFold int8 blocks in ComfyUI, the LoRAs merged into them' if blocks else 'ComfyUI'}, MiniMax H3 Ref2VA "
+            f"{(blocks or unet).split('pruned_')[1].split('.')[0]}), the Character Swap and "
             f"8-step Turbo LoRAs at 1, {STEPS} passes of {SAMPLER}, CFG {CFG:g}, {part['width']}x{part['height']}")
         character = sg.upload(args.image)
         made: list[Path | None] = [None] * count
         for one in windows:
             stages.next(f"window {one['index']} of {len(windows)}")
             files = window_inputs(one, part, masks, made, work, anchored)
-            frames = window(one, files, part, args, unet, loras, character, work)
+            frames = window(one, files, part, args, unet, loras, character, work, blocks)
             for i in range(one["skip"], one["length"]):
                 source = one["start"] + i
                 if one["first"] <= source <= one["last"]:

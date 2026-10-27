@@ -182,6 +182,9 @@ no node pack is installed for it and no code of anyone below is copied into this
   or the United States of America, and it carries an Acceptable Use Policy. "MiniMax H3 is licensed under the
   MiniMax H3 Community License Agreement, Copyright © 2026 MiniMax. All Rights Reserved." Powered by MiniMax H3.
 - SAM 3.1 is the build listed under the Library's actions above (SAM License).
+- `spark/patches/tensorfold-h3-gateless.patch` changes TensorFold's H3 CUDA family (drowzeys/TensorFold at
+  `1f7ecc75ded5df6da151d4d5eeee87b35161e3c2`, Apache License 2.0) so it loads a MiniMax H3 transformer without
+  FastH3's gate weights, for the optional `SWAP_ENGINE=tensorfold` route. It is not applied by any installer.
 
 # Third-party notices: the Music tab
 

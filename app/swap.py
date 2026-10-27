@@ -15,10 +15,16 @@ a DGX Spark or another CUDA machine with MiniMax H3 Ref2VA (oneshot-setup-spark.
 
 from __future__ import annotations
 
+import importlib.util
 import os
 from pathlib import Path
 
 from fastapi import APIRouter, HTTPException
+
+# the windows a part is made in: spark/swap_plan.py, shared with the script that renders it
+_spec = importlib.util.spec_from_file_location("swap_plan", Path(__file__).resolve().parent.parent / "spark" / "swap_plan.py")
+plan = importlib.util.module_from_spec(_spec)
+_spec.loader.exec_module(plan)
 
 KINDS = ("swap",)
 TITLE = "Character Swap"
@@ -37,9 +43,30 @@ TURBO = "MiniMax-H3-Comfy/loras/minimax_h3_fl2v_turbo_8step_v1.0_768p_comfyui_bf
 SWAP_LORA_FILE = "h3_character_swap_v1.5.safetensors"
 SWAP_LORA = "MiniMax-H3-Comfy/loras/" + SWAP_LORA_FILE
 INSTALL = "bash oneshot-setup-spark.sh --swap"
+QUALITY = 480  # the panel's default: "Fast"; 768 is "High"
+# Measured on a DGX Spark (GB10), 2026-10-27, a 5 s and an 8 s part of a 1376x768 clip with one person, int8 Ref2VA on
+# ComfyUI's own blocks, <Video 1> at half the canvas, models loaded from the first window on:
+#   per window of 124 frames: the prompt and references encoded, the frames encoded and decoded (OVERHEAD), and one
+#   pass of eight (PASS); a shorter window takes (frames / 124) ** 1.2 of that
+#   SAM: about 6 s to find the person, 0.35 s a frame to follow them; the anchor (Qwen-Image-2.1's edit) 40 to 54 s
+PASS = {480: 22.0, 768: 65.0}
+OVERHEAD = {480: 62.0, 768: 113.0}
+ANCHOR = {480: 41.0, 768: 54.0}
+FIND, FOLLOW, OTHER = 6.0, 0.35, 4.0
 LICENCE = ("MiniMax H3 and the Character Swap LoRA (Akatz Labs): MiniMax H3 Community License, not licensed for use in "
            "the EU, the UK, South Korea or the US. Turbo LoRA (LightX2V): Apache-2.0. SAM 3.1 (Meta): SAM License. "
            "The idea and its settings: Comfy Org's Openjutsu and Akatz Labs' workflow (MIT).")
+
+
+def estimate(seconds: float, quality: int, anchor: bool = True) -> int:
+    """The seconds a swap takes on a DGX Spark, from the measured stages (above)."""
+
+    frames = int(round(float(seconds) * plan.FPS))
+    total = FIND + FOLLOW * frames + OTHER + (ANCHOR[quality] if anchor else 0.0)
+    for one in plan.windows(frames):
+        share = (one["length"] / plan.WINDOW) ** 1.2
+        total += (OVERHEAD[quality] + 8 * PASS[quality]) * share
+    return int(round(total))
 
 
 def attach(home: Path, pack: Path, spark: bool, inside, relative, media_seconds):
@@ -82,7 +109,9 @@ def attach(home: Path, pack: Path, spark: bool, inside, relative, media_seconds)
     @router.get("/api/swap")
     def state() -> dict:
         why = missing()
-        return {"title": TITLE, "ready": not why, "why": why, "seconds": list(SECONDS), "qualities": list(QUALITIES), "quality": 768,
+        lengths = range(int(SECONDS[0]), int(SECONDS[1]) + 1)
+        return {"title": TITLE, "ready": not why, "why": why, "seconds": list(SECONDS), "qualities": list(QUALITIES), "quality": QUALITY,
+                "estimates": {str(q): {str(n): estimate(n, q) for n in lengths} for q in QUALITIES}, "anchor_seconds": {str(q): ANCHOR[q] for q in QUALITIES},
                 "anchor": True, "anchor_model": anchor_model(), "seed": SEED, "window": WINDOW, "history": HISTORY,
                 "direction_most": DIRECTION_MOST, "licence": LICENCE}
 
@@ -118,7 +147,7 @@ def attach(home: Path, pack: Path, spark: bool, inside, relative, media_seconds)
             raise HTTPException(400, "the part starts at 0 s or later")
         if not low <= seconds <= high:
             raise HTTPException(400, f"the part is {low:g} to {high:g} seconds long")
-        quality = number(params, "quality", 768, int)
+        quality = number(params, "quality", QUALITY, int)
         if quality not in QUALITIES:
             raise HTTPException(400, "the quality is 480 or 768")
         anchor = params.get("anchor", True)
@@ -182,5 +211,14 @@ def attach(home: Path, pack: Path, spark: bool, inside, relative, media_seconds)
         except HTTPException:
             return None
 
-    return router, build, title, source_of
+    def guess(params: dict) -> int | None:
+        """The job's expected seconds for the queue, or None for settings it would refuse."""
+
+        try:
+            quality = int(params.get("quality") or QUALITY)
+            return estimate(float(params.get("seconds") or 5), quality, params.get("anchor", True) is not False) if quality in QUALITIES else None
+        except (TypeError, ValueError):
+            return None
+
+    return router, build, title, source_of, guess
 

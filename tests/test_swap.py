@@ -100,9 +100,9 @@ def stand_in(tmp_path, spark=True, length=8.0, installed=True):
             raise HTTPException(400, "outside the studio folder")
         return found
 
-    router, build, title, source = swap.attach(home, ROOT, spark, inside, lambda p: str(Path(p).relative_to(home.resolve())),
-                                               lambda path: (length, True))
-    return SimpleNamespace(home=home, router=router, build=build, title=title, source=source, models=models, prefix=prefix)
+    router, build, title, source, guess = swap.attach(home, ROOT, spark, inside, lambda p: str(Path(p).relative_to(home.resolve())),
+                                                      lambda path: (length, True))
+    return SimpleNamespace(home=home, router=router, build=build, title=title, source=source, guess=guess, models=models, prefix=prefix)
 
 
 @pytest.fixture(autouse=True)
@@ -177,9 +177,20 @@ def test_where_it_cannot_run_it_says_what_to_install(tmp_path):
     app.include_router(s.router)
     state = TestClient(app).get("/api/swap").json()
     assert state["ready"] is False and "Character Swap LoRA (version 1.5)" in state["why"]
-    assert state["seconds"] == [5.0, 15.0] and state["qualities"] == [480, 768] and state["anchor"] is True
+    assert state["seconds"] == [5.0, 15.0] and state["qualities"] == [480, 768] and state["anchor"] is True and state["quality"] == 480
+    assert state["estimates"]["480"]["5"] == swap.estimate(5, 480) and set(state["estimates"]["768"]) == {str(n) for n in range(5, 16)}
     assert state["window"] == 124 and state["history"] == 18 and "not licensed for use in the EU, the UK, South Korea or the US" in state["licence"]
     assert state["anchor_model"] == "qwen"  # FLUX3-K not installed here: the anchor falls back to Qwen-Image-2.1
+
+
+def test_the_time_a_swap_takes_follows_the_measured_stages(tmp_path):
+    # measured on a DGX Spark: a 5 s part at 480 with the anchor, 341 s; an 8 s part at 768 in two windows, 1220 s
+    assert 300 <= swap.estimate(5, 480) <= 360 and 1100 <= swap.estimate(8, 768) <= 1300
+    assert swap.estimate(5, 480, anchor=False) == swap.estimate(5, 480) - round(swap.ANCHOR[480])
+    assert swap.estimate(5, 480) < swap.estimate(10, 480) < swap.estimate(15, 480) and swap.estimate(5, 768) > 2 * swap.estimate(5, 480)
+    s = stand_in(tmp_path)
+    assert s.guess({"seconds": 5}) == swap.estimate(5, 480) and s.guess({"seconds": 5, "quality": 768, "anchor": False}) == swap.estimate(5, 768, False)
+    assert s.guess({"quality": 600}) is None and s.guess({"seconds": "x"}) is None
 
 
 # ---------------------------------------------------------------- the graph a window sends
@@ -243,6 +254,20 @@ def test_a_later_window_carries_the_history_and_not_the_anchor(monkeypatch):
     assert w["30"]["inputs"]["noise_seed"] == 904240  # the master seed, plus one a window
     silent, _ = graph(monkeypatch, sound=False, anchor=False)
     assert "13" not in silent and "25" not in silent and silent["33"]["inputs"]["conditioning"] == ["20", 0]
+
+
+def test_on_tensorfolds_engine_the_blocks_run_int8_dense_with_the_loras_merged(monkeypatch):
+    monkeypatch.setattr(spark_swap, "sg", FakeComfy(), raising=False)
+    monkeypatch.setattr(spark_swap, "put", lambda path: "in_" + Path(path).name)
+    one = plan.windows(120)[0]
+    files = {"pixels": Path("w/pixels.mp4"), "ref": Path("w/ref.mp4"), "mask": Path("w/mask.mp4"), "sound": None, "anchor": None}
+    w = spark_swap.window_graph(one, files, {"width": 864, "height": 480}, SimpleNamespace(seed=1, direction=""),
+                                FakeComfy.REF2VA["int8"], [("t.safetensors", 1.0), ("s.safetensors", 1.0)], "c.png",
+                                blocks=FakeComfy.REF2VA["bf16"])
+    assert w["8"] == {"class_type": "TensorFoldH3Blocks", "inputs": {"model": ["4", 0], "unet_name": "minimax_h3_ref2va_pruned_bf16.safetensors", "sparsity": 0.0}}
+    assert w["32"]["inputs"]["model"] == ["8", 0] and w["33"]["inputs"]["model"] == ["8", 0]  # the same passes, sampler and schedule
+    assert w["32"]["inputs"]["steps"] == 8 and w["31"]["inputs"]["sampler_name"] == "er_sde"
+    assert w["15"]["inputs"]["video"] == ["14", 0]  # <Video 1> is the smaller copy: the frames start from the part's own
 
 
 def test_the_stages_are_said_for_the_job_card(capsys):
@@ -384,7 +409,8 @@ def page(code: str) -> dict:
 def test_a_clip_gets_swap_the_character_and_its_panel_queues_one_job():
     got = page("""
       ACT.state = { upscale: { ready: true }, remove: { ready: true }, turnaround: { ready: true } };
-      SWAP.state = { ready: true, seconds: [5, 15], qualities: [480, 768], anchor: true, anchor_model: "flux3k-fast", direction_most: 500,
+      SWAP.state = { ready: true, seconds: [5, 15], qualities: [480, 768], quality: 480, anchor: true, anchor_model: "flux3k-fast", direction_most: 500,
+                     estimates: { "480": { "5": 331, "10": 651 }, "768": { "5": 739, "10": 1520 } }, anchor_seconds: { "480": 41, "768": 54 },
                      licence: "MiniMax H3 and the Character Swap LoRA (Akatz Labs): MiniMax H3 Community License, not licensed for use in the EU, the UK, South Korea or the US." };
       out.video = actButtons({ kind: "video", path: "renders/a.mp4" }).map(b => text(b.kids));
       out.image = actButtons({ kind: "image", path: "uploads/a.png" }).map(b => text(b.kids));
@@ -395,7 +421,7 @@ def test_a_clip_gets_swap_the_character_and_its_panel_queues_one_job():
       out.range = (({ min, max, step }) => ({ min, max, step }))(find(panel, n => n.attrs && n.attrs.type === "range").attrs);
       hot(panel).attrs.onclick(); out.refused = toasts.slice(-1)[0];
       SWAP.f.image = "scouts/s1/hero.png"; SWAP.f.seconds = 10; SWAP.f.start = 2; SWAP.f.direction = "keep the scarf";
-      out.windows = text(actPanel()).includes("2 windows");
+      out.windows = text(actPanel()).includes("2 windows"); out.ten = text(actPanel());
       answers["/api/jobs"] = { id: "j7", title: "Character Swap: a.mp4" };
       await hot(actPanel()).attrs.onclick(); out.sent = calls.slice(-1)[0];
       jobs = [{ id: "j7", status: "done", outputs: ["renders/j7.mp4", "masks/j7/person.mp4", "scouts/j7/anchor.png"] }];
@@ -407,10 +433,11 @@ def test_a_clip_gets_swap_the_character_and_its_panel_queues_one_job():
     assert got["id"] == "actpanel" and "Character Swap" in got["panel"] and "Swap the character" in got["panel"]
     assert "largest person" in got["panel"] and "Put the character in the first frame first" in got["panel"] and "FLUX3-K Fast" in got["panel"]
     assert "not licensed for use in the EU, the UK, South Korea or the US" in got["panel"]
-    assert got["seg"] == [["480p", ""], ["768p", "on"]] and got["anchor"] is True and got["range"] == {"min": 5, "max": 15, "step": 1}
+    assert got["seg"] == [["Fast · 480p", "on"], ["High · 768p", ""]] and got["anchor"] is True and got["range"] == {"min": 5, "max": 15, "step": 1}
+    assert "about 6 min on a DGX Spark" in got["panel"] and "about 11 min on a DGX Spark" in got["ten"]
     assert got["refused"] == "Choose the character’s picture first"
     assert got["windows"] is True
     assert got["sent"] == ["/api/jobs", {"kind": "swap", "params": {"video": "renders/a.mp4", "image": "scouts/s1/hero.png", "start": 2, "seconds": 10,
-                                                                   "quality": 768, "anchor": True, "direction": "keep the scarf", "seed": 904239}}]
+                                                                   "quality": 480, "anchor": True, "direction": "keep the scarf", "seed": 904239}}]
     assert "job j7" in got["done"] and "Swapped" in got["done"] and "Who was swapped, in green" in got["done"] and "The first frame it started from" in got["done"]
     assert "not on a Mac" in got["mac"]

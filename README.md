@@ -2201,7 +2201,7 @@ room and the other people are the clip's own, and the part keeps its soundtrack.
 2. Choose **the character**: upload a picture or pick one from the Library. Head to toe if you can: the face, the hair
    and the whole outfit come from it.
 3. Choose **the part**: where it starts and how long it is (5 to 15 seconds).
-4. Choose **480p** (faster) or **768p** (sharper), and leave **Put the character in the first frame first** on: the
+4. Choose **Fast** (480p, the default) or **High** (768p), and leave **Put the character in the first frame first** on: the
    picture model draws the character into the part's first frame and the swap starts from that frame (FLUX3-K Fast,
    or Qwen-Image-2.1 where FLUX3-K is not installed). A **direction** (optional) adds your own words.
 5. Press **Swap the character**. The job card shows the stages: the part, finding the person, following them, the
@@ -2214,6 +2214,27 @@ person is drawn again: the rest of each frame is the clip's own. MiniMax H3 Ref2
 LoRA and LightX2V's 8-step Turbo LoRA draws the person, 8 passes a window, in windows of 124 frames (5.2 s), each
 carrying the last 18 frames of the window before so the joins hold. It all runs on this machine on the studio's own
 engine: no ComfyUI to open, no account, no cloud.
+
+How long it takes on a DGX Spark with the GPU to itself (measured; the panel shows the figure for the part you chose;
+another job on the GPU at the same time makes it slower: 9.7 min for the 5 s Fast swap beside a language model):
+
+| Part | Fast (480p) | High (768p) |
+|---|---|---|
+| 5 s, one window | about 5.5 min | about 12 min |
+| 8 s, two windows | about 9 min | about 20 min |
+| 15 s, three windows | about 16 min | about 38 min |
+
+Where the time goes, 5 s at 480p: cutting the part 1 s, finding the person 5 s, following them 37 s, the first frame 40 s,
+then the window: the prompt and the references read 25 s, the frames encoded 21 s, eight passes of 21 to 23 s, the
+frames decoded 16 s, and the assembly 1 s. The passes are most of it. To keep them short, `<Video 1>` (the part as the
+model reads the performance) goes in at half the canvas: at 768p a pass took 146 s with it at full size and 65 s at
+half, the moves and timing followed as closely. The largest memory use measured was about 45 GB at 480p and 57 GB at
+768p.
+
+TensorFold's int8 engine (the one FastH3 runs on) can run these blocks too, with
+`SWAP_ENGINE=tensorfold`, but it needs an engine build that takes a checkpoint without FastH3's gate weights
+(`spark/patches/tensorfold-h3-gateless.patch`, not part of the install). Measured, it is no faster here: FastH3's speed
+is its sparse attention, which those weights drive, and on 54,500 rows a dense pass took 72 s against ComfyUI's 67 s.
 
 Limits:
 
