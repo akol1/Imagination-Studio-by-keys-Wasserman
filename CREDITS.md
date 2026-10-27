@@ -296,7 +296,8 @@ are built on (`kernels/qwen/dense/v1/lane_qmm.py`). This pack pins TensorFold 0.
 (Apache-2.0.) Since 3.3.0 the DGX Spark's music engine is built on the **TensorFold 1.1.5** release (its Zig + CUDA
 runtime, build and loaders; the music3 family on top is this pack's), and since 3.3.1 the Mac's Metal music engine
 (`music3-metal-115`) and the Mac's Metal Bolt engine (`bolt-metal-115`, `libbolt.dylib` on TensorFold's Bolt lane
-backend) are too.
+backend) are too. The YuE2 song model's decode engine on the DGX Spark (`libtf_yue2.so`) is built the same way: on
+TensorFold 1.1.5's CUDA runtime and the music3 family's decode GEMVs, with this pack's yue2 family on top.
 
 ## Sol-Engine, Sol-Attn and Sol-H3: NVIDIA Research
 

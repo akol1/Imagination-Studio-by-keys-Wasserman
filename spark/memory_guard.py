@@ -564,12 +564,15 @@ MUSIC_CUDA_MEASURED = {"music-cuda-int8": ((30, 30.0, 16_632), (60, 60.0, 17_928
 # the decoder stay on the GPU throughout (7.5 GB bf16, 9.3 GB with the int8 copies); the length adds the KV cache and
 # the flow matching's frames. A load peaks at 15.1 GB (the file read once into memory beside its copy on the GPU).
 # Songs over 120 s are not measured: the line goes on at the same slope.
-MUSIC_YUE2_ESTIMATE = {"music-yue2-bf16": (14_100, 45), "music-yue2-int8": (15_600, 30)}
+MUSIC_YUE2_ESTIMATE = {"music-yue2-bf16": (14_100, 45), "music-yue2-int8": (15_600, 30),
+                       # the tokens on TensorFold's decode engine (its own int8 copy, 2.6 GB, beside the bf16 model)
+                       "music-yue2-blocks": (18_200, 30)}
 # (seconds asked, seconds made, MB): English pop lyrics seed 21 at 30, 60, 120 s; the int8 65 and 70 s rows are the two
 # A/B instrumentals at seed 42 and 43
 MUSIC_YUE2_MEASURED: dict = {"music-yue2-bf16": ((30, 30.0, 12_193), (60, 60.0, 15_809), (120, 120.0, 19_438)),
                              "music-yue2-int8": ((30, 30.0, 13_495), (60, 60.0, 17_031), (120, 120.0, 19_149),
-                                                 (65, 65.0, 16_752), (70, 70.0, 17_079))}
+                                                 (65, 65.0, 16_752), (70, 70.0, 17_079)),
+                             "music-yue2-blocks": ((30, 30.0, 17_048), (60, 60.0, 19_930), (120, 120.0, 21_035))}
 
 
 def music_check(seconds: float, available_mb: int | None = None, total_mb: int | None = None, route: str = "music",

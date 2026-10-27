@@ -169,7 +169,7 @@ checklist_rows_cuda() {
     "image-edit|opt|0|0|14000|--image-edit|||Image edit (40 steps)|Qwen-Image-2.1's base model (non-commercial)" \
     "flux3|opt|0|0|41000|--flux3|||FLUX3-K|Black Forest Labs' picture models (gated: accept first)" \
     "moss|opt|0|0|30000|--moss|||MOSS-Image|OpenMOSS's picture model (Apache 2.0)" \
-    "yue2|opt|0|0|13000|--yue2|||YuE2 songs|YuE2 for the Music tab (creators may sell songs; companies need a licence)" \
+    "yue2|opt|0|0|13700|--yue2|||YuE2 songs|YuE2 for the Music tab (creators may sell songs; companies need a licence)" \
     "swap|opt|0|0|2100|--swap||ref2va|Character Swap|A picture's character in place of a person in a clip (ticks Ref2VA; H3 licence: not EU, UK, KR, US)"
 }
 

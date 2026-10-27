@@ -35,7 +35,9 @@
 #                                             # their own Python 3.12 environment under $PREFIX/yue2; the Music tab's default
 #                                             # engine where it is installed. Code Apache 2.0; weights CC BY-NC 4.0 with the
 #                                             # authors' creator permission: personal users, creators and musicians may sell
-#                                             # and license their songs royalty-free; a company needs the authors' licence
+#                                             # and license their songs royalty-free; a company needs the authors' licence.
+#                                             # On a GB10 it also builds TensorFold's decode engine for YuE2's tokens
+#                                             # (spark/build-yue2-engine.sh, 0.7 GB with Zig and the source)
 #   bash oneshot-setup-spark.sh --bolt        # add NVIDIA Nemotron 3.5 Bolt as the Studio's own brain engine, about 25 GB more:
 #                                             # NVIDIA's 24 GB checkpoint (a326822a) and its LiLiCorr drafter (4c6a5613), and
 #                                             # the engine (spark/build-bolt.sh: TensorFold with MiaAI-Lab's Bolt backend).
@@ -421,7 +423,20 @@ if [ "$MUSIC" = 1 ]; then
 fi
 
 if [ "$YUE2" = 1 ]; then  # YuE2 for the Music tab, in its own environment (spark/setup-yue2.sh, idempotent)
-  if PREFIX="$PREFIX" bash "$HERE/spark/setup-yue2.sh" $([ "$VERIFY" = 0 ] || echo --verify); then :
+  if PREFIX="$PREFIX" bash "$HERE/spark/setup-yue2.sh" $([ "$VERIFY" = 0 ] || echo --verify); then
+    # TensorFold's decode engine for YuE2's tokens (a DGX Spark's GB10 only): the server uses it where it is built,
+    # its own PyTorch token loop where it is not (YUE2_BACKEND=torch|blocks chooses)
+    case "$GPU" in *GB10*)
+      say "TensorFold's YuE2 decode engine for CUDA -> $PREFIX/tf-yue2"
+      if [ "$VERIFY" = 1 ]; then
+        [ -s "$PREFIX/tf-yue2/libtf_yue2.so" ] && ok "libtf_yue2 at $(cut -c1-8 "$PREFIX/tf-yue2/stamp" 2>/dev/null)" \
+          || echo "  not built: YuE2's tokens use its PyTorch loop (slower). bash spark/build-yue2-engine.sh builds it"
+      elif PREFIX="$PREFIX" bash "$HERE/spark/build-yue2-engine.sh"; then
+        ok "libtf_yue2 (int8 weights made on the GPU as the server loads)"
+      else
+        echo "  the engine did not build: YuE2's tokens use its PyTorch loop (slower). Fix and rerun spark/build-yue2-engine.sh"
+      fi;;
+    esac
   else
     [ "$VERIFY" = 0 ] || die "YuE2 is not installed as pinned: run bash spark/setup-yue2.sh"
     echo "  YuE2 did not install: songs use MiniMax Music 3 (with --music). Fix and rerun bash spark/setup-yue2.sh"
