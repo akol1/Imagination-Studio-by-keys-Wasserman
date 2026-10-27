@@ -2966,8 +2966,8 @@ which YuE2 does not run on). Each engine's licence line shows under the picker.
   longer is cut at the length you set and faded out over its last 2 seconds (the take says so).
 - **The score.** Each YuE2 take keeps its score (`score.abc`, *Download score* on the take) and what it was made from,
   in `~/ImaginationStudio/music/<id>.yue2/`.
-- **Each song** is a job in the queue, as with MiniMax Music 3: YuE2 loads on the first song (about 40 to 60 s from
-  disk), stays loaded for five minutes after a song (`YUE2_IDLE_S`), and is unloaded at once when any other job
+- **Each song** is a job in the queue, as with MiniMax Music 3: YuE2 loads on the first song (about 15 s on a DGX
+  Spark), stays loaded for five minutes after a song (`YUE2_IDLE_S`), and is unloaded at once when any other job
   starts, MiniMax Music 3 included. While loaded it holds the studio's GPU lock. Whisper's lyrics check works as for
   MiniMax Music 3.
 - **Speed.** The score and the song's tokens are written with an int8 copy of the model's projections (twice as fast
@@ -2981,7 +2981,8 @@ length and was cut there); Whisper's check on two 60 s songs at seeds 7 and 11; 
 | int8 token loop (default) | 34.6 s | 48.1 s | 79.8 s | 96 and 97 % of the words sung | 19.1 GB |
 | bf16 (`YUE2_QUANT=bf16`) | 70.8 s | 94.9 s | 146.7 s | 98 and 97 % | 19.4 GB |
 
-The score comes first and takes about 20 s (int8) whatever the length; the song itself then makes about two seconds of
+Through the app (a test studio), a 45 s song with the default settings, the model loading first, took 76.9 s and
+Whisper heard 92 % of its words. The score comes first and takes about 20 s (int8) whatever the length; the song itself then makes about two seconds of
 song a second. Four instrumentals of 65 and 70 s took 47 to 76 s.
 
 **Licence.** YuE2's code is Apache 2.0. Its weights are CC BY-NC 4.0 with the YuE2 authors' additional permission for
