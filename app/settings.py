@@ -39,7 +39,7 @@ DEFAULTS = {
                    "start_cards": ["clip", "scout", "still", "sharp", "long", "voice"], "start_off": []},
     "layout": {"hidden": [], "order": []},
     "presets": {"recipe": "quick", "image_model": "qwen", "seconds": 5, "qa_gate": True, "audio_rate": "keep",
-                "seed": "fixed", "mode": "clip", "captions_auto": True},
+                "seed": "fixed", "mode": "clip", "captions_auto": True, "music_engine": "auto"},
     "hermes_profile": "",
     "hermes_command": "",
 }
@@ -51,6 +51,8 @@ CHOICES = {
     ("presets", "audio_rate"): ("keep", "48000"),
     ("presets", "seed"): ("fixed", "random"),
     ("presets", "mode"): ("clip", "picture", "voice", "song"),
+    # the Music tab's song engine (music.default_engine): auto is YuE2 where it is installed, MiniMax Music 3 elsewhere
+    ("presets", "music_engine"): ("auto", "yue2", "music3"),
 }
 FLAGS = {("appearance", "glow"), ("appearance", "poster"), ("presets", "qa_gate"), ("presets", "captions_auto")}
 # what the Agent room runs with the user's sign-ins: set from this computer or its Tailscale address only (agents.local)

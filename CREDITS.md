@@ -195,6 +195,22 @@ on TensorFold's native Metal port (Zig and Metal, on an M5 or later) or its MLX 
 drowzeys/TensorFold fork), both following ComfyUI's reference code. The
 pack ships no weights. **MiniMax-Music3.**
 
+## The song model YuE2: Multimodal Art Projection (m-a-p) and the YuE2 authors
+
+**Multimodal Art Projection (m-a-p)** and the **YuE2 authors** (Ruibin Yuan, Jiahao Pan, Junyan Jiang and co-authors of
+"YuE2: Unifying Symbolic and Audio Music Generation at Frontier Quality", arXiv:2609.33757) made **YuE2**, the Music
+tab's default song engine on Linux with an NVIDIA GPU: from lyrics and a style it writes an editable score (melody and
+chords in ABC), then the song with vocals and accompaniment, 48 kHz stereo, through one AR-NAR Mixture-of-Transformers
+model (**YuE2-3B**) and its **YuE2-Vae** decoder. Its code, agent skill and documentation
+(github.com/multimodal-art-projection/YuE, run here from commit 1647252d in its own environment) are **Apache 2.0**;
+the skill's instrumental helpers, run from that checkout for an instrumental, are **MIT** (yue2-music contributors).
+The weights (huggingface.co/m-a-p/YuE2-3B and huggingface.co/m-a-p/YuE2-Vae) are **CC BY-NC 4.0 with the authors'
+additional individual creator permission**: personal users, content creators and musicians acting in an individual
+capacity may generate, publish, sell, license or otherwise monetize their outputs free of charge, with no fees or
+royalties; companies need a commercial licence from the authors; no illegal, harmful, deceptive or unethical use.
+YuE2's decoder carries code derived from Stability AI's stable-audio-tools (MIT) and NVIDIA's BigVGAN SnakeBeta (MIT).
+The pack ships no weights. **YuE2.**
+
 ## Sound effects and foley: Stability AI, and Ho Kei Cheng and the MMAudio authors
 
 **Stability AI** made **Stable Audio Open 1.0**, the model behind a sound effect from words (44.1 kHz stereo, up to

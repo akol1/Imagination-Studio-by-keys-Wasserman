@@ -1,15 +1,30 @@
 "use strict";
-/* Music · MiniMax Music 3, a tab of its own (app/music.py). MiniMax-Music3.
+/* Music · YuE2 or MiniMax Music 3, a tab of its own (app/music.py, app/music_yue2.py). YuE2 · MiniMax-Music3.
+   Two song engines: YuE2 (Linux with an NVIDIA GPU, the default where it is installed) and MiniMax Music 3 (every
+   machine); each song names its own (the engine picker, from Settings' "Song engine"), and its licence line shows.
    A song from lyrics (section tags such as [Verse] and [Chorus]) and a style caption, made on this machine: up to five
    minutes with sung vocals, 44.1 kHz stereo, one song per job in the render queue. A song can be laid under a long
    video or the Editor's export as its soundtrack (ducked under the dialogue). On a Mac a song plays while it is made
    (GET /api/music/takes/{id}/live, a stereo WAV whose sound the app holds back until playing it will not stop). */
-const MU = { takes: null, caption: "", lyrics: "", seconds: 60, seed: 1, job: null, busy: false, asr: true, open: false, stream: true, player: null,
+const MU = { engine: null, takes: null, caption: "", lyrics: "", seconds: 60, seed: 1, job: null, busy: false, asr: true, open: false, stream: true, player: null,
   style: { genre: "", bpm: "", key: "", mood: "", vocals: "", instruments: "" }, under: null, level: -10, lay: null, videos: null };
 const MU_TAGS = ["Intro", "Verse", "Pre-Chorus", "Chorus", "Bridge", "Instrumental", "Outro"];
 const MU_EXAMPLE = { caption: "Upbeat modern pop, 118 BPM, bright synths, punchy four-on-the-floor kick, clean electric guitar plucks, catchy sing-along chorus. Warm female lead vocal with layered harmonies.",
   lyrics: "[Verse]\nWindow down, the summer air is calling out my name\nEvery song on the radio is never quite the same\n\n[Pre-Chorus]\nAnd I can feel it coming like a wave\n\n[Chorus]\nTurn it up, turn it up, we're alive tonight\nDancing on the edge of the neon light\n(oh oh oh)\n\n[Outro]\nTurn it up" };
 const muOn = () => !!(S && S.music && S.music.available);
+// the song engine of the next song: the one picked here, else the studio's default (music.default_engine); its state
+const muEngine = () => (S && S.music && S.music.engines && MU.engine && S.music.engines[MU.engine] ? MU.engine : (S && S.music && S.music.engine) || "music3");
+const muState = () => (S && S.music && S.music.engines && S.music.engines[muEngine()]) || (S && S.music);
+const muCredit = name => name === "yue2" ? "YuE2" : "MiniMax-Music3";
+// the picker: shown where YuE2 is installed (a Linux machine with an NVIDIA GPU), else MiniMax Music 3 alone
+function muPicker() {
+  const all = S && S.music && S.music.engines; if (!all || !all.yue2 || !(all.yue2.installed || all.yue2.available)) return null;
+  const now = muEngine(), names = S.music.engine_names || { yue2: "YuE2", music3: "MiniMax Music 3" };
+  return el("div", { class: "row", style: "margin:6px 0 4px;align-items:center" },
+    el("div", { class: "seg-ctl fit", role: "radiogroup", "aria-label": "Song engine" }, Object.keys(names).filter(k => all[k]).map(k =>
+      el("button", { type: "button", role: "radio", "aria-checked": now === k ? "true" : "false", class: now === k ? "on" : "", title: all[k].available ? "" : all[k].why || "",
+        onclick: () => { MU.engine = k; render(); } }, names[k] + (all[k].available ? "" : " (not ready)")))),
+    el("span", { class: "note", style: "margin:0" }, now === S.music.engine ? "The studio's default here (Settings, Presets, Song engine)." : "This song only; Settings, Presets, Song engine sets the default.")); }
 const muActive = () => MU.job && ["queued", "running"].includes(MU.job.status);
 // the structured helper: the style's parts in the order the model's own captions put them
 function muCaption(style) {
@@ -22,7 +37,7 @@ function muLyricsNotes(lyrics) {
   const notes = [];
   if (!text.trim()) return ["No lyrics: the song is an instrumental."];
   if (!found.length) notes.push("No section tags: put [Verse], [Chorus] … on lines of their own above the lines they hold, or the model chooses the shape itself.");
-  const odd = found.filter(t => !S.music.sections.some(s => s.toLowerCase() === t.toLowerCase().replace(/\s+\d+$/, "")));
+  const odd = found.filter(t => !(muState() || S.music).sections.some(s => s.toLowerCase() === t.toLowerCase().replace(/\s+\d+$/, "")));
   if (odd.length) notes.push("Tags the model may read as words: " + [...new Set(odd)].slice(0, 5).map(t => "[" + t + "]").join(", ") + ".");
   return notes; }
 // played while it is made (the Mac engine's stream; ComfyUI's route on a Spark cannot): on unless unticked
@@ -34,22 +49,24 @@ function muStart(secs, st) {
   const [[a, ta], [b, tb]] = [pts[0], pts[pts.length - 1]];
   return Math.max(0, b > a ? ta + (tb - ta) * (secs - a) / (b - a) : ta) + (lead.margin_s != null ? lead.margin_s : 3); }
 function muLive(job) {
-  if (!muStreams(S.music) || !job || job.status !== "running" || (job.params && job.params.live === false)) return null;
+  if (!muStreams(muState()) || !job || job.status !== "running" || (job.params && job.params.live === false)) return null;
   if (!MU.player || MU.player.id !== job.id) MU.player = { id: job.id, el: el("audio", { src: "/api/music/takes/" + encodeURIComponent(job.id) + "/live", controls: true, autoplay: true, preload: "auto", style: "width:100%;margin-top:8px" }) };
   return el("div", {}, el("div", { class: "note", style: "margin:8px 0 0" }, "Playing while it is made (MiniMax-Music3): it starts once enough of the song is made that it never stops."), MU.player.el); }
 async function muLoad() { try { MU.takes = await api("/api/music/takes"); } catch { MU.takes = []; } if (tab === "Music") render(); }
 const muLine = t => [t.duration != null ? Number(t.duration).toFixed(1) + " s" + (t.ended ? " (the model ended it)" : "") : null,
   t.total_s ? "made in " + mmss(t.total_s) : null, t.rtf ? t.rtf + "× its length" : null, t.load_s ? "models loaded in " + Math.round(t.load_s) + " s" : null,
   t.peak_memory_gb ? t.peak_memory_gb + " GB at the peak" : null,
+  t.engine === "yue2" ? "YuE2" + (t.instrumental ? ", an instrumental" : "") + (t.plan_s != null ? ": the score in " + mmss(t.plan_s) : "") : null,
   t.streamed ? "played while made" + (t.first_audio_s != null ? ": first sound after " + t.first_audio_s + " s" : "") + (t.play_s != null ? ", playing from " + t.play_s + " s" : "") : null,
   t.asr && t.asr.score != null ? "Whisper heard " + t.asr.score + " % of the words sung (" + t.asr.found + " of " + t.asr.words + ")" + (t.asr.reached != null && t.asr.reached < 100 ? ", the song got " + t.asr.reached + " % into the lyrics" : "") : t.asr && t.asr.skipped ? "no lyrics check: " + t.asr.skipped : null,
   "seed " + t.seed].filter(Boolean).join(" · ");
 async function muRender() {
   if (!MU.caption.trim()) return toast("Describe the style first (the helper below writes one)");
+  const chosen = S.music && S.music.engines ? { engine: muEngine() } : {};
   // the queue takes a moment to answer: a second click before it does must not make a second song
   if (MU.busy) return; MU.busy = true; render();
-  try { MU.job = await api("/api/music/takes", { caption: MU.caption, lyrics: MU.lyrics, seconds: Number(MU.seconds), seed: Number(MU.seed), asr: MU.asr,
-    ...(muStreams(S.music) ? { live: !!MU.stream } : {}) }); }
+  try { MU.job = await api("/api/music/takes", { caption: MU.caption, lyrics: MU.lyrics, seconds: Number(MU.seconds), seed: Number(MU.seed), asr: MU.asr, ...chosen,
+    ...(muStreams(muState()) ? { live: !!MU.stream } : {}) }); }
   catch (e) { MU.busy = false; return toast(e.message); }
   MU.busy = false; await poll(); render(); }
 async function muLay(t) {
@@ -76,9 +93,10 @@ function muTake(t) {
     el("div", { class: "note", title: t.asr && t.asr.heard ? "Whisper heard: " + t.asr.heard : "" }, muLine(t)),
     el("div", { class: "note" }, "Style: " + (t.caption.length > 200 ? t.caption.slice(0, 200) + "…" : t.caption)),
     el("div", { class: "row", style: "margin-top:8px;flex-wrap:wrap;gap:6px" },
-      el("a", { class: "fit", href: "/api/music/takes/" + encodeURIComponent(t.id) + "/audio", download: "minimax-music3-" + t.id + ".wav" }, el("button", { class: "small", type: "button" }, "Download WAV")),
+      el("a", { class: "fit", href: "/api/music/takes/" + encodeURIComponent(t.id) + "/audio", download: (t.engine === "yue2" ? "yue2-" : "minimax-music3-") + t.id + ".wav" }, el("button", { class: "small", type: "button" }, "Download WAV")),
+      t.score ? el("a", { class: "fit", href: file(t.score), download: "yue2-" + t.id + ".abc", title: "The score YuE2 wrote before the song: melody and chords in ABC" }, el("button", { class: "small", type: "button" }, "Download score")) : null,
       el("button", { class: "small fit" + (MU.open === t.id ? " on" : ""), onclick: () => { MU.open = MU.open === t.id ? false : t.id; render(); } }, "Use as soundtrack"),
-      el("button", { class: "small fit", title: "Put this song's lyrics, style and length back in the form, at the next seed", onclick: () => { Object.assign(MU, { caption: t.caption, lyrics: t.lyrics === "[Instrumental]" ? "" : t.lyrics, seconds: t.seconds, seed: t.seed + 1 }); window.scrollTo(0, 0); render(); } }, "Again, next seed")),
+      el("button", { class: "small fit", title: "Put this song's lyrics, style and length back in the form, at the next seed", onclick: () => { Object.assign(MU, { caption: t.caption, lyrics: t.lyrics === "[Instrumental]" ? "" : t.lyrics, seconds: t.seconds, seed: t.seed + 1 }, t.engine ? { engine: t.engine } : {}); window.scrollTo(0, 0); render(); } }, "Again, next seed")),
     MU.open === t.id ? muUnder(t) : null); }
 function muHelper() {
   const box = (key, label, placeholder) => el("div", {}, el("label", {}, label), bind(MU.style, key, el("input", { placeholder })));
@@ -89,20 +107,22 @@ function muHelper() {
     el("div", { class: "row" }, box("instruments", "Instruments", "bright synths, four-on-the-floor kick, clean guitar plucks"),
       el("div", { class: "fit", style: "align-self:end" }, el("button", { onclick: () => { const c = muCaption(MU.style); if (!c) return toast("Fill at least one box"); MU.caption = c; render(); } }, "Write the style")))); }
 function viewMusic() {
-  const box = el("section", { class: "card" }, el("h2", {}, "Music · MiniMax-Music3"));
+  const box = el("section", { class: "card" }, el("h2", {}, "Music · " + muCredit(muEngine())));
   if (MU.takes === null) { MU.takes = []; muLoad(); }
-  const st = S.music || { available: false, why: "This app does not know MiniMax Music 3.", seconds: [10, 300], sections: MU_TAGS, rtf: 1 };
+  const yue = muEngine() === "yue2";
+  const st = muState() || { available: false, why: "This app does not know MiniMax Music 3.", seconds: [10, 300], sections: MU_TAGS, rtf: 1 };
   if (MU.job) { const fresh = jobs.find(j => j.id === MU.job.id); if (fresh) { if (fresh.status === "done" && MU.job.status !== "done") muLoad(); MU.job = fresh; } }
-  put(box, el("div", { class: "note", style: "margin-top:-4px" }, "A whole song from your lyrics and a style, on this machine: sung vocals, up to five minutes, 44.1 kHz stereo. A song can go under a long video or the Editor's export (", el("b", {}, "Use as soundtrack"), ")."),
-    el("div", { class: "note vt-credit" }, typeof mark === "function" ? mark("music3", "") : null, el("b", {}, "MiniMax-Music3."), " " + (st.licence || "") + " " + (st.label ? "Runs on " + (typeof measuredLabel === "function" ? measuredLabel(st.label) : st.label) + "." : "")));
+  put(box, el("div", { class: "note", style: "margin-top:-4px" }, "A whole song from your lyrics and a style, on this machine: sung vocals, up to five minutes, " + (yue ? "48 kHz stereo; YuE2 writes the song's score (melody and chords) first, then the song" : "44.1 kHz stereo") + ". A song can go under a long video or the Editor's export (", el("b", {}, "Use as soundtrack"), ")."),
+    muPicker(),
+    el("div", { class: "note vt-credit" }, typeof mark === "function" && !yue ? mark("music3", "") : null, el("b", {}, muCredit(muEngine()) + "."), " " + (st.licence || "") + " " + (st.label ? "Runs on " + (typeof measuredLabel === "function" ? measuredLabel(st.label) : st.label) + "." : "")));
   if (!st.available) put(box, el("div", { class: "tip" }, el("b", {}, "Not available here. "), st.why || ""));
   const lyrics = bind(MU, "lyrics", el("textarea", { style: "min-height:170px", disabled: !st.available, placeholder: "[Verse]\nThe lines that are sung…\n\n[Chorus]\nThe hook…" }));
   const tagButton = name => el("button", { class: "small fit", type: "button", disabled: !st.available, title: "Add [" + name + "] on a line of its own", onclick: () => { MU.lyrics = (MU.lyrics.replace(/\s+$/, "") + (MU.lyrics.trim() ? "\n\n" : "") + "[" + name + "]\n"); render(); } }, "[" + name + "]");
   const notes = st.sections ? muLyricsNotes(MU.lyrics) : [];
   put(box, el("div", { class: "group", "data-clear": "music" }, el("h3", {}, "Lyrics"), lyrics,
     el("div", { class: "row", style: "margin-top:6px;flex-wrap:wrap;gap:6px" }, MU_TAGS.map(tagButton), el("span")),
-    el("div", { class: "note" }, "Section tags go on lines of their own, above the lines they hold: ", el("code", {}, "[Intro]"), ", ", el("code", {}, "[Verse]"), ", ", el("code", {}, "[Pre-Chorus]"), ", ", el("code", {}, "[Chorus]"), ", ", el("code", {}, "[Bridge]"), ", ", el("code", {}, "[Outro]"),
-      ". ", el("code", {}, "[Instrumental]"), " is a passage without singing; lines in (parentheses) are backing vocals. Leave the lyrics empty for an instrumental. ",
+    el("div", { class: "note" }, "Section tags go on lines of their own, above the lines they hold: ", el("code", {}, "[Intro]"), ", ", el("code", {}, "[Verse]"), ", ", el("code", {}, "[Pre-Chorus]"), ", ", el("code", {}, "[Chorus]"), ", ", el("code", {}, "[Bridge]"), ", ", yue ? [el("code", {}, "[Interlude]"), ", "] : null, el("code", {}, "[Outro]"),
+      ". ", el("code", {}, "[Instrumental]"), " is a passage without singing; lines in (parentheses) are backing vocals. Leave the lyrics empty for an instrumental" + (yue ? " (YuE2 writes its score from the section tags alone and gives the melody to the instruments). " : ". "),
       el("a", { href: "#", onclick: e => { e.preventDefault(); Object.assign(MU, MU_EXAMPLE); render(); } }, "Pop example")),
     notes.length ? el("div", { class: "note", style: "color:var(--warn)" }, notes.join(" ")) : null,
     el("h3", {}, "Style"), bind(MU, "caption", el("textarea", { style: "min-height:70px", disabled: !st.available, placeholder: "Genre, tempo, key, mood, the voice that sings and the instruments: “Hip-hop anthem, 92 BPM, boom-bap drums and deep 808 bass. Confident male rap vocal.”" })),
@@ -127,6 +147,6 @@ function muExportPick(project) {
   if (!MU.takes.length) return null;
   const now = project.soundtrack || null;
   return el("div", { class: "row", style: "margin:4px 0 8px;align-items:end" },
-    field("Song under the export (MiniMax-Music3)", el("select", { onchange: e => { project.soundtrack = e.target.value ? { take: e.target.value, music_db: now ? now.music_db : -10 } : null; saveProject(); render(); } },
+    field("Song under the export (" + [...new Set(MU.takes.map(t => muCredit(t.engine)))].join(", ") + ")", el("select", { onchange: e => { project.soundtrack = e.target.value ? { take: e.target.value, music_db: now ? now.music_db : -10 } : null; saveProject(); render(); } },
       el("option", { value: "" }, "None"), MU.takes.map(t => el("option", { value: t.id, selected: !!(now && now.take === t.id) }, (t.title || "Song") + " · " + (t.duration != null ? Number(t.duration).toFixed(0) + " s" : ""))))),
     now ? el("div", { class: "fit", style: "width:150px" }, el("label", {}, "Music level (dB)"), bind(now, "music_db", el("input", { type: "number", min: -30, max: 0, step: 1 }), saveProject)) : el("span")); }

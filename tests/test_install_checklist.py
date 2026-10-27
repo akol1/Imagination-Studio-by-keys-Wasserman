@@ -12,7 +12,7 @@ import pytest
 ROOT = Path(__file__).resolve().parent.parent
 LIB = ROOT / "scripts" / "install-checklist.sh"
 BASH = "/bin/bash" if Path("/bin/bash").exists() else "bash"  # macOS's is bash 3.2: the list must run on it
-SPARK_OPTIONAL = "--motion --voice --music --sound --bolt --train --ref2va --h3-base --image-edit --flux3 --moss"
+SPARK_OPTIONAL = "--motion --voice --music --sound --bolt --train --ref2va --h3-base --image-edit --flux3 --moss --yue2"
 
 
 def env(**extra):
@@ -44,7 +44,7 @@ def test_enter_installs_everything_ticked():
 
 def test_unticking_two_rows_and_a_range():
     assert run_list(["7 8", ""])[1] == SPARK_OPTIONAL.replace("--music --sound ", "")
-    assert run_list(["13-15", ""])[1] == "--motion --voice --music --sound --bolt --train --ref2va --h3-base"
+    assert run_list(["13-15", ""])[1] == "--motion --voice --music --sound --bolt --train --ref2va --h3-base --yue2"
     assert run_list(["2 3", ""])[1] == "--no-graphics --no-finish " + SPARK_OPTIONAL
 
 
@@ -67,7 +67,7 @@ def test_a_bad_answer_says_why_and_changes_nothing():
 def test_the_core_stays_and_a_needed_row_follows():
     code, flags, drawn = run_list(["1", ""])
     assert flags == SPARK_OPTIONAL and "is always installed" in drawn
-    assert run_list(["12", ""])[1] == "--motion --voice --music --sound --bolt --ref2va --image-edit --flux3 --moss"  # training goes with H3 base
+    assert run_list(["12", ""])[1] == "--motion --voice --music --sound --bolt --ref2va --image-edit --flux3 --moss --yue2"  # training goes with H3 base
     assert run_list(["n", "10", ""])[1] == "--train --h3-base"
 
 

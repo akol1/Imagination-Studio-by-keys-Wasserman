@@ -76,11 +76,13 @@ TOOLS = [
                                            "a take from a reference recording needs the consent box on the Voice tab.",
      "inputSchema": text_schema({"text": {"type": "string", "description": "the line, with any [direction] in brackets"},
                                  "seed": {"type": "integer"}, "title": {"type": "string"}}, ("text",))},
-    {"name": "queue_song", "description": "Queue a song with MiniMax-Music3: a style caption and lyrics with section tags ([Verse], [Chorus]); "
-                                          "no lyrics makes an instrumental.",
+    {"name": "queue_song", "description": "Queue a song: a style caption and lyrics with section tags ([Verse], [Chorus]); "
+                                          "no lyrics makes an instrumental. engine yue2 (YuE2, where it is installed) or music3 "
+                                          "(MiniMax-Music3); left out, the studio's default (studio_state's music.engine).",
      "inputSchema": text_schema({"caption": {"type": "string", "description": "genre, tempo, mood, vocals, instruments"},
                                  "lyrics": {"type": "string", "description": "lyrics with [Verse] / [Chorus] tags, or empty for an instrumental"},
                                  "seconds": {"type": "number", "description": "length in seconds (default 60)"},
+                                 "engine": {"type": "string", "enum": ["yue2", "music3"], "description": "the song engine (default: the studio's)"},
                                  "seed": {"type": "integer"}, "title": {"type": "string"}}, ("caption",))},
     {"name": "queue_edit", "description": "Queue an edit of a Library picture by the image model: the prompt says what the picture "
                                           "should become (\"make it night, rain on the street\"). One edited picture.",
@@ -472,7 +474,7 @@ def run(name: str, args: dict):
         body = {k: args[k] for k in ("text", "seed", "title") if args.get(k) not in (None, "")}
         return job_summary(call("POST", "/api/voice/takes", body))
     if name == "queue_song":
-        body = {k: args[k] for k in ("caption", "lyrics", "seconds", "seed", "title") if args.get(k) not in (None, "")}
+        body = {k: args[k] for k in ("caption", "lyrics", "seconds", "seed", "title", "engine") if args.get(k) not in (None, "")}
         return job_summary(call("POST", "/api/music/takes", body))
     if name == "queue_edit":
         params = {k: args[k] for k in ("image", "prompt", "image_model", "seed") if args.get(k) not in (None, "")}

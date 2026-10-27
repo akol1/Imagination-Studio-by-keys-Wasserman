@@ -5,7 +5,7 @@
 const SET_DEFAULTS = {
   appearance: { type_size: "comfortable", glow: true, poster: true, accent: "amber", motion: "system", start_cards: ["clip", "scout", "still", "sharp", "long", "voice"], start_off: [] },
   layout: { hidden: [], order: [] },
-  presets: { recipe: "quick", image_model: "qwen", seconds: 5, qa_gate: true, audio_rate: "keep", seed: "fixed", mode: "clip", captions_auto: true },
+  presets: { recipe: "quick", image_model: "qwen", seconds: 5, qa_gate: true, audio_rate: "keep", seed: "fixed", mode: "clip", captions_auto: true, music_engine: "auto" },
   hermes_profile: "", hermes_command: "" };
 const SET = { data: null, loaded: false, section: "appearance", saving: false, local: { endpoint: null, found: null, finding: false, said: null, testing: false },
   agents: { name: "", endpoint: "", model: "", nearby: null, finding: false, adding: false, said: {}, testing: {} }, about: null };
@@ -107,6 +107,7 @@ function setPresets() { const p = prefs().presets, put1 = patch => settingsSave(
     setRow("QA gate on each clip", "The transcript and contact-sheet check after a Sharp Spec clip", setSwitch(p.qa_gate, v => put1({ qa_gate: v }), "QA gate")),
     setRow("Describe new clips automatically", "When nothing is rendering, the local model looks at new clips and pictures so the Library can search by what is in them", setSwitch(p.captions_auto !== false, v => put1({ captions_auto: v }), "Describe new clips automatically")),
     setRow("Delivery sound", (typeof cardFace === "function" && cardFace() ? "On this GPU" : "On a DGX Spark") + " a clip's sound is 32 kHz; 48 kHz stereo re-encodes only the sound", setSeg(p.audio_rate, { keep: "Keep 32 kHz", "48000": "48 kHz stereo" }, v => put1({ audio_rate: v }), "Delivery sound")),
+    setRow("Song engine", "For the Music tab: best here is YuE2 where it is installed (Linux, NVIDIA) and MiniMax Music 3 on a Mac; each song can still choose", setSeg(p.music_engine || "auto", { auto: "Best here", yue2: "YuE2", music3: "MiniMax Music 3" }, v => put1({ music_engine: v }), "Song engine")),
     setRow("Seed", "Fixed repeats a take; random gives each a new one", setSeg(p.seed, { fixed: "Fixed", random: "Random" }, v => put1({ seed: v }), "Seed")),
     setRow("Renders go to", "The studio folder, set when the studio starts (STUDIO_HOME)", el("code", { class: "st-path" }, (S && S.home) || "the studio folder")))]; }
 
@@ -276,7 +277,7 @@ function setAbout() { if (!SET.about && typeof updRequest === "function") { SET.
       "August Sturm: the RTX Pro 6000 build, run on the card; quitting the app stops its ComfyUI",
       "BTankut: bug reports from a film made in Slate, with causes and fixes (export trims and size, the shot check button, Regenerate); the NVIDIA driver's memory pools on a DGX Spark",
       "drgw5b7gzv-ship-it and gsp-agent: the Qwen-Image-2.1-Turbo text encoder on a fresh Mac install, reported, diagnosed and worked around",
-      "Qwen team: Qwen-Image-2.1", "Black Forest Labs: FLUX 3 Image Klein (FLUX3-K)", "OpenMOSS: MOSS-Image", "MiniMax: MiniMax H3 and MiniMax-Music3", "Built with Fish Audio: Fish Audio Drama 3",
+      "Qwen team: Qwen-Image-2.1", "Black Forest Labs: FLUX 3 Image Klein (FLUX3-K)", "OpenMOSS: MOSS-Image", "MiniMax: MiniMax H3 and MiniMax-Music3", "Multimodal Art Projection (m-a-p) and the YuE2 authors: YuE2 (songs)", "Built with Fish Audio: Fish Audio Drama 3",
       "Stability AI: Stable Audio Open · Ho Kei Cheng et al.: MMAudio · kijai: ComfyUI-MMAudio (sound effects and foley)",
       "Ash Hart and the TensorFold contributors: TensorFold (the music engines and the Mac's Bolt engine on the 1.1.5 release)",
       "NVIDIA: Nemotron 3.5 Bolt and its LiLiCorr drafter (the Studio's brain engine) · MiaAI-Lab (with ChriZzn): the Bolt TensorFold recipe for the DGX Spark, its libbolt and LiLiCorr drafter runtime",
@@ -294,7 +295,7 @@ function setAbout() { if (!SET.about && typeof updRequest === "function") { SET.
   setFullCredits(),
   setPanel("Licences", "The studio's code is Apache-2.0. The models keep their own terms: do not redistribute their weights.",
     el("ul", { class: "st-credits" }, ["Attribution required: per the NOTICE file (Apache 2.0 §4(d)), any use, fork or redistribution keeps the NOTICE and credits Keys (github.com/drowzeys) and Sam Wasserman / Wasserman Productions (wassermanproductions.com) in its documentation and about/credits surface",
-      "Qwen-Image-2.1: Qwen Research License (non-commercial)", "MiniMax H3: MiniMax H3 Community License (territory limits)", "MiniMax-Music3: its licence asks for its name in a commercial UI",
+      "Qwen-Image-2.1: Qwen Research License (non-commercial)", "MiniMax H3: MiniMax H3 Community License (territory limits)", "MiniMax-Music3: its licence asks for its name in a commercial UI", "YuE2: code Apache 2.0; weights CC BY-NC 4.0 with the authors' creator permission (personal users, creators and musicians may sell their songs, royalty-free; a company needs the authors' licence)",
       "FLUX3-K: FLUX Kommunity License", "MOSS-Image: Apache 2.0 (commercial use allowed)", "Fish Audio Drama 3: Fish Audio Community License v1.0; a hosted voice service needs Fish's own licence",
       "NVIDIA Nemotron 3.5 Bolt: OpenMDW License 1.1 (commercial use allowed; a copy keeps the licence and NVIDIA's notices) · its DGX Spark engine: MiaAI-Lab's recipe, MIT, on TensorFold",
       "Stable Audio Open 1.0: Stability AI Community License (free under US$1 million of yearly revenue)", "MMAudio's weights: CC-BY-NC 4.0, non-commercial",
