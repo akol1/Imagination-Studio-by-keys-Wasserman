@@ -141,7 +141,13 @@ def get_project(project_id: str) -> dict:
     file = project_file(project_id)
     if not file.is_file():
         raise HTTPException(404, "no such film")
-    return json.loads(file.read_text())
+    try:
+        data = json.loads(file.read_text())
+    except (OSError, ValueError):
+        data = None
+    if not isinstance(data, dict):  # a broken or foreign file in the folder: said as such, never a 500
+        raise HTTPException(422, "this film's project.json cannot be read as a film")
+    return data
 
 
 @router.put("/api/slate/projects/{project_id}")
@@ -803,8 +809,9 @@ def compile_shot(project: dict, shot_id: str, chain: str | None = None) -> dict:
     # the picture: who is in it and where (Slate repeats bible descriptions in every prompt), then the sections
     named = [f"{sheet.get('name')} is {person(sheet)}." for sheet in cast if sheet.get("name") and person(sheet) and not references]
     where = place and sentence(", ".join(bit for bit in (
-        f"{place.get('name')}: {place.get('description') or ''}".strip(": "), place.get("timeOfDay"), place.get("weather"),
-        place.get("architecture"), place.get("textures"), place.get("practicalLights") and "lit by " + place["practicalLights"]) if bit))
+        f"{given(place.get('name'))}: {given(place.get('description')).rstrip('.')}".strip(": "), given(place.get("timeOfDay")),
+        given(place.get("weather")), given(place.get("architecture")), given(place.get("textures")),
+        given(place.get("practicalLights")) and "lit by " + given(place.get("practicalLights"))) if bit))
     look = part["style"] or next((sentence("; ".join(bit for bit in (s.get("tone"), s.get("palette"), s.get("lighting")) if bit))
                                   for s in project.get("lookbook") or [] if s.get("tone") or s.get("palette")), "")
     picture = " ".join(bit for bit in (look, *named, where or "", part["subject"], part["composition"], part["lighting"], part["mood"]) if bit)

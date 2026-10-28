@@ -510,7 +510,8 @@ def test_the_studio_takes_a_swap_job_and_shows_its_stages(tmp_path):
 
     assert "swap" in server.swap.KINDS
     said = TestClient(server.app).post("/api/jobs", json={"kind": "swap", "params": {"image": "uploads/x.png"}})
-    assert said.status_code == 400 and "choose a clip" in said.json()["error"]  # no "a prompt is needed": the swap has none
+    # no "a prompt is needed": the swap has none; a Mac is told it has no Character Swap before anything about the clip
+    assert said.status_code == 400 and ("not on a Mac" if sys.platform == "darwin" else "choose a clip") in said.json()["error"]
     def progress(*lines):
         job = {"id": "t1", "log": "", "status": "running", "progress": None}
         code = "; ".join(f"print({line!r}, flush=True)" for line in lines)

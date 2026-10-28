@@ -446,6 +446,17 @@ def test_a_character_named_only_in_the_prompt_is_said():
     assert not any("named in the prompt" in w for w in cast["warnings"])
 
 
+def test_a_place_s_none_and_n_a_never_reach_the_prompt():
+    """A brain's None or N/A on a location sheet is no word of the shot's prompt (the cast's fields already drop them)."""
+
+    project = film()
+    project["locations"][0].update({"description": "A white stone lighthouse on a rocky cape at night.", "timeOfDay": "N/A",
+                                    "weather": "None", "architecture": "unknown", "practicalLights": "n/a"})
+    prompt = slate.compile_shot(project, "shot-1")["prompt"].replace("non_diegetic_music: N/A", "")  # the film's own no-music line
+    assert "Campus Walkway: A white stone lighthouse on a rocky cape at night." in prompt
+    assert "N/A" not in prompt and "None" not in prompt and "unknown" not in prompt and "lit by" not in prompt and "night.," not in prompt
+
+
 if __name__ == "__main__":
     for name, test in list(globals().items()):
         if name.startswith("test_"):

@@ -107,7 +107,8 @@ def test_the_actions_run_on_character_swap_s_int8_ref2va_when_the_bf16_file_is_n
     assert state()["upscale"]["ready"] and build("upscale", {"video": "renders/c.mp4"}, "j5")
     sys.path.insert(0, str(PACK / "spark"))
     W = importlib.import_module("spark_workflows")
-    had = W.listed
+    had, files = W.listed, W.sg.REF2VA
+    W.sg.REF2VA = {"bf16": "minimax_h3_ref2va_pruned_bf16.safetensors", "int8": "minimax_h3_ref2va_pruned_int8_convrot.safetensors"}  # a Spark's files, on a Mac too
     try:
         for listed, chosen in (([W.sg.REF2VA["bf16"], W.sg.REF2VA["int8"]], W.sg.REF2VA["bf16"]),
                                ([W.sg.REF2VA["int8"]], W.sg.REF2VA["int8"]), ([], None)):
@@ -118,7 +119,7 @@ def test_the_actions_run_on_character_swap_s_int8_ref2va_when_the_bf16_file_is_n
                 W.loaders(graph)
                 assert graph["1"]["inputs"]["unet_name"] == chosen
     finally:
-        W.listed = had
+        W.listed, W.sg.REF2VA = had, files
 
 
 def test_not_installed_and_mac():

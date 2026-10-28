@@ -701,7 +701,7 @@ def test_the_page_draws_the_chooser_and_the_list():
     assert "Sparks for new jobs" not in out["alonePage"] and "1" not in out["alonePage"].split("Add a DGX Spark")[0]
     # each machine's own panel: the label, then GPU, temperature, memory used and free, disk, the job it rolls, the LoRA count
     assert out["labelled"] == ["fa5a (head)", "d197", "unknown"]
-    for words in ("fa5a (head)", "d197", "head", "NOV FF_S3f5.png · picture 3/8", "41% · 52 W", "58 °C", "64 GB used · 60 GB free of 124 GB", "900 GB free of 4000 GB", "load 1.5 on 20 cores",
+    for words in ("fa5a (head)", "d197", "head", "NOV FF_S3f5.png · picture 3/8", "41% · 52 W", "58 °C", "62.5 GB used · 58.6 GB free of 121 GB", "900 GB free of 4000 GB", "load 1.5 on 20 cores",
                   "22 LoRAs", "1 LoRA", "no GPU reading on this machine", "Update and start", "Memory (the GPU shares it)"):
         assert words in out["panel"], words
     assert "d197" in out["sparksPage"] and "Each machine" in out["sparksPage"]

@@ -82,7 +82,7 @@ function spkAdd(d, title = "Add a Spark") {
 // figures are the ones each Studio app reports about itself (telemetry.compact, on /api/spark/self); the head already looks at every
 // connected worker every 20 s, so the panel only reads what /api/sparks holds: nothing here asks a worker anything.
 const spkFree = gb => gb == null ? "–" : (gb >= 100 || Number.isInteger(gb) ? Math.round(gb) : gb.toFixed(1)) + " GB";
-const spkGB = mb => mb == null ? "–" : spkFree(mb / 1000);
+const spkGB = mb => mb == null ? "–" : spkFree(mb / 1024);  // as the Machine tab counts them
 const spkAge = at => { if (!at) return ""; const s = Math.max(0, Math.round(Date.now() / 1000 - at)); return s < 90 ? s + " s ago" : Math.round(s / 60) + " min ago"; };
 const spkTone = (pct, hot = 85, warm = 65) => pct == null ? "var(--faint)" : pct >= hot ? "var(--red)" : pct >= warm ? "var(--amber)" : "var(--green)";
 function spkMeter(label, value, pct, tone) { return el("div", { class: "spkrow", style: "margin-top:7px" }, el("div", { class: "kv" }, el("span", {}, label), el("b", {}, value)),

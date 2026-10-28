@@ -36,7 +36,7 @@ GPU="$(studio_smi --query-gpu=name --format=csv,noheader 2>/dev/null | head -1 |
 # cubin for one does not run on the other); TF_SM overrides, a comma list builds both
 smi_i=()
 [ -z "${STUDIO_GPU:-}" ] || smi_i=(-i "$STUDIO_GPU")
-SM="${TF_SM:-$(nvidia-smi "${smi_i[@]}" --query-gpu=compute_cap --format=csv,noheader 2>/dev/null | head -1 | tr -d ' .')}"
+SM="${TF_SM:-$(nvidia-smi ${smi_i[@]+"${smi_i[@]}"} --query-gpu=compute_cap --format=csv,noheader 2>/dev/null | head -1 | tr -d ' .')}"
 case "$SM" in ''|*[!0-9,]*) SM=121;; esac  # a driver without the field answers with words
 case "$GPU" in *GB10*) ;; *)
   if [ "$SM" != 120 ]; then
