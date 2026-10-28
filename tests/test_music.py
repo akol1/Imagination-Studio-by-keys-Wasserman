@@ -426,6 +426,8 @@ class Spark:
 
     def __enter__(self):
         self.had = (music.SPARK, music.PREFIX, music._engine, music._chosen_why, {k: os.environ.get(k) for k in self.env})
+        # Models & weights' scan of the machine the tests run on finds its own engine and weights: not this install's
+        self.discover, voice.discover = voice.discover, None
         music.SPARK, music.PREFIX, music._engine = True, self.folder / "prefix", None
         for key in ("MUSIC3_BACKEND", "MUSIC3_CUDA_BIN", "MUSIC3_MODEL", "MUSIC3_WEIGHTS"):
             self.had[4].setdefault(key, os.environ.get(key))
@@ -436,7 +438,10 @@ class Spark:
     def __exit__(self, *_):
         if music._engine is not None and hasattr(music._engine, "release"):
             music._engine.release("test over")
+        if "music_yue2" in sys.modules:  # YuE2's engine, asked about by the Music tab's state here, is not kept
+            sys.modules["music_yue2"]._engine = None
         music.SPARK, music.PREFIX, music._engine, music._chosen_why, saved = self.had
+        voice.discover = self.discover
         for key, value in saved.items():
             if value is None:
                 os.environ.pop(key, None)

@@ -154,10 +154,27 @@ class Yue2(music.Cuda):
             return f"No YuE2 server script at {self.server}."
         return ""
 
-    def look(self) -> str:
+    def check(self) -> str:
+        """Why it cannot run here ("" when it can). The platform and the files are looked at every time (files only,
+        no process), so a reason never outlives the machine it was given for; the memory answer is kept 10 s."""
+
+        if self.loaded():
+            return ""
         why = self.present()
         if why:
             return why
+        if self.known and time.time() - self.known[0] < 10:
+            return self.known[1]
+        why = self.room()
+        self.known = (time.time(), why)
+        return why
+
+    def look(self) -> str:
+        return self.present() or self.room()
+
+    def room(self) -> str:
+        """Why there is not memory enough for it now ("" when there is)."""
+
         free = voice.mem_available_gb()
         if 0 <= free < self.NEED_GB and not voice.comfy_up():
             who = "GPU" if voice.has_card_memory() else "machine"

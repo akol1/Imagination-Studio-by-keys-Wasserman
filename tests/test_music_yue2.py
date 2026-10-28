@@ -127,6 +127,17 @@ def requests_of(folder: Path) -> list[dict]:
     return [json.loads(line) for line in file.read_text().splitlines()] if file.is_file() else []
 
 
+@pytest.fixture(autouse=True)
+def fresh_engines():
+    """Each test makes its own song engines: one another test made (and the answers it keeps) is set aside and put
+    back after."""
+
+    had = music._engine, music_yue2._engine
+    music._engine = music_yue2._engine = None
+    yield
+    music._engine, music_yue2._engine = had
+
+
 # ---------- which engine ----------
 
 def test_a_mac_makes_songs_with_minimax_music_3_and_yue2_says_why_not():
@@ -140,6 +151,12 @@ def test_a_mac_makes_songs_with_minimax_music_3_and_yue2_says_why_not():
         assert state["available"] is False and state["installed"] is False and "Mac" in state["why"]
         music.MAC = False  # neither a Mac nor Linux: the reason does not call it a Mac
         assert "Linux with an NVIDIA GPU" in music_yue2.Yue2().present() and "Mac" not in music_yue2.Yue2().present()
+        # the shared engine asked on a Linux machine first does not keep that answer for the Mac
+        music.SPARK, music.MAC, music_yue2._engine = True, False, None
+        one = music_yue2.engine()
+        assert "YuE2" in one.check() and "Mac" not in one.check()
+        music.SPARK, music.MAC = False, True
+        assert "no Mac build" in one.check() and "Mac" in music.engine_state("yue2")["why"]
     finally:
         music.SPARK, music.MAC = had
 
