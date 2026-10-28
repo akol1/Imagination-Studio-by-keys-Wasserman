@@ -1484,7 +1484,7 @@ def memory_of(params: dict, env: dict, frames: int, lora: bool, found: dict | No
         room, card = (held_room() if available_mb is None else available_mb), False
     return memory_guard.check(width, height, frames, lora=lora, references=bool(found), available_mb=room, card=card,
                               base=env.get("SPARK_BASE") == "h3", engine=engine,
-                              pictures=len(found.get("pictures") or []),
+                              pictures=len(found.get("pictures") or []), adapter=bool(found and params.get("ref_turbo")),
                               reference_frames=sum(min(frames, int(round((media_seconds(path)[0] or frames / FPS) * FPS))) for path in videos))
 
 
@@ -1587,6 +1587,8 @@ def build(kind: str, params: dict, job_id: str, room: bool = True) -> tuple[list
         return graphics_build(params, job_id)
     seed = str(int(params.get("seed", 0)))
     if kind == "scout":
+        if params.get("loras"):  # text to picture has no LoRA path: an identity LoRA works only in an edit of a picture
+            raise HTTPException(400, "a picture made from words alone cannot take LoRAs (they would be ignored): use Edit a picture with a source picture for an identity LoRA")
         folder = HOME / "scouts" / job_id
         prompt = params["prompt"]
         count = max(1, min(int(params.get("count", 4)), 12))
@@ -2920,7 +2922,11 @@ def about_this_spark() -> dict:
                "qualities": [name for name in QUALITIES if name.startswith("fh") or (turbo_ready() and not SPARK)]}
     if not SPARK:  # a Mac's models are not in ComfyUI's folders: what its own row on the Sparks tab says it renders
         renders.update(fasth3=Path(os.environ.get("FASTH3_DIR", Path.home() / "h3-models/FastH3-8-Step-V2")).is_dir(), image=bool(image_models()))
-    return sparks.about(HOME, hub.code(), state(), [one["id"] for one in listing() if one.get("installed")], active, memory, SPARK_REF2VA.parent, renders)
+    try:  # its own readings, for the head's per-machine panel: a reading that fails leaves the rest of the answer whole
+        status = telemetry.compact(TELEMETRY.snapshot())
+    except Exception:  # noqa: BLE001
+        status = None
+    return sparks.about(HOME, hub.code(), state(), [one["id"] for one in listing() if one.get("installed")], active, memory, SPARK_REF2VA.parent, renders, status)
 
 
 def clip_time(kind: str, params: dict) -> int | None:
@@ -2972,7 +2978,8 @@ if hasattr(app.router, "on_shutdown"):
     app.router.on_shutdown.append(hub.close)
     app.router.on_shutdown.append(bolt.shutdown)  # the Studio's Bolt engine ends with the app (its leash also sees the pipe close)  # the tunnels to the workers are this app's: closed with it (and at exit, sparks.py)
 import telemetry  # noqa: E402  (this machine's readings for the status bar: GPU, memory, disk, queue, beside this file)
-app.include_router(telemetry.attach(HOME, jobs, order, lock, memory_guard, engines=lambda: {"bolt": bolt.summary()}))
+TELEMETRY = telemetry.attach(HOME, jobs, order, lock, memory_guard, engines=lambda: {"bolt": bolt.summary()})
+app.include_router(TELEMETRY)
 import suite  # noqa: E402  (the filmmaker suite's files in and out: imports, timeline, dailies, beside this file)
 app.include_router(suite.attach(HOME, jobs, lock, PRESETS, app))
 import push  # noqa: E402  (notifications on a phone: Web Push with the studio's own keys, beside this file)
