@@ -102,8 +102,10 @@ def on_card() -> bool:
         return False
 
 
-def attach(home: Path, pack: Path, spark: bool, inside, relative, media_seconds):
-    """``media_seconds(path)``: (seconds, has sound) of a media file, or (None, None) when it cannot be measured."""
+def attach(home: Path, pack: Path, spark: bool, inside, relative, media_seconds, room=None):
+    """``media_seconds(path)``: (seconds, has sound) of a media file, or (None, None) when it cannot be measured.
+    ``room``: what this machine has for a render with none of the Studio's own engines counted (MB, or None), the
+    server's held_room, as sound.attach takes it."""
 
     router = APIRouter()
     prefix = Path(os.environ.get("PREFIX", Path.home() / ".local/opt/tensorfold-studio"))
@@ -135,6 +137,30 @@ def attach(home: Path, pack: Path, spark: bool, inside, relative, media_seconds)
         if not (prefix / "venv/bin/python").exists() or not (prefix / "ComfyUI/main.py").is_file():
             return f"The studio's engine is not installed here: run `{install.rsplit(' ', 1)[0]}`."
         return ""
+
+    def weights() -> str:
+        """The Ref2VA the job will load (spark_swap.weights): SWAP_WEIGHTS's, else int8, else bf16."""
+
+        asked = os.environ.get("SWAP_WEIGHTS", "int8")
+        for one in [asked] + [w for w in ("int8", "bf16") if w != asked]:
+            if (models() / REF2VA[0 if one == "int8" else 1]).is_file():
+                return one
+        return "int8"
+
+    def guard(quality: int) -> dict:
+        """The memory guard's word on a swap at ``quality`` (memory_guard.swap_check), as sound.py asks it."""
+
+        import memory_guard  # spark/, on the server's path
+
+        if memory_guard.card_room_applies():
+            # Drama 3, Music and Bolt are unloaded before this job (server.perform); their room is the card's raw free
+            # before they loaded
+            import bolt
+            import music
+            import voice
+            have = memory_guard.card_room_for_job([voice.room_mb(), music.room_mb(), bolt.room_mb()])
+            return memory_guard.swap_check(quality, available_mb=have, card=True, weights=weights())
+        return memory_guard.swap_check(quality, available_mb=room() if room else None, weights=weights())
 
     def anchor_model() -> str:
         flux = models() / "FLUX3-K-Comfy/diffusion_models"
@@ -219,6 +245,9 @@ def attach(home: Path, pack: Path, spark: bool, inside, relative, media_seconds)
         why = missing()
         if why:
             raise HTTPException(400, why)
+        found = guard(chosen["quality"])  # before it is queued, and again when its turn comes
+        if not found["fits"]:
+            raise HTTPException(400, found["reason"])
         target = home / "renders" / f"{job_id}.mp4"
         mask = home / "masks" / job_id / "person.mp4"
         still = home / "scouts" / job_id / "anchor.png"
@@ -258,5 +287,6 @@ def attach(home: Path, pack: Path, spark: bool, inside, relative, media_seconds)
         except (TypeError, ValueError):
             return None
 
+    build.weights = weights  # the server's Bolt check asks the memory guard with them (server.bolt_need)
     return router, build, title, source_of, guess
 

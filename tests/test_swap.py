@@ -116,8 +116,20 @@ def stand_in(tmp_path, spark=True, length=8.0, installed=True):
     return SimpleNamespace(home=home, router=router, build=build, title=title, source=source, guess=guess, models=models, prefix=prefix)
 
 
+IDLE_SPARK = {"MemTotal": 124_500, "MemAvailable": 118_000, "MemFree": 118_000}  # MB: an idle DGX Spark
+
+
 @pytest.fixture(autouse=True)
-def keep_environment():
+def keep_environment(monkeypatch):
+    """The environment put back after each test, and the memory guard seeing an idle DGX Spark, whatever the machine
+    the tests run on has (a CI runner has 16 GB)."""
+
+    import memory_guard
+
+    monkeypatch.setattr(memory_guard, "meminfo", lambda text=None: dict(IDLE_SPARK))
+    monkeypatch.setattr(memory_guard, "device", lambda fresh=False: None)
+    monkeypatch.setattr(memory_guard, "server_pid", lambda: None)
+    monkeypatch.delenv("STUDIO_ROOM_MB", raising=False)
     saved = {k: os.environ.get(k) for k in ("SPARK_MODELS", "PREFIX")}
     yield
     for k, v in saved.items():
@@ -688,3 +700,17 @@ def test_a_clip_gets_swap_the_character_and_its_panel_queues_one_job():
                                                                    "quality": 480, "anchor": True, "direction": "keep the scarf", "seed": 904239}}]
     assert "job j7" in got["done"] and "Swapped" in got["done"] and "Who was swapped, in green" in got["done"] and "The first frame it started from" in got["done"]
     assert "not on a Mac" in got["mac"]
+
+
+def test_a_swap_the_machine_has_no_room_for_is_refused_before_it_is_queued(tmp_path, monkeypatch):
+    import memory_guard
+
+    s = stand_in(tmp_path)
+    assert s.build("swap", GOOD, "j1")  # an idle DGX Spark takes High (768p)
+    monkeypatch.setattr(memory_guard, "meminfo", lambda text=None: {"MemTotal": 124_500, "MemAvailable": 80_000})
+    with pytest.raises(HTTPException) as refused:
+        s.build("swap", GOOD, "j1")  # 80 GB available: High is refused, and Fast is named as what fits
+    said = refused.value.detail
+    assert refused.value.status_code == 400 and "Character Swap at High (768p) needs about 62 GB" in said and "Fast (480p) fits" in said
+    assert s.build("swap", {**GOOD, "quality": 480}, "j1")
+    assert not (s.home / "masks" / "j1").exists()  # a refused swap made no folder
