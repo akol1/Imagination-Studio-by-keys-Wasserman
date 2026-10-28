@@ -82,9 +82,13 @@ def work_folder(home: Path, job_id: str) -> Path:
 
 
 def tidy(home: Path, job_id: str) -> None:
-    """After a swap job, however it ended (server.perform): its work folder, if the script could not remove it."""
+    """After a swap job, however it ended (server.perform): its work folder, if the script could not remove it. A swap
+    that made no clip (cancelled, or failed) leaves no mask preview and no anchor either: they belong to the clip."""
 
     shutil.rmtree(work_folder(home, job_id), ignore_errors=True)
+    if not (home / "renders" / f"{job_id}.mp4").is_file():
+        for folder in (home / "masks" / job_id, home / "scouts" / job_id):
+            shutil.rmtree(folder, ignore_errors=True)
 
 
 def on_card() -> bool:

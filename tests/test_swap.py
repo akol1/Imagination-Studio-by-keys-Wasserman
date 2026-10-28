@@ -419,6 +419,24 @@ def test_a_swap_s_work_folder_is_removed_however_the_job_ended(tmp_path):
     assert job["status"] == "failed" and not left.exists()
 
 
+def test_a_swap_that_made_no_clip_leaves_no_mask_preview_and_no_anchor(tmp_path):
+    for job_id in ("0101-000000-gone01", "0101-000000-kept01"):
+        (tmp_path / "masks" / job_id).mkdir(parents=True)
+        (tmp_path / "masks" / job_id / "person.mp4").write_bytes(b"x")
+        (tmp_path / "scouts" / job_id).mkdir(parents=True)
+        (tmp_path / "scouts" / job_id / "anchor.png").write_bytes(b"x")
+        swap.work_folder(tmp_path, job_id).mkdir(parents=True)
+    (tmp_path / "renders" / "0101-000000-kept01.mp4").write_bytes(b"x")  # this one finished
+    (tmp_path / "scouts" / "0101-000000-other1").mkdir()  # another job's pictures are not touched
+    swap.tidy(tmp_path, "0101-000000-gone01")  # cancelled while it ran: the mask and the anchor were made already
+    swap.tidy(tmp_path, "0101-000000-kept01")
+    assert not (tmp_path / "masks" / "0101-000000-gone01").exists() and not (tmp_path / "scouts" / "0101-000000-gone01").exists()
+    assert (tmp_path / "masks" / "0101-000000-kept01" / "person.mp4").is_file()
+    assert (tmp_path / "scouts" / "0101-000000-kept01" / "anchor.png").is_file()
+    assert (tmp_path / "scouts" / "0101-000000-other1").is_dir()
+    assert not swap.work_folder(tmp_path, "0101-000000-gone01").exists() and not swap.work_folder(tmp_path, "0101-000000-kept01").exists()
+
+
 # ---------------------------------------------------------------- the studio around it
 
 def test_the_studio_takes_a_swap_job_and_shows_its_stages(tmp_path):
