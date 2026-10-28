@@ -199,9 +199,11 @@ def bible_film() -> dict:
     return made
 
 
-def with_ref2va(test):
+def with_ref2va(test, installed: bool = True):
+    """``test`` as on a machine with (or without) the Ref2VA model, whatever the machine the tests run on has."""
+
     had = slate.ready
-    slate.ready = lambda: {"ref2va": True}
+    slate.ready = lambda: {"ref2va": installed}
     try:
         return test()
     finally:
@@ -239,7 +241,7 @@ def test_the_bible_puts_the_casts_and_the_places_pictures_in_a_shot():
         assert slate.compile_shot(made, "shot-1")["mode"] == "text"
     with_ref2va(test)
     # without the Ref2VA model a shot from text stays one, and says nothing of pictures
-    told = slate.compile_shot(bible_film(), "shot-1")
+    told = with_ref2va(lambda: slate.compile_shot(bible_film(), "shot-1"), installed=False)
     assert told["mode"] == "text" and not any("Ref2VA" in w for w in told["warnings"])
 
 

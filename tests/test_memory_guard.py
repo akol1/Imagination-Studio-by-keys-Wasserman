@@ -226,10 +226,13 @@ def test_the_app_refuses_before_the_job_is_queued():
     if not server.SPARK:
         return
     client = TestClient(server.app)
-    had, had_device, had_held = G.room_mb, G.device_room_mb, server.held_room
+    had, had_device, had_held, had_lib = G.room_mb, G.device_room_mb, server.held_room, server.SPARK_ENGINE_LIB
     G.room_mb = lambda: IDLE  # an idle Spark, whatever this machine is doing now
     G.device_room_mb = lambda: None  # a card reads its own room and would ignore the stand-in above
     server.held_room = lambda: None
+    # an install without TensorFold's engine: the LoRA goes to ComfyUI's bfloat16 blocks, whatever engine this machine
+    # has built (one that merges LoRAs would fit the clip, and the refusal is what is tested)
+    server.SPARK_ENGINE_LIB = Path(tempfile.mkdtemp()) / "no-engine" / "libtf_h3.so"
     try:
         told = client.post("/api/estimate", json={"preset": "sharp", "quality": "fh8", "seconds": 5, "with_lora": True}).json()
         assert told["memory"]["fits"] is False and "What fits" in told["memory"]["reason"]
@@ -248,7 +251,7 @@ def test_the_app_refuses_before_the_job_is_queued():
         finally:
             server.lora_resolve = was
     finally:
-        G.room_mb, G.device_room_mb, server.held_room = had, had_device, had_held
+        G.room_mb, G.device_room_mb, server.held_room, server.SPARK_ENGINE_LIB = had, had_device, had_held, had_lib
 
 
 
