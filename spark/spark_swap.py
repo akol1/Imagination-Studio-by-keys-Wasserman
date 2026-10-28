@@ -10,8 +10,8 @@ The steps, each said as `[tensorfold] stage i/n ...` for the studio's job card:
 1. the part      the 5 to 15 s part is cut out and prepared at 24 frames a second, `--quality` pixels on its short side
                  (480 or 768, multiples of 32, the clip's own shape), with its sound beside it. A part with a hard cut
                  in it is refused: the swap is for one continuous shot (app/shot.py finds the cut).
-2. the person    SAM 3.1 looks for "person" in the part's first frame (threshold 0.35, two refinement passes). The
-                 largest one found is the one swapped; a first frame with nobody in it is refused.
+2. the person    SAM 3.1 looks for "person" in the part's first frame (two refinement passes). The largest one it
+                 is at least 75% sure of is the one swapped; a first frame with nobody in it is refused (PERSON).
 3. following     SAM 3.1 tracks that person through the part (detection 0.5, one object). A frame where the tracker
                  lost the person takes the mask of the nearest frame that has it, and every mask is grown by 64
                  pixels, so hair, hands and the outfit's edges are inside it.
@@ -63,6 +63,13 @@ STEPS, CFG, SAMPLER, SCHEDULER = 8, 1.0, "er_sde", "normal"
 SHIFT_VIDEO, SHIFT_AUDIO = 12.0, 3.0
 DETECT, REFINE, TRACK, GROW = 0.35, 2, 0.5, 64
 EMPTY = 64  # pixels: a mask smaller than this is a frame where the tracker lost the person
+# What counts as a person in the first frame. Measured 2026-10-27 with SAM 3.1 on synthetic 864x480 frames: pictures
+# with nobody in them (an empty kitchen, beach, street, forest, a coat on a rack, an ffmpeg gradient, a Mandelbrot,
+# one flat colour) scored 0.31 to 0.67, people (a close-up, from behind, sitting, walking, a waiter at the back of a
+# cafe, a hiker 20x38 pixels in a desert) 0.93 to 0.99. A gradient and a flat colour came back as one rectangle the
+# size of the frame. So: at least PERSON sure, at least SMALLEST of the frame, and not a near-perfect rectangle over
+# most of it (FLAT: that share of the frame, that share of its box filled; a close-up's face filled 0.61 of its box).
+PERSON, SMALLEST, FLAT = 0.75, 0.0005, (0.9, 0.95)
 SOUND_RATE = 48000
 # <Video 1>, the part as the model reads its performance, at half the canvas (448x256 for 864x480, 672x384 for
 # 1344x768): its rows ride through every pass. Measured on a DGX Spark, 124 frames: at 864x480 21 to 23 s a pass
@@ -256,31 +263,68 @@ def sam_nodes() -> dict:
 
 # ---------------------------------------------------------------- 2. the person
 
+def people(found: list[dict], areas: list[int], width: int, height: int) -> list[tuple[int, int, float]]:
+    """(index, mask pixels, score) of the detections that are people (PERSON, SMALLEST, FLAT), largest first.
+    ``found`` are SAM 3.1's boxes in its order ({"score", "width", "height", ...}), ``areas`` each one's mask pixels."""
+
+    frame, out = width * height, []
+    for index, (box, area) in enumerate(zip(found, areas)):
+        score = float(box.get("score") or 0)
+        boxed = max(1.0, float(box.get("width") or 0) * float(box.get("height") or 0))
+        if score < PERSON or area < max(EMPTY, SMALLEST * frame):
+            continue
+        if area >= FLAT[0] * frame and area >= FLAT[1] * boxed:
+            continue
+        out.append((index, area, score))
+    return sorted(out, key=lambda one: -one[1])
+
+
+def said_text(prompt_id: str, node: str) -> str:
+    """The text a finished workflow's PreviewAny node showed."""
+
+    record = sg.history_of(prompt_id)
+    if record["status"].get("status_str") != "success":
+        errors = [m[1] for m in record["status"].get("messages", []) if m[0] == "execution_error"]
+        detail = errors[0].get("exception_message", "").strip() if errors else json.dumps(record["status"])[:600]
+        sys.exit(f"ComfyUI failed: {detail} (log: {sg.side('log')})")
+    text = (record.get("outputs", {}).get(node) or {}).get("text") or [""]
+    return text[0] if isinstance(text, list) else str(text)
+
+
 def find_person(part: dict, work: Path) -> Path:
-    """The largest person SAM 3.1 finds in the first frame, as a mask picture; exits when there is none."""
+    """The largest person SAM 3.1 finds in the first frame, as a mask picture; exits when there is none. Its boxes and
+    scores are read first, so a frame with nothing in it never reaches the nodes that cannot take an empty mask."""
 
     import numpy as np
     from PIL import Image
 
+    nobody = ("no person was found in the part's first frame: Character Swap replaces a person who is in the first frame. "
+              "Start the part where the person is in view")
     w = sam_nodes()
     w["3"] = {"class_type": "LoadImage", "inputs": {"image": sg.upload(str(part["frames"][0]))}}
     w["4"] = {"class_type": "SAM3_Detect", "inputs": {"model": ["1", 0], "image": ["3", 0], "conditioning": ["2", 0],
                                                       "threshold": DETECT, "refine_iterations": REFINE, "individual_masks": True}}
+    w["7"] = {"class_type": "PreviewAny", "inputs": {"source": ["4", 1]}}
+    try:
+        found = json.loads(said_text(run_graph(w, "4"), "7") or "[]")
+        found = [one for one in (found[0] if found and isinstance(found[0], list) else found) if isinstance(one, dict)]
+    except (ValueError, IndexError, TypeError):
+        found = []
+    if not any(float(one.get("score") or 0) >= PERSON for one in found):
+        best = max((float(one.get("score") or 0) for one in found), default=0.0)
+        sys.exit(nobody + (f" (SAM 3.1's likeliest guess was {best:.0%} sure, under the {PERSON:.0%} a person needs)" if best else ""))
     w["5"] = {"class_type": "MaskToImage", "inputs": {"mask": ["4", 0]}}
     w["6"] = {"class_type": "SaveImage", "inputs": {"images": ["5", 0], "filename_prefix": f"studio/swap_find_{uuid.uuid4().hex[:8]}"}}
-    found = fetch_all(collect(run_graph(w, "4"), "6"), work / "found")
-    areas = []
-    for path in found:
-        mask = np.asarray(Image.open(path).convert("L")) >= 128
-        areas.append((int(mask.sum()), path))
-    areas = [one for one in areas if one[0] >= EMPTY]
-    if not areas:
-        sys.exit("no person was found in the part's first frame: Character Swap replaces a person who is in the first frame. "
-                 "Start the part where the person is in view")
-    areas.sort(key=lambda one: -one[0])
-    say(f"{len(areas)} {'person' if len(areas) == 1 else 'people'} in the first frame; the largest ({areas[0][0] * 100 / (part['width'] * part['height']):.0f}% of the frame) is swapped")
+    masks = fetch_all(collect(run_graph(w, "4"), "6"), work / "found")
+    areas = [int((np.asarray(Image.open(path).convert("L")) >= 128).sum()) for path in masks]
+    ranked = people(found, areas, part["width"], part["height"])
+    if not ranked:
+        sys.exit(nobody)
+    index, area, score = ranked[0]
+    say(f"{len(ranked)} {'person' if len(ranked) == 1 else 'people'} in the first frame; the largest "
+        f"({area * 100 / (part['width'] * part['height']):.0f}% of the frame, {score:.0%} sure) is swapped")
     chosen = work / "person.png"
-    shutil.copy(areas[0][1], chosen)
+    shutil.copy(masks[index], chosen)
     return chosen
 
 
@@ -677,7 +721,7 @@ def main() -> None:
 
         stages.next("finding the person in the first frame")
         server("swap")
-        need(("SAM3_Detect", "SAM3_VideoTrack", "SAM3_TrackToMask", "MiniMaxH3ReferenceToVideo", "MiniMaxH3AddGuide",
+        need(("SAM3_Detect", "SAM3_VideoTrack", "SAM3_TrackToMask", "PreviewAny", "MiniMaxH3ReferenceToVideo", "MiniMaxH3AddGuide",
               "LTXVConcatAVLatent", "LTXVSeparateAVLatent", "SetLatentNoiseMask"))
         if SAM not in sg.call("/object_info/CheckpointLoaderSimple")["CheckpointLoaderSimple"]["input"]["required"]["ckpt_name"][0]:
             sys.exit("SAM 3.1 is not installed: bash oneshot-setup-spark.sh --swap")

@@ -335,17 +335,65 @@ def test_the_stages_are_said_for_the_job_card(capsys):
 
 
 def test_a_first_frame_with_nobody_in_it_is_refused(monkeypatch, tmp_path):
-    monkeypatch.setattr(spark_swap, "sg", FakeComfy(), raising=False)
-    monkeypatch.setattr(spark_swap, "run_graph", lambda w, sampler, named=None: "p1")
-    monkeypatch.setattr(spark_swap, "collect", lambda prompt, node: [])
-    monkeypatch.setattr(spark_swap, "fetch_all", lambda items, folder: [])
     pytest.importorskip("numpy")
     pytest.importorskip("PIL")
+    from PIL import Image
+
+    graphs = []
+    monkeypatch.setattr(spark_swap, "sg", FakeComfy(), raising=False)
+    monkeypatch.setattr(spark_swap, "run_graph", lambda w, sampler, named=None: graphs.append(sorted(w)) or "p1")
     frame = tmp_path / "f.png"
-    __import__("PIL.Image").Image.new("RGB", (64, 32)).save(frame)
+    Image.new("RGB", (64, 32)).save(frame)
+    part = {"frames": [frame], "width": 64, "height": 32}
+    # SAM 3.1 found nothing (a flat colour): refused in words, and the nodes that cannot take an empty mask never run
+    monkeypatch.setattr(spark_swap, "said_text", lambda prompt, node: "[\n    []\n]")
     with pytest.raises(SystemExit) as refused:
-        spark_swap.find_person({"frames": [frame], "width": 64, "height": 32}, tmp_path)
-    assert "no person was found in the part's first frame" in str(refused.value)
+        spark_swap.find_person(part, tmp_path)
+    assert "no person was found in the part's first frame" in str(refused.value) and "out of bounds" not in str(refused.value)
+    assert graphs == [["1", "2", "3", "4", "7"]]
+    # something it is not sure is a person (a gradient, 48%): refused, with how sure it was
+    monkeypatch.setattr(spark_swap, "said_text", lambda prompt, node: json.dumps([[{"x": 0, "y": 0, "width": 64, "height": 32, "score": 0.484}]]))
+    with pytest.raises(SystemExit) as refused:
+        spark_swap.find_person(part, tmp_path)
+    assert "no person was found" in str(refused.value) and "48% sure" in str(refused.value) and len(graphs) == 2
+    # a person: the masks are made, and the largest person's is the one chosen
+    masks = []
+    for n, (left, right) in enumerate(((0, 8), (20, 50))):
+        mask = Image.new("L", (64, 32))
+        mask.paste(255, (left, 2, right, 30))
+        masks.append(tmp_path / f"m{n}.png")
+        mask.save(masks[-1])
+    boxes = [{"x": 0, "y": 2, "width": 8, "height": 28, "score": 0.97}, {"x": 20, "y": 2, "width": 30, "height": 28, "score": 0.95}]
+    monkeypatch.setattr(spark_swap, "said_text", lambda prompt, node: json.dumps([boxes]))
+    monkeypatch.setattr(spark_swap, "collect", lambda prompt, node: [{}, {}])
+    monkeypatch.setattr(spark_swap, "fetch_all", lambda items, folder: masks)
+    chosen = spark_swap.find_person(part, tmp_path)
+    assert graphs[-1] == ["1", "2", "3", "4", "5", "6", "7"]
+    assert (__import__("numpy").asarray(Image.open(chosen)) > 0).sum() == 30 * 28
+
+
+@pytest.mark.parametrize("name,box,area,person", [
+    # SAM 3.1 on synthetic 864x480 frames (2026-10-27): what it found, how sure, its box and its mask
+    ("an empty kitchen", (95, 18), 1161, False), ("a coat on a rack", (221, 467), 54205, False),
+    ("an ffmpeg gradient", (856, 476), 413900, False), ("a Mandelbrot", (396, 358), 50512, False),
+    ("one flat colour", (857, 477), 409600, False), ("an empty street", (8, 17), 124, False),
+    ("a close-up", (850, 478), 247900, True), ("from behind", (370, 449), 108700, True),
+    ("sitting", (275, 404), 35700, True), ("a waiter at the back of a cafe", (62, 170), 5970, True),
+    ("a hiker far away", (20, 38), 332, True),
+])
+def test_what_counts_as_a_person_in_the_first_frame(name, box, area, person):
+    scores = {"an empty kitchen": 0.644, "a coat on a rack": 0.667, "an ffmpeg gradient": 0.484, "a Mandelbrot": 0.404,
+              "one flat colour": 0.312, "an empty street": 0.507, "a close-up": 0.981, "from behind": 0.991, "sitting": 0.983,
+              "a waiter at the back of a cafe": 0.956, "a hiker far away": 0.931}
+    found = [{"x": 0, "y": 0, "width": box[0], "height": box[1], "score": scores[name]}]
+    assert bool(spark_swap.people(found, [area], 864, 480)) is person, name
+    if name in ("an ffmpeg gradient", "one flat colour"):  # however sure, a rectangle over most of the frame is not a person
+        assert not spark_swap.people([{**found[0], "score": 0.99}], [area], 864, 480)
+
+
+def test_the_largest_person_comes_first():
+    found = [{"width": 50, "height": 100, "score": 0.99}, {"width": 100, "height": 200, "score": 0.9}, {"width": 400, "height": 400, "score": 0.5}]
+    assert [i for i, _, _ in spark_swap.people(found, [3000, 12000, 90000], 864, 480)] == [1, 0]
 
 
 needs_ffmpeg = pytest.mark.skipif(not (shutil.which("ffmpeg") and shutil.which("ffprobe")), reason="ffmpeg is not installed")
