@@ -31,18 +31,22 @@ LYRICS = ("[Verse]\nMorning light on the window pane\nCoffee cooling while I wai
 
 def neighbours():
     """Other GPU work on the machine while timing (the governor's other reservations and other CUDA processes): a
-    timing taken beside another job is marked, not trusted."""
+    timing taken beside another job is marked, not trusted. The reservations only where a workload governor runs
+    (``SPARK_GOVERNOR``, its folder, as spark/workload.py reads it); ``TF_YUE2_OWNER`` is this timing's own owner name,
+    left out of them."""
     import os
     import subprocess
     seen = {"reservations": [], "processes": []}
-    governor = os.environ.get("SPARK_GOVERNOR", "/data/model_vault/spark-workload-governor/admission_client.py")
-    try:
-        status = json.loads(subprocess.run(["python3", governor, "--owner", "probe", "--status"], capture_output=True,
-                                           text=True, timeout=20).stdout)
-        seen["reservations"] = sorted(r["owner"] for r in status.get("reservations", [])
-                                      if not str(r["owner"]).startswith("claude-34-tfyue"))
-    except Exception:
-        seen["reservations"] = ["unknown"]
+    governor = os.environ.get("SPARK_GOVERNOR", "").strip()
+    if governor:
+        mine = os.environ.get("TF_YUE2_OWNER", "tf-yue2-check")
+        try:
+            status = json.loads(subprocess.run(["python3", os.path.join(os.path.expanduser(governor), "admission_client.py"),
+                                                "--owner", "probe", "--status"], capture_output=True, text=True, timeout=20).stdout)
+            seen["reservations"] = sorted(r["owner"] for r in status.get("reservations", [])
+                                          if not str(r["owner"]).startswith(mine))
+        except Exception:
+            seen["reservations"] = ["unknown"]
     try:
         rows = subprocess.run(["nvidia-smi", "--query-compute-apps=pid", "--format=csv,noheader"], capture_output=True,
                               text=True, timeout=20).stdout.split()
