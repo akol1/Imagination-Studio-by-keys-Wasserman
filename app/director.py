@@ -588,6 +588,10 @@ def work(run: dict, stop: threading.Event) -> None:
                 job = job_of(one.get("job") or "") if one.get("status") == "queued" else None
                 if job and job.get("status") == "queued":
                     cancel(one["job"])
+        for one in (run.get("casting") or {}).values():  # and the cast's and places' stills waiting their turn
+            job = job_of(one.get("job") or "") if one.get("job") and one.get("step") != "done" else None
+            if job and job.get("status") == "queued":
+                cancel(one["job"])
         run["state"], run["finished"] = "stopped", slate.now()
         say(run, "Stopped. Direct it again to carry on from here: what is written, cast and rendered is kept.")
     except Exception as error:  # noqa: BLE001 - the reason goes to the page

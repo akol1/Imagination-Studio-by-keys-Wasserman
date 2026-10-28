@@ -560,6 +560,12 @@ def test_a_heat_stop_in_the_governor_s_own_words_is_queued_once_more_at_its_seed
     monkeypatch.setattr(sg, "side", lambda ext: log)
     said = sg.stopped()
     assert director.WORKLOAD_STOP in said and "GPU temperature ceiling" in said
+    # met as the server started: it ended before any render (managed_comfy.py's own words), the same stop
+    log.write_text("[studio] the managed server stopped: GPU temperature ceiling or thermal slowdown\n")
+    assert director.WORKLOAD_STOP in sg.stopped() and "GPU temperature ceiling" in sg.stopped()
+    assert '"[studio] the managed server stopped: {error}"' in (ROOT / "spark/managed_comfy.py").read_text()
+    log.write_text("[studio] the managed server stopped: the workload governor did not admit the renderer: {}\n")
+    assert sg.stopped() == ""  # not a limit: no stop is claimed
 
     class Hot(Picky):
         def submit(self, body):
@@ -579,6 +585,21 @@ def test_a_heat_stop_in_the_governor_s_own_words_is_queued_once_more_at_its_seed
         assert len(made) == tries and len(set(made)) == 1, made  # the same take at its seed, never a retake's next seed
         assert run["shots"][wide["id"]]["outcome"] == outcome and run["counts"]["retakes"] == 0
         assert sum(1 for line in run["log"] if f"queued once more at seed {made[0]}" in line["text"]) == 1
+
+
+def test_a_stopped_run_takes_its_waiting_stills_out_of_the_queue(studio):
+    queue, brain = Queue(hold=True), Brain()
+    studio(queue, brain)
+    project = new_film()
+    client.post("/api/slate/direct", json={"project": project, "scenes": 1, "shotsPerScene": 2, "seconds": 5, "cut": False})
+    end = time.time() + 10
+    while time.time() < end and len([b for b in queue.bodies if b["kind"] == "scout"]) < 2:  # Ada and the harbour
+        time.sleep(0.02)
+    stills = [j for j in queue.made if j["kind"] == "scout"]
+    assert len(stills) == 2 and all(j["status"] == "queued" for j in stills)
+    assert client.post(f"/api/slate/direct/{project}/stop", json={}).json()["stopped"] is True
+    until(project)
+    assert all(j["status"] == "cancelled" for j in stills)
 
 
 def test_one_render_is_queued_for_each_machine(monkeypatch):

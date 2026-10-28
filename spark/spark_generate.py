@@ -1381,6 +1381,10 @@ def mac_release() -> None:
     shutil.rmtree(PREFIX / "ComfyUI" / "output" / "__h3_removal_cache", ignore_errors=True)
 
 
+# the workload governor's reasons (workload.reasons): a managed server that ended for one of them was stopped by the limits
+LIMIT_WORDS = ("temperature", "memory pressure", "free memory below", "telemetry")
+
+
 def stopped() -> str:
     """Why the ComfyUI server ended, when its own log says so: the memory guard beside it (memory_guard.py watch)
     stops it when the machine runs low."""
@@ -1395,6 +1399,10 @@ def stopped() -> str:
                     + ". Use a shorter clip, a shorter or fewer reference videos, or a smaller size; a LoRA clip needs more memory than one without.")
         if "stopping the managed server:" in line:
             return ("the render was stopped by this machine's workload limits: " + line.split("managed server: ", 1)[-1].strip()
+                    + ". Wait for the machine to cool or for other work on it to finish, then try again.")
+        # the same limits met as the server started (managed_comfy.run: its telemetry's first reading): no server came up
+        if "the managed server stopped:" in line and any(word in line for word in LIMIT_WORDS):
+            return ("the render was stopped by this machine's workload limits: " + line.split("managed server stopped: ", 1)[-1].strip()
                     + ". Wait for the machine to cool or for other work on it to finish, then try again.")
     return ""
 
