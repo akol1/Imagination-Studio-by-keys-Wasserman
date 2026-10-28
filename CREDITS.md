@@ -215,7 +215,10 @@ additional individual creator permission**: personal users, content creators and
 capacity may generate, publish, sell, license or otherwise monetize their outputs free of charge, with no fees or
 royalties; companies need a commercial licence from the authors; no illegal, harmful, deceptive or unethical use.
 YuE2's decoder carries code derived from Stability AI's stable-audio-tools (MIT) and NVIDIA's BigVGAN SnakeBeta (MIT).
-The pack ships no weights. **YuE2.**
+YuE2-3B reads its words with **qwen.tiktoken**, the tokenizer vocabulary of the **Qwen team** (Alibaba Cloud), which
+comes in the YuE2-3B download (the installer requires it); the Qwen team released it with Qwen under their Tongyi
+Qianwen licence, and it reaches this machine as the YuE2 authors distribute it, beside their weights. It is read by
+OpenAI's **tiktoken** (MIT), installed in YuE2's environment. The pack ships no weights and no tokenizer. **YuE2.**
 
 ## Sound effects and foley: Stability AI, and Ho Kei Cheng and the MMAudio authors
 
