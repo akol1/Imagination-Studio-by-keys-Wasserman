@@ -85,3 +85,23 @@ def test_a_take_that_failed_its_check_is_in_the_library_and_says_so():
     assert "failed" not in listed["slate/p-lib/takes/mine.mp4"]  # rated no good by hand: listed, but no check failed it
     assert "qa/fetched/q9.mp4" not in listed and "qa/job1-take1.jpg" not in listed
     assert client.delete("/api/library", params={"path": "qa/job1-take1.mp4"}).status_code == 200
+
+
+def test_a_film_with_odd_shots_and_takes_never_takes_the_library_down():
+    """A project.json edited by hand or written by an older build: a shot that is not an object, takes that are not a
+    list, a check that is not an object. Its readable failed takes are listed; the rest is passed over."""
+
+    home = server.HOME
+    (home / "slate" / "p-odd" / "takes").mkdir(parents=True, exist_ok=True)
+    (home / "slate" / "p-odd" / "takes" / "bad.mp4").write_bytes(b"x")
+    (home / "slate" / "p-odd" / "project.json").write_text(json.dumps({"id": "p-odd", "scenes": [
+        {"shots": ["a shot as a string", None, 7, {"takes": "none yet"}, {"takes": {"mediaPath": "x.mp4"}},
+                   {"takes": [None, "x", {"mediaPath": 5}, {"mediaPath": "slate/p-odd/takes/odd.mp4", "qa": "failed"},
+                              {"mediaPath": "slate/p-odd/takes/bad.mp4", "qa": {"passed": False}}]}]},
+        "a scene as a string", {"shots": {"not": "a list"}}]}))
+    (home / "slate" / "p-list" / "project.json").parent.mkdir(parents=True, exist_ok=True)
+    (home / "slate" / "p-list" / "project.json").write_text(json.dumps(["not", "a", "film"]))
+    answer = client.get("/api/library")
+    assert answer.status_code == 200
+    listed = {m["path"]: m for m in answer.json()}
+    assert listed["slate/p-odd/takes/bad.mp4"]["failed"] is True

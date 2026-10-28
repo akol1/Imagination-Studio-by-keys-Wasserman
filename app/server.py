@@ -2487,6 +2487,16 @@ def failed_takes() -> set[str]:
     """The clips of Slate shots that failed their check: a take whose own QA gate or shot check failed it, and one the
     Director rated no-good (it rates a failed take so). A take rated no-good by hand is the user's call, not a check's."""
 
+    def listed(value) -> list:
+        return value if isinstance(value, list) else []
+
+    def failed(take) -> bool:
+        try:  # a take written by hand or by an older build: one that cannot be read is not counted
+            return isinstance(take, dict) and isinstance(take.get("mediaPath"), str) and bool(
+                director.failed_check(take) or take.get("rating") == "no-good" and str(take.get("origin") or "").startswith("The Director"))
+        except Exception:  # noqa: BLE001 - one odd take never takes the Library down
+            return False
+
     out, seen = set(), set()
     for file in (HOME / "slate").glob("*/project.json"):
         seen.add(file)
@@ -2494,10 +2504,9 @@ def failed_takes() -> set[str]:
             stamp = file.stat().st_mtime_ns
             if FAILED_SEEN.get(file, (None,))[0] != stamp:
                 film, found = json.loads(file.read_text()), set()
-                for scene in (film.get("scenes") or []) if isinstance(film, dict) else []:
-                    for shot in scene.get("shots") or [] if isinstance(scene, dict) else []:
-                        found.update(take["mediaPath"] for take in shot.get("takes") or [] if isinstance(take, dict) and isinstance(take.get("mediaPath"), str)
-                                     and (director.failed_check(take) or take.get("rating") == "no-good" and str(take.get("origin") or "").startswith("The Director")))
+                for scene in listed(film.get("scenes")) if isinstance(film, dict) else []:
+                    for shot in listed(scene.get("shots")) if isinstance(scene, dict) else []:
+                        found.update(take["mediaPath"] for take in (listed(shot.get("takes")) if isinstance(shot, dict) else []) if failed(take))
                 FAILED_SEEN[file] = (stamp, found)
         except (OSError, ValueError):
             continue
