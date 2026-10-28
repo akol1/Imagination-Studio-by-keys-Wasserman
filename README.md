@@ -169,13 +169,41 @@ Full recipes, every option and the measured memory of each job: [Install, and th
 design and build the studio in collaboration with Keys, made Wasserman's Filmmaker Suite, and shaped the production side (Slate, the Sharp Spec, Motion Previs). See
 [Big credit: Sam Wasserman and Wasserman Productions](#big-credit-sam-wasserman-and-wasserman-productions-wassermanproductionscom), below the release notes, and [CREDITS.md](CREDITS.md).*
 
-**4.1.0** · Apple-silicon Macs (measured on a Mac Studio M5 Ultra 256 GB), the NVIDIA DGX Spark, and the NVIDIA RTX Pro
+**4.1.1** · Apple-silicon Macs (measured on a Mac Studio M5 Ultra 256 GB), the NVIDIA DGX Spark, and the NVIDIA RTX Pro
 6000 (96 GB) ·
 [TensorFold](https://github.com/ashhart/TensorFold) **0.6.5** + two families, and TensorFold **1.0**'s native Zig
 runtime for FastH3 on Metal and on CUDA, TensorFold **1.1.5** for the music engines and both Bolt engines:
 **Qwen 2.1 Turbo**, **Qwen 2.1 Full**, **FLUX3-K Fast** and **FLUX3-K Full** (text to image, and Edit a picture) · **MOSS-Image** (text to image, DGX Spark) · **MiniMax H3**
 (video with sound) · **Fish Audio Drama 3** (Voice) · **YuE2** and **MiniMax-Music3** (Music: songs with sung vocals) · int8 kernels on the M5 tensor units and on the GB10's tensor
 cores · a 2x video decoder for 2K finals on the Mac
+
+## New in 4.1.1 (2026-10-28)
+
+Fixes to 3.4.0 and 4.1.0 on all four machines: the DGX Spark, the RTX Pro 6000, a 32 GB RTX 5090 and the Mac. Update
+the clone and restart the app; `--swap` installs fetch the int8 Ref2VA they run on (below).
+
+- **Character Swap checks memory before it is queued**, like a clip, a song or a sound, from peaks measured on a DGX
+  Spark and on a Spark capped to 96 GB and to 32 GB: 55.4 / 60.6 GB of a Spark at Fast / High, 49.4 / 52.7 GB on a
+  96 GB card, and with `STUDIO_ROOM_MB` on a 32 GB card the machine gave 37.8 / 39.5 GB (docs/rtx-pro-6000.md,
+  docs/rtx-5090.md). An RTX 5090 without `STUDIO_ROOM_MB` is refused with
+  the card's name and what to set; with it, ComfyUI keeps the models in RAM and the swap runs. A Mac is told it has no
+  swap before anything about its clip.
+- **Nobody in the part is refused in words.** SAM 3.1 must be at least 75% sure of a person (people scored 0.93 to 0.99
+  on synthetic frames, empty rooms, a coat on a rack, gradients and a Mandelbrot 0.31 to 0.67). A flat colour no longer
+  fails with *index 0 is out of bounds*.
+- **A cancelled or failed swap leaves nothing behind**: no mask preview, no anchor.
+- **`--swap` fetches MiniMax H3 Ref2VA in int8 (21 GB)**, the weights it runs on, instead of requiring the 40 GB bf16
+  file; the Library's actions run on either. The disk check counts it on each machine.
+- **The Director** says why the QA gate failed a take and keeps the gate's report on the take; a run with nothing to
+  cut still ends with its counts; the cast's and places' stills use a picture model this machine has (FLUX3-K Fast on
+  a Spark without Qwen), only for who and where the shots show; a written age is not followed by "years old", and a
+  brain's None or N/A never reaches a prompt.
+- **YuE2**: its refusal gives both figures to a tenth of a gigabyte, a failed song leaves no score folder and its
+  server gives back PyTorch's cache, the Music tab says why YuE2 is not offered where it is not (a Mac), and an RTX
+  machine is told its own installer. Its engine build checks Zig's SHA-256 and tests on the GPU only when it is idle.
+- **The Library** lists failed takes however a project file is shaped (a hand-edited one gave a 500).
+- **Repo**: no machine's paths or job owners in the receipts; tiktoken, the Qwen team's `qwen.tiktoken` and Openjutsu
+  credited in CREDITS.md and Settings; tests that read the machine they ran on stand in for it.
 
 ## New in 4.1.0 (2026-10-27)
 
