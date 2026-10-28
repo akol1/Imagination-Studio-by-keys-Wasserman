@@ -110,12 +110,14 @@ def list_projects() -> list[dict]:
     for file in sorted((HOME / "slate").glob("*/project.json"), key=lambda f: -f.stat().st_mtime):
         try:
             data = json.loads(file.read_text())
-        except ValueError:
+        except (OSError, ValueError):
             continue
-        scenes = data.get("scenes") or []
+        if not isinstance(data, dict):  # a file that is not a film (edited by hand): not listed, never a 500
+            continue
+        scenes = [scene for scene in data.get("scenes") or [] if isinstance(scene, dict)] if isinstance(data.get("scenes"), list) else []
         out.append({"id": data.get("id", file.parent.name), "name": data.get("name", ""), "logline": data.get("logline", ""),
                     "updatedAt": data.get("updatedAt", ""), "sceneCount": len(scenes),
-                    "shotCount": sum(len(scene.get("shots") or []) for scene in scenes)})
+                    "shotCount": sum(len(scene.get("shots")) for scene in scenes if isinstance(scene.get("shots"), list))})
     return out
 
 

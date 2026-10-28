@@ -101,7 +101,15 @@ def test_a_film_with_odd_shots_and_takes_never_takes_the_library_down():
         "a scene as a string", {"shots": {"not": "a list"}}]}))
     (home / "slate" / "p-list" / "project.json").parent.mkdir(parents=True, exist_ok=True)
     (home / "slate" / "p-list" / "project.json").write_text(json.dumps(["not", "a", "film"]))
-    answer = client.get("/api/library")
-    assert answer.status_code == 200
-    listed = {m["path"]: m for m in answer.json()}
-    assert listed["slate/p-odd/takes/bad.mp4"]["failed"] is True
+    try:
+        answer = client.get("/api/library")
+        assert answer.status_code == 200
+        listed = {m["path"]: m for m in answer.json()}
+        assert listed["slate/p-odd/takes/bad.mp4"]["failed"] is True
+        films = client.get("/api/slate/projects")  # Slate's list of films passes them over too
+        assert films.status_code == 200 and "p-list" not in [f["id"] for f in films.json()]
+        assert next(f for f in films.json() if f["id"] == "p-odd")["shotCount"] == 6
+    finally:  # the other tests share this studio folder
+        import shutil
+        for name in ("p-odd", "p-list"):
+            shutil.rmtree(home / "slate" / name, ignore_errors=True)
