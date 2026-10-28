@@ -585,7 +585,9 @@ def work(run: dict, stop: threading.Event) -> None:
         say(run, "Stopped. Direct it again to carry on from here: what is written, cast and rendered is kept.")
     except Exception as error:  # noqa: BLE001 - the reason goes to the page
         run["state"], run["finished"], run["error"] = "failed", slate.now(), str(getattr(error, "detail", error))[:600]
-        say(run, "Failed: " + run["error"])
+        # a run that got as far as its shots still says what became of each of them (a cut with nothing to cut)
+        tally = ". " + summary(run) if run.get("order") and run.get("shots") else ""
+        say(run, "Failed: " + run["error"] + tally)
 
 
 def summary(run: dict) -> str:
@@ -1119,14 +1121,36 @@ def check(run: dict, sid: str, one: dict) -> None:
     say(run, f"Checking {run['shots'][sid]['name']}", job=gate["id"], shot=sid)
 
 
+def failed_because(take: dict) -> str:
+    """Why one checked take failed, in the gate's own words: its reason, or the note of each gate that failed it (the
+    QA gate keeps them under ``audio`` and ``identity``)."""
+
+    said = take.get("reason") or take.get("why")
+    if said:
+        return str(said)
+    return "; ".join(f"{gate}: {take[gate]['note']}" for gate in ("audio", "identity")
+                     if isinstance(take.get(gate), dict) and take[gate].get("result") == "fail" and take[gate].get("note"))
+
+
 def verdict(run: dict, sid: str, one: dict, report: dict, unchecked: str = "") -> None:
+    gate = report
     if report.get("passed") is None:
         shot_check = (job_of(one["job"]) or {}).get("shot") or {} if one.get("job") else {}
         if shot_check.get("passed") is False:
             report = {"passed": False, "takes": shot_check.get("takes") or [], "why": "the shot check"}
     takes = report.get("takes") or []
-    reason = "; ".join(str(t.get("reason") or t.get("why") or "") for t in takes if isinstance(t, dict) and t.get("passed") is False and (t.get("reason") or t.get("why")))
+    reason = "; ".join(filter(None, (failed_because(t) for t in takes if isinstance(t, dict) and t.get("passed") is False)))
     one.update(checked=True, passed=report.get("passed"), reason=reason or report.get("why") or unchecked)
+    if gate and one.get("take"):  # the gate's report on the take itself, as a clip the queue checked carries it
+        def note(film):
+            try:
+                _, shot, _ = slate.find_shot(film, sid)
+            except HTTPException:
+                return
+            for take in shot.get("takes") or []:
+                if take.get("id") == one["take"] and not take.get("qa"):
+                    take["qa"] = gate
+        change(run["project"], note)
     name = run["shots"][sid]["name"]
     say(run, f"{name}: " + ("passed the check" if one["passed"] else "failed the check" + (f" ({one['reason'][:160]})" if one["reason"] else "")
                            if one["passed"] is False else "not checked" + (f" ({unchecked[:160]})" if unchecked else "")), shot=sid)

@@ -473,6 +473,50 @@ def test_a_refused_shot_is_never_called_rendered_and_a_failed_take_stays_out_of_
     assert failed_take["mediaPath"] in [c_["path"] for c_ in made["saved"]["timeline"]]
 
 
+class Gate(Queue):
+    """A queue whose QA jobs answer as the QA gate does (app/qa.py check): the reason of a failed take is the note of
+    the gate that failed it, under ``audio`` or ``identity``; every clip fails."""
+
+    def qa(self, body):
+        self.checked.append(body["path"])
+        job_id = f"q{len(self.jobs) + 1}"
+        take = {"audio": {"result": "fail", "heard": "who left", "note": "2 of the line's 4 words heard"},
+                "identity": {"result": "pass", "note": "claude: the same woman in all three frames"},
+                "sharpness": {}, "times": [0.5, 2.5, 4.5], "passed": False, "take": 1, "seed": 7, "sheet": "qa/x.jpg"}
+        self.jobs[job_id] = {"id": job_id, "kind": "qa", "status": "done", "qa": {"passed": False, "takes": [take], "from": None}}
+        return self.jobs[job_id]
+
+
+def test_the_qa_gate_s_own_words_reach_the_outcome_the_log_and_the_take_and_a_run_with_nothing_to_cut_still_counts(studio):
+    queue, brain = Gate(), Brain()
+    studio(queue, brain)
+    project = new_film()
+    client.post("/api/slate/direct", json={"project": project, "scenes": 1, "shotsPerScene": 2, "seconds": 5, "retakes": 0, "cut": True})
+    run = until(project)
+    assert run["state"] == "failed", run
+    wide, close = slate.get_project(project)["scenes"][0]["shots"]
+    for shot in (wide, close):
+        rec = run["shots"][shot["id"]]
+        assert rec["outcome"] == "failed" and rec["why"] == "audio: 2 of the line's 4 words heard"
+        assert any(line["text"] == f"{shot['name']}: failed the check (audio: 2 of the line's 4 words heard)" for line in run["log"])
+        take = shot["takes"][0]  # the gate's report is kept on the take, as on a clip the queue checked itself
+        assert take["qa"]["passed"] is False and take["qa"]["takes"][0]["audio"]["note"] == "2 of the line's 4 words heard"
+        assert take["rating"] == "no-good"
+    last = run["log"][-1]["text"]
+    assert last.startswith("Failed: no shot has a take to cut: ")
+    assert "0 of 2 shots passed the check" in last and f"2 failed the check (in the Library, out of the cut): {wide['name']}, {close['name']}" in last
+    assert last.endswith("0 retakes") and run["counts"]["failedCheck"] == 2
+
+
+def test_a_take_failed_for_its_identity_says_so_and_a_take_with_reasons_keeps_them():
+    take = {"audio": {"result": "skipped", "note": "no speech-to-text tool"}, "identity": {"result": "fail", "note": "claude: the face changes"}}
+    assert director.failed_because(take) == "identity: claude: the face changes"
+    assert director.failed_because({**take, "audio": {"result": "fail", "note": "0 of 3 words heard"}}) == \
+        "audio: 0 of 3 words heard; identity: claude: the face changes"
+    assert director.failed_because({"reason": "the face changes", **take}) == "the face changes"
+    assert director.failed_because({"why": "the shot check"}) == "the shot check" and director.failed_because({"passed": False}) == ""
+
+
 def test_a_render_the_workload_limits_stopped_is_queued_once_more_and_is_not_a_retake(studio):
     queue, brain = Picky(stop="Ada walks", stops=1), Brain()
     studio(queue, brain)
