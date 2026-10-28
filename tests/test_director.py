@@ -541,6 +541,46 @@ def test_a_render_the_workload_limits_stopped_is_queued_once_more_and_is_not_a_r
     assert run["shots"][wide["id"]]["outcome"] == "stopped" and run["counts"]["stopped"] == 1 and "workload limits" in run["shots"][wide["id"]]["why"]
 
 
+def test_a_heat_stop_in_the_governor_s_own_words_is_queued_once_more_at_its_seed_and_not_a_third_time(studio, tmp_path, monkeypatch):
+    """The whole chain of a heat stop: the governor's telemetry finds the GPU too hot (spark/workload.py reasons), the
+    managed server says so in its log as it stops (spark/managed_comfy.py), the render fails with spark_generate's
+    reading of that line, and the Director queues the same take once more at its seed; stopped again, it is left out."""
+
+    sys.path.insert(0, str(ROOT / "spark"))
+    import spark_generate as sg
+    import workload
+
+    hot = {"memory": {"available_bytes": 100 * 2 ** 30}, "gpus": [{"temperature_c": 95.0, "thermal_flags": {}}],
+           "psi": {"some_avg10": 0.0, "full_avg10": 0.0}}
+    why = workload.reasons(hot, [{"zone": "z0", "temp_c": 41.0, "ceiling_c": 95.0}], 1, 0, 2 ** 30)
+    assert why == ["GPU temperature ceiling or thermal slowdown"]
+    assert 'print("[studio] stopping the managed server: " + why, flush=True)' in (ROOT / "spark/managed_comfy.py").read_text()
+    log = tmp_path / "comfy.log"
+    log.write_text("[INFO] got prompt\n[studio] stopping the managed server: " + "; ".join(why) + "\n")
+    monkeypatch.setattr(sg, "side", lambda ext: log)
+    said = sg.stopped()
+    assert director.WORKLOAD_STOP in said and "GPU temperature ceiling" in said
+
+    class Hot(Picky):
+        def submit(self, body):
+            job = super().submit(body)
+            if job["status"] == "failed":
+                job["error"] = said + " (status 1)"  # as server.run reports a script that exited
+            return job
+
+    for stops, tries, outcome in ((1, 2, "passed"), (2, director.WORKLOAD_STOPS, "stopped")):
+        queue, brain = Hot(stop="Ada walks", stops=stops), Brain()
+        studio(queue, brain)
+        project = new_film()
+        client.post("/api/slate/direct", json={"project": project, "scenes": 1, "shotsPerScene": 2, "seconds": 5, "retakes": 1, "cut": False})
+        run = until(project)
+        wide = slate.get_project(project)["scenes"][0]["shots"][0]
+        made = [v["params"]["seed"] for v in queue.videos() if v["params"]["slate"]["shot"] == wide["id"]]
+        assert len(made) == tries and len(set(made)) == 1, made  # the same take at its seed, never a retake's next seed
+        assert run["shots"][wide["id"]]["outcome"] == outcome and run["counts"]["retakes"] == 0
+        assert sum(1 for line in run["log"] if f"queued once more at seed {made[0]}" in line["text"]) == 1
+
+
 def test_one_render_is_queued_for_each_machine(monkeypatch):
     monkeypatch.setattr(director, "machines", lambda: 1)
     assert director.at_once() == 1
