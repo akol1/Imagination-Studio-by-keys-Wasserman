@@ -218,17 +218,24 @@ Rules:
   there, ended with the Mac's ssh or its heartbeat). Never add the Mac's key to a worker for it, and never open the
   relay to a network.
 - Local discrete NVIDIA GPUs (`app/local_gpus.py`, `docs/rtx-pro-6000.md`): at most four per Studio, including its
-  explicitly selected head. Persist worker UUIDs, resolve their current ordinal only when launching, and never
-  substitute another card for a missing UUID. Display workers need explicit consent. An unticked but running worker
-  still occupies a slot. Never kill a process merely because its port, GPU or PID matches: private launch identity
+  explicitly selected head. Persist worker UUIDs and pin CUDA by UUID, keeping a validated numeric index for guard
+  queries. Refuse a stale index after reordering; never substitute another card for a missing UUID. Display workers
+  need explicit consent. An unticked but running worker still occupies a slot. Never kill a process merely because
+  its port, GPU or PID matches: private launch identity
   and PID/start identity are required. Local child APIs require their private key even on loopback; never expose it
   in public state, URLs or logs. Children do not start workers, schedules, discovery, captions or source updates.
   Core runtime and weights are shared; worker homes and optional LoRA registries remain separate.
-  The cross-process RAM ledger keeps max(8 GiB, 10% of host RAM) and the existing measured peak/error budgets.
-  Credit only identity-validated model servers' already allocated anonymous PSS, never file cache, unrelated
-  processes or another GPU. Keep the full peak booked for other active GPUs. Unmeasured GPU jobs run exclusively.
-  Cancel and drain detached owned work before releasing RAM/device ownership; successful jobs keep model servers warm.
+  Start shared-RAM admission only with a running local worker, preserving the single-card queue. Honor
+  `memory_guard.floor_mb` / `SPARK_MEMORY_FLOOR_MB` and measured peak/error budgets. The plain int8 video host envelope
+  is measured separately on a 96 GB card; outside its bounds retain the conservative unified estimate.
+  Credit only identity-validated processes' anonymous PSS with an exact matching `comfy.kind` or private native
+  model/weight-route marker, never file cache or unrelated processes. Recompute each active reservation's outstanding
+  growth; unknown kinds run exclusively with FIFO admission. Fail impossible or stalled admission instead of waiting forever. Default leases/ledger use
+  `~/.cache/studio-gpus` regardless of `XDG_RUNTIME_DIR`; explicit overrides must agree between Studios.
+  Cancel and drain detached owned running work before releasing ownership; keep queued Director takes intact.
+  Shutdown has a deadline and retains leases for undrained work; successful jobs keep model servers warm.
   Required placement never falls back; saved placement applies only to video, and preflight asks the selected worker.
+  Tests isolate GPU runtime directories and inventory; actual hardware probes require `STUDIO_TEST_HARDWARE=1`.
   Three/four-card cases are deterministic simulations, not physical throughput measurements.
 - Voice (`app/voice.py`, `app/static/voice.js`, README *Voice (Fish Audio Drama 3)*): Fish Audio Drama 3 runs on this
   machine only, as a TensorFold process outside the app, never imported into the app's venv. Never call Fish Audio's

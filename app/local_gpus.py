@@ -23,11 +23,12 @@ from pathlib import Path
 
 try:
     import fcntl
-except ImportError:  # Macs keep the existing remote-Spark behavior.
+except ImportError:  # Platforms without POSIX file locks cannot manage local workers.
     fcntl = None
 
 LIMIT = 4
 CACHE_SECONDS = 3
+RAM_WAIT_SECONDS = 120
 UUID = re.compile(r"GPU-[A-Za-z0-9-]{8,100}\Z")
 _CACHE = {"at": float("-inf"), "value": {"supported": False, "devices": []}}
 _CACHE_LOCK = threading.Lock()
@@ -61,13 +62,14 @@ def private_dir(path: Path) -> Path:
 
 
 def runtime_dir() -> Path:
-    base = os.environ.get("XDG_RUNTIME_DIR")
-    default = Path(base) / "studio-gpus" if base else Path.home() / ".cache/studio-gpus"
+    # A desktop, cron and systemd session must see the same per-user device leases.
+    default = Path.home() / ".cache/studio-gpus"
     return private_dir(Path(os.environ.get("STUDIO_GPU_RUNTIME_DIR", default)))
 
 
 def ram_dir() -> Path:
-    return private_dir(Path(os.environ.get("STUDIO_GPU_RAM_DIR", runtime_dir() / "ram")))
+    asked = os.environ.get("STUDIO_GPU_RAM_DIR")
+    return private_dir(Path(asked) if asked else runtime_dir() / "ram")
 
 
 @contextlib.contextmanager
@@ -130,6 +132,8 @@ def parse_inventory(text: str) -> list[dict]:
         power = next((value for path in ("gpu_power_readings/instant_power_draw", "gpu_power_readings/power_draw",
                                          "power_readings/power_draw", "gpu_power_readings/average_power_draw")
                       if (value := number(gpu.findtext(path))) is not None), None)
+        compute = [p.findtext("pid") or "" for p in gpu.findall("processes/process_info")
+                   if "C" in (p.findtext("type") or "")]
         devices.append({"id": "local:" + ident, "gpu_uuid": ident, "index": index,
                         "name": gpu.findtext("product_name", "NVIDIA GPU"),
                         "total_mb": total, "used_mb": number(gpu.findtext("fb_memory_usage/used")),
@@ -138,8 +142,8 @@ def parse_inventory(text: str) -> list[dict]:
                         "temp_c": number(gpu.findtext("temperature/gpu_temp")),
                         "power_w": power,
                         "display_active": gpu.findtext("display_active", "Disabled").lower() == "enabled",
-                        "compute_pids": [int(p.findtext("pid")) for p in gpu.findall("processes/process_info")
-                                         if p.findtext("type") in ("C", "C+G") and (p.findtext("pid") or "").isdigit()]})
+                        "compute_pids": [int(pid) for pid in compute if pid.isdigit() and int(pid) > 0],
+                        "hidden_compute": any(not pid.isdigit() or int(pid) <= 0 for pid in compute)})
     return devices
 
 
@@ -173,68 +177,157 @@ def memory() -> tuple[int, int]:
     return values.get("MemTotal", 0), values.get("MemAvailable", 0)
 
 
-def model_ram_mb() -> int:
-    """Already allocated anonymous model RAM of this exact GPU session, never file cache or another GPU."""
-    key = os.environ.get("STUDIO_LOCAL_GPU_KEY")
-    if not key:
-        return 0
-    held_kb = 0
-    for pid, start in private_processes(key).items():
+def _model_residents(key: str | None = None) -> list[dict]:
+    """Owned model servers with a native route marker or a validated Comfy route."""
+    residents = []
+    processes = private_processes(key) if key else marked_processes("STUDIO_GPU_MODEL_RAM", "1")
+    for pid, start in processes.items():
         try:
             proc = Path("/proc") / str(pid)
-            if b"STUDIO_GPU_MODEL_RAM=1" not in (proc / "environ").read_bytes().split(b"\0"):
+            environment = dict(item.split(b"=", 1) for item in (proc / "environ").read_bytes().split(b"\0") if b"=" in item)
+            if environment.get(b"STUDIO_GPU_MODEL_RAM") != b"1" or not environment.get(b"STUDIO_LOCAL_GPU_KEY"):
                 continue
+            if key and environment.get(b"STUDIO_LOCAL_GPU_KEY") != key.encode():
+                continue
+            native = environment.get(b"STUDIO_GPU_MODEL_ROUTE", b"").decode("utf-8")
+            if native.startswith("native:"):
+                route = native
+            else:
+                port = environment.get(b"SPARK_COMFY_PORT", b"8190").strip() or b"8190"
+                wanted = b"\0".join((b"main.py", b"--listen", b"127.0.0.1", b"--port", port, b""))
+                if wanted not in (proc / "cmdline").read_bytes() + b"\0":
+                    continue
+                prefix = Path(os.fsdecode(environment.get(b"PREFIX") or os.fsencode(Path.home() / ".local/opt/tensorfold-studio")))
+                if (proc / "cwd").resolve() != (prefix / "ComfyUI").resolve():
+                    continue
+                stem = "comfy" if port == b"8190" else "comfy-" + port.decode("ascii")
+                route = (prefix / (stem + ".kind")).read_text().strip()
             anon = next((int(line.split()[1]) for line in (proc / "smaps_rollup").read_text().splitlines()
                          if line.startswith("Pss_Anon:")), 0)
             if process_identity(pid) == start:
-                held_kb += max(0, anon)
-        except (OSError, ValueError, IndexError):
+                residents.append({"pid": pid, "start": start, "route": route, "mb": max(0, anon) // 1024,
+                                  "gpu": os.fsdecode(environment.get(b"STUDIO_GPU", b"?"))})
+        except (OSError, ValueError, IndexError, UnicodeError):
             continue
-    return held_kb // 1024
+    return residents
+
+
+def model_ram_mb(route: str | None = None, *, key: str | None = None) -> int:
+    """Only this session's matching resident route offsets its remaining growth."""
+    key = key or os.environ.get("STUDIO_LOCAL_GPU_KEY")
+    if not key or not route:
+        return 0
+    return sum(resident["mb"] for resident in _model_residents(key) if resident["route"] == route)
+
+
+def _ram_growth(reservations: dict) -> int:
+    """Credit each resident session/route once, including concurrent callers."""
+    credit, outstanding = {}, 0
+    for reservation in reservations.values():
+        need = reservation.get("need_mb")
+        if need is None:
+            continue
+        key, route = reservation.get("key"), reservation.get("route")
+        identity = (key, route)
+        if identity not in credit:
+            credit[identity] = model_ram_mb(route, key=key) if key and route else 0
+        used = min(need, credit[identity])
+        credit[identity] -= used
+        outstanding += need - used
+    return outstanding
+
+
+def _ram_refusal(need: int | None, available: int, floor: int, *, timed_out: bool = False) -> str:
+    said = ("Timed out waiting for shared host RAM" if timed_out else "Not enough shared host RAM")
+    said += f": {available} MiB is available and {floor} MiB must stay free"
+    if need is not None:
+        said += f"; this job still needs up to {need} MiB"
+    holders = _model_residents()
+    if holders:
+        said += ". Resident model servers: " + ", ".join(
+            f"GPU {r['gpu']} (PID {r['pid']}, {r['mb']} MiB anonymous RAM)" for r in holders)
+        said += ". Stop an idle worker to release its models, then retry"
+    else:
+        said += ". Free memory or stop an idle model server, then retry"
+    return said + "."
 
 
 @contextlib.contextmanager
-def ram_reservation(need_mb: int | None, job: dict):
-    """Wait cancellably for shared host RAM; keep max(8 GiB, 10% RAM) untouched.
+def ram_reservation(need_mb: int | None, job: dict, *, route: str | None = None):
+    """Book host peaks, not memory twice; unmeasured jobs form a FIFO-exclusive barrier.
 
-    Reserve growth to the existing measured peak, crediting only already allocated
-    anonymous RAM in this session's owned model servers. File cache is already part
-    of MemAvailable and cannot be credited. Other active reservations remain conservative.
-    An unmeasured job (None) is exclusive rather than pretending to need zero RAM.
+    MemAvailable already excludes each server's allocated pages. A reservation books
+    only the outstanding growth to its full peak, recomputed from matching owned
+    anonymous pages. File cache, another route and unrelated processes get no credit.
+    No live holder that could release memory means fail now, not an endless wait.
     """
+    spark = str(Path(__file__).resolve().parent.parent / "spark")
+    if spark not in sys.path:
+        sys.path.insert(0, spark)
+    from memory_guard import floor_mb
+
     need = max(0, int(need_mb)) if need_mb is not None else None
     directory = ram_dir()
-    path, token = directory / "reservations.json", uuid.uuid4().hex
-    owner = {"pid": os.getpid(), "start": process_identity(os.getpid()), "need_mb": need}
-    admitted = False
+    path, waiting = directory / "reservations.json", directory / "waiters.json"
+    token = uuid.uuid4().hex
+    owner = {"pid": os.getpid(), "start": process_identity(os.getpid()), "need_mb": need,
+             "route": route, "key": os.environ.get("STUDIO_LOCAL_GPU_KEY")}
+    if not owner["start"]:
+        raise RuntimeError("Shared host RAM admission requires a live Linux process identity.")
+    admitted, registered = False, False
+    began = time.monotonic()
+    terminal = ("cancelled", "failed", "done")
     try:
-        while job.get("status") not in ("cancelled", "failed", "done"):
+        while job.get("status") not in terminal:
+            failure = None
             with locked(directory / "reservations.lock"):
-                if job.get("status") in ("cancelled", "failed", "done"):
-                    break
                 reservations = {key: value for key, value in load(path).items() if alive(value)}
-                total, available = memory()
-                floor = max(8192, (total + 9) // 10)
-                resident = model_ram_mb() if need is not None else 0
-                growth = max(0, need - resident) if need is not None else None
-                exclusive = any(r.get("need_mb") is None for r in reservations.values())
-                fits = not reservations if need is None else not exclusive and available - sum(r["need_mb"] for r in reservations.values()) - growth >= floor
-                if owner["start"] and total and available >= floor and fits:
-                    owner.update(need_mb=need, resident_mb=resident)
-                    reservations[token] = owner
-                    admitted = True
+                waiters = {key: value for key, value in load(waiting).items() if alive(value)}
+                if job.get("status") not in terminal:
+                    waiters.setdefault(token, owner)
+                    registered = True
+                    earlier = list(waiters)[:list(waiters).index(token)]
+                    barrier = any(waiters[key].get("need_mb") is None for key in earlier)
+                    turn = not barrier and (need is not None or not earlier)
+                    total, before = memory()
+                    outstanding = _ram_growth({**reservations, token: owner})
+                    resident = model_ram_mb(route) if need is not None else 0
+                    growth = max(0, need - resident) if need is not None else None
+                    # Allocations while /proc is read must not spend the older, larger
+                    # MemAvailable together with their newer residency credit.
+                    _, after = memory()
+                    available = min(before, after)
+                    floor = max(8192, floor_mb(total))
+                    exclusive = any(r.get("need_mb") is None for r in reservations.values())
+                    fits = not reservations if need is None else not exclusive and available - outstanding >= floor
+                    if not total or (need is not None and need > total - floor):
+                        failure = _ram_refusal(growth, available, floor)
+                    elif turn and available >= floor and fits:
+                        reservations[token] = owner
+                        waiters.pop(token)
+                        admitted = True
+                    elif time.monotonic() - began >= RAM_WAIT_SECONDS:
+                        failure = _ram_refusal(growth, available, floor, timed_out=True)
+                    elif turn and not reservations:
+                        failure = _ram_refusal(growth, available, floor)
                 save(path, reservations)
+                save(waiting, waiters)
+            if failure:
+                raise RuntimeError(failure)
             if admitted:
+                if (job.get("progress") or {}).get("stage") == "Waiting for shared host RAM":
+                    job.pop("progress", None)
                 break
-            job["progress"] = {"stage": "Waiting for shared host RAM", "at": 0, "of": 1}
-            time.sleep(0.2)
+            if job.get("status") not in terminal:
+                job["progress"] = {"stage": "Waiting for shared host RAM", "at": 0, "of": 1}
+                time.sleep(0.2)
         yield admitted
     finally:
-        if admitted:
+        if admitted or registered:
             with locked(directory / "reservations.lock"):
-                reservations = load(path)
-                reservations.pop(token, None)
-                save(path, reservations)
+                for state in (path, waiting):
+                    entries = {key: value for key, value in load(state).items() if key != token and alive(value)}
+                    save(state, entries)
 
 
 def check_child_comfy() -> None:
@@ -407,7 +500,7 @@ def stop_job_tree(pid: int, start: str | None, *, key: str | None = None) -> boo
 
 def marked_processes(name: str, key: str) -> dict[int, str]:
     """Live exact launch identities only; neither marker values nor argv leave this module."""
-    if not key:
+    if not key or not sys.platform.startswith("linux"):
         return {}
     marker, found = (name + "=" + key).encode(), {}
     for entry in Path("/proc").iterdir():
@@ -450,12 +543,28 @@ class Manager:
         self.children: dict[str, subprocess.Popen] = {}
         self.child_leases: dict[str, dict] = {}
         self.closing = False
+        self.drain_failed = False
         self.head_uuid: str | None = None
+        self.head_index: int | None = None
         self.active = False
         self.unavailable = ""  # why this Studio manages no local GPU (no head card it can claim), said in the room
         self.key: str | None = None
         self.child = bool(os.environ.get("STUDIO_LOCAL_GPU_CHILD"))
         self._owner: str | None = None
+
+    @property
+    def managed(self) -> bool:
+        """A head lease alone must not change the ordinary single-GPU execution path."""
+        if self.child:
+            return True
+        if not self.active:
+            return False
+        if any(alive(record, "child_") for record in self.child_leases.values()):
+            return True
+        try:
+            return any(alive(record, "child_") for record in self.owned_records().values())
+        except OSError:
+            return False
 
     @property
     def owner(self) -> str:
@@ -487,6 +596,8 @@ class Manager:
         return bool(alive(record, "child_") or record.get("key") and private_processes(record["key"]))
 
     def owned_records(self) -> dict[str, dict]:
+        if not self.active or self.child:
+            return {}
         records = dict(self.child_leases)
         for path in runtime_dir().glob("GPU-*.json"):
             if UUID.fullmatch(path.stem):
@@ -495,7 +606,17 @@ class Manager:
 
     def reconcile(self, workers: list[dict]) -> list[dict]:
         """Live committed ownership cannot disappear with a lost configuration row."""
-        if self.child:
+        if self.child or not self.active:
+            return workers
+        try:
+            return self._reconcile(workers)
+        except (OSError, ValueError):
+            # Configuration is also read under the queue lock. A missing/unwritable
+            # runtime directory cannot take down the Studio's ordinary queue.
+            return workers
+
+    def _reconcile(self, workers: list[dict]) -> list[dict]:
+        if not inventory()["supported"]:
             return workers
         known = {w["address"] for w in workers}
         missing = {ident: record for ident, record in self.owned_records().items() if "local:" + ident not in known}
@@ -522,8 +643,9 @@ class Manager:
         explicit = os.environ.get("STUDIO_LOCAL_GPU_UUID", "") if self.child else raw
         if not explicit:
             explicit = os.environ.get("CUDA_VISIBLE_DEVICES", "")
-            if explicit and not explicit.isdigit():
-                return None
+            if explicit and not (UUID.fullmatch(explicit) or explicit.isdigit()
+                                 and os.environ.get("CUDA_DEVICE_ORDER") == "PCI_BUS_ID"):
+                return None  # CUDA's default ordinal order need not match nvidia-smi
         if not explicit and len(devices) > 1:
             # as spark/gpu.sh picks: the only card with memory of its own that is not driving a display. Two such
             # cards are never chosen between silently: STUDIO_GPU names the head (``unavailable`` says so)
@@ -540,6 +662,7 @@ class Manager:
             selected = next((d for d in devices if d["index"] == 0), None)
         if selected:
             self.head_uuid = selected["gpu_uuid"]
+            self.head_index = selected["index"]
         return self.head_uuid
 
     def conflict(self, ident: str) -> str:
@@ -552,11 +675,21 @@ class Manager:
             return "Another running Studio session already owns this GPU."
         return ""
 
-    def acquire_head(self, devices: list[dict]) -> None:
+    def validate_head(self, devices: list[dict]) -> dict:
         ident = self.head(devices)
-        if not ident or not any(d["gpu_uuid"] == ident and d["total_mb"] for d in devices):
+        device = next((d for d in devices if d["gpu_uuid"] == ident and d["total_mb"]), None)
+        if not device:
             raise ValueError("This Studio's own GPU is not known: with two or more compute cards, set STUDIO_GPU to the "
                              "nvidia-smi index it renders on and start the Studio again.")
+        if self.head_index is not None and device["index"] != self.head_index:
+            raise ValueError("The head GPU's index changed; restart this Studio so its memory guard follows the same card.")
+        if device.get("hidden_compute"):
+            raise ValueError("The head GPU has a compute process whose identity is hidden; local workers cannot safely start.")
+        return device
+
+    def acquire_head(self, devices: list[dict]) -> None:
+        device = self.validate_head(devices)
+        ident = device["gpu_uuid"]
         with locked(runtime_dir() / "devices.lock"):
             why = self.conflict(ident)
             if why:
@@ -570,10 +703,44 @@ class Manager:
         self.active = True
         # Every child and the head must use the same cross-process RAM ledger.
         os.environ.setdefault("STUDIO_GPU_RAM_DIR", str(ram_dir()))
+        # Lazy activation happens after Hub.start, before any managed head runner.
+        os.environ.update(STUDIO_LOCAL_GPU_KEY=self.key, STUDIO_LOCAL_GPU_UUID=ident,
+                          STUDIO_GPU=str(device["index"]), CUDA_VISIBLE_DEVICES=ident,
+                          CUDA_DEVICE_ORDER="PCI_BUS_ID")
+        self.unavailable = ""
 
     def owned(self, worker: dict) -> bool:
-        record = self.record(worker["gpu_uuid"])
+        if self.child:
+            return False
+        if self.active:
+            record = self.record(worker["gpu_uuid"])
+        else:
+            # Explicitly checking a saved worker can recover an orphan without creating/chmodding runtime dirs.
+            ident = worker["gpu_uuid"]
+            if not UUID.fullmatch(ident):
+                return False
+            directory = Path(os.environ.get("STUDIO_GPU_RUNTIME_DIR", Path.home() / ".cache/studio-gpus"))
+            record = load(directory / (ident + ".json"))
+            if not record:
+                return False
+            self._owner = self._owner or load(self.home / "sparks/local/owner.json").get("id")
+            if not self._owner:
+                return False
         return self.authorized(record) and self.occupied(record)
+
+    def guard_reason(self, worker: dict, device: dict) -> str:
+        """UUID CUDA pinning survives a reorder; a running numeric guard does not."""
+        if not self.active:
+            return ""
+        if device.get("hidden_compute"):
+            return "A compute process on this GPU has a hidden identity; its ownership cannot be checked."
+        try:
+            record = self.record(worker["gpu_uuid"])
+        except OSError:
+            return "Local GPU ownership could not be read; check the runtime directory before using this worker."
+        if self.authorized(record) and self.occupied(record) and record.get("index") != device["index"]:
+            return "This GPU's index changed; stop and start its worker so the memory guard follows the same card."
+        return ""
 
     def consumes_slot(self, worker: dict) -> bool:
         """Unticking scheduling does not make a still-running process disappear."""
@@ -598,6 +765,9 @@ class Manager:
     def devices(self, workers: list[dict], shown) -> dict:
         found = inventory()
         head = self.head(found["devices"])
+        if found["supported"] and not head:
+            self.unavailable = ("This Studio's own GPU is not known: with two or more compute cards, set STUDIO_GPU to the "
+                                "nvidia-smi index it renders on and start the Studio again.")
         workers = self.reconcile(workers)
         locals_ = {w["address"]: w for w in workers if w.get("kind") == "local"}
         managed = (1 if head else 0) + len(self.slot_ids(workers))
@@ -607,12 +777,12 @@ class Manager:
             device = {key: value for key, value in raw.items() if key not in ("compute_pids", "gpu_uuid")}
             worker = locals_.get(device["id"])
             is_head = raw["gpu_uuid"] == head
-            reason = self.conflict(raw["gpu_uuid"]) if not self.child else "Local child workers cannot manage other GPUs."
+            reason = (self.conflict(raw["gpu_uuid"]) if self.active else "") if not self.child else "Local child workers cannot manage other GPUs."
             if not reason and not raw["total_mb"]:
                 reason = "This device has no dedicated VRAM; it keeps the existing Spark path."
             if not reason and not is_head and not (worker and self.consumes_slot(worker)) and managed >= LIMIT:
                 reason = "At most four local GPUs can be managed, including the head; stop and disable another first."
-            if not reason and not is_head and raw["compute_pids"] and not (worker and self.owned(worker)):
+            if not reason and not is_head and (raw.get("hidden_compute") or raw["compute_pids"] and not (worker and self.owned(worker))):
                 reason = "An external compute workload is using this GPU; it is left running."
             device.update(head=is_head, worker=shown(worker) if worker else None, reason=reason)
             devices.append(device)
@@ -664,8 +834,8 @@ class Manager:
                     device = next((d for d in inventory(fresh=True)["devices"] if d["gpu_uuid"] == ident), None)
                     if device is None:
                         raise ValueError("This GPU UUID is no longer present")
-                if device["compute_pids"] or (not device["display_active"] and (device["used_mb"] or 0) > 1024):
-                    raise ValueError("An external GPU workload is using this card; it is left running")
+                if device["compute_pids"] or device.get("hidden_compute") or (device["used_mb"] or 0) > 1024:
+                    raise ValueError("An external or unattributed GPU workload is using this card; it is left running")
                 folder = private_dir(self.home / "sparks/local" / ident)
                 # Binding both sockets together prevents duplicate selection within this launch;
                 # the device transaction also serializes launches by other Studio heads.
@@ -689,7 +859,7 @@ class Manager:
                     for name in ("SPARK_COMFY_URL", "STUDIO_UPDATE_SESSION", "STUDIO_UPDATE_BRANCH"):
                         env.pop(name, None)
                     env.update(STUDIO_HOME=str(folder), STUDIO_PIDFILE=str(folder / "app.pid"), HOST="127.0.0.1", PORT=str(port),
-                               SPARK_COMFY_PORT=str(comfy_port), STUDIO_GPU=str(device["index"]), CUDA_VISIBLE_DEVICES=str(device["index"]),
+                               SPARK_COMFY_PORT=str(comfy_port), STUDIO_GPU=str(device["index"]), CUDA_VISIBLE_DEVICES=ident,
                                CUDA_DEVICE_ORDER="PCI_BUS_ID", STUDIO_GPU_LOCK=str(folder / "gpu.lock.d"),
                                STUDIO_LOCAL_GPU_CHILD="1", STUDIO_LOCAL_GPU_UUID=ident, STUDIO_LOCAL_GPU_KEY=key,
                                STUDIO_GPU_RAM_DIR=str(ram_dir()))
@@ -760,6 +930,8 @@ class Manager:
     def close(self, workers: list[dict]) -> bool:
         with self.mutex:
             self.closing = True
+            if self.child or not (self.active or self.children or self.child_leases):
+                return True
             identities = ({w["gpu_uuid"] for w in workers if w.get("kind") == "local"}
                           | set(self.owned_records()) | set(self.children) | set(self.child_leases))
             drained = True
@@ -769,6 +941,8 @@ class Manager:
                 except (OSError, ValueError, subprocess.TimeoutExpired):
                     drained = False
             if self.owned_records() or self.children or self.child_leases:
+                drained = False
+            if self.drain_failed:
                 drained = False
             if drained and self.active and self.head_uuid:
                 with locked(runtime_dir() / "devices.lock"):

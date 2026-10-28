@@ -46,8 +46,8 @@ async function spkPlan(node, what) { const body = { sparks: SPK.n, kind: what.ki
   let r = SPK.plans[key]; if (!r) { try { r = SPK.plans[key] = await api("/api/sparks/plan", body); } catch { return; } }
   node.replaceChildren(...spkSays(r)); }
 function spkSays(r) { if (!r.supported) return [r.says];
-  const e = r.estimate;
-  return [el("b", {}, r.count + ". "), r.says,
+  const e = r.estimate, count = r.count.replace(/[.!?]+\s*$/, ""), same = count.toLowerCase() === r.says.replace(/[.!?]+\s*$/, "").toLowerCase();
+  return [same ? "" : el("b", {}, count + ". "), r.says,
     e && r.mode === "parallel" ? " Estimate: about " + mmss(e.seconds) + " for all of them, against " + mmss(e.one_spark) + (spkLocalFleet() ? " on one worker (" : " on one Spark (") + e.faster + "x; " + e.note + ")." : "",
     r.without.length ? el("div", {}, "Not used: " + r.without.map(w => w.name + " (" + w.why + ")").join("; ") + ".") : ""]; }
 // The chooser: 1 to the limit. `what` says what is about to be queued: { kind, params, clips, seconds }.
@@ -61,7 +61,7 @@ function sparksPick(what = {}, label) { const d = SPK.data, local = spkLocalFlee
     el("div", { class: "row", style: "gap:5px;align-items:center;flex-wrap:wrap" },
       Array.from({ length: d.limit }, (_, i) => el("button", { type: "button", class: "small fit" + (SPK.n === i + 1 ? " on" : "") + (i + 1 > d.available ? " far" : ""), "aria-pressed": String(SPK.n === i + 1),
         title: i + 1 > d.available ? "Only " + d.available + " available now: " + d.available + " will be used" : (onCard() ? (i ? "this GPU and " + i + (local ? " worker" : " Spark") + (i === 1 ? "" : "s") : "this GPU") : (i + 1) + (local ? (i ? " workers" : " worker") : (i ? " Sparks" : " Spark"))), onclick: () => spkSet(i + 1) }, String(i + 1))),
-      el("button", { type: "button", class: "small fit", title: local ? "The worker list: local GPUs and remote Sparks" : "The list of Sparks: add one, check them, update and start them", onclick: () => { tab = "Sparks"; history.replaceState(null, "", "#Sparks"); render(); } }, "Sparks…")), says); }
+      el("button", { type: "button", class: "small fit", title: local ? "The worker list: local GPUs and remote Sparks" : "The list of Sparks: add one, check them, update and start them", onclick: () => { tab = "Sparks"; history.replaceState(null, "", "#Sparks"); render(); } }, local ? "Workers…" : "Sparks…")), says); }
 // The queue's own line, on every tab
 function spkQueue() { const box = document.querySelector("#sparks"); if (!box || !SPK.data) return; const d = SPK.data;
   if (spkQuiet()) { if (SPK.n !== 1) SPK.n = 1; box.style.display = "none"; box.replaceChildren(); return; }
@@ -130,6 +130,7 @@ function spkMachinesPanel() { return el("div", { class: "stack", style: "margin:
   el("div", { "data-spk-machines": "", style: "display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:12px" }, ...spkMachineCards())); }
 // Placement comes only from the overview, not browser-local labels or preferences.
 function spkPlacement(d) {
+  if (!d.workers.length) return null;
   const placement = d.placement, selected = placement ? placement.worker : "", policy = placement ? placement.policy : "require";
   const target = el("select", { "aria-label": "Default video worker", onchange: e => spkDo("/api/sparks", { placement: e.target.value ? { worker: e.target.value, policy } : null }) },
     el("option", { value: "", selected: !selected }, "Automatic"),
@@ -140,20 +141,21 @@ function spkPlacement(d) {
       return el("option", { value: w.address, selected: selected === w.address }, label);
     }));
   const mode = el("select", { "aria-label": "Video placement policy", disabled: !selected, onchange: e => spkDo("/api/sparks", { placement: { worker: selected, policy: e.target.value } }) },
-    el("option", { value: "require", selected: policy === "require" }, "Require · no fallback"),
-    el("option", { value: "prefer", selected: policy === "prefer" }, "Prefer · fallback allowed"));
-  return el("div", { class: "seg" }, el("h3", {}, "Default VIDEO placement"),
-    el("div", { class: "row" }, field("Worker", target), field("Policy", mode)),
-    el("div", { class: "note" }, "Applies to new video jobs only. Require waits for this worker, even when busy or stopped; it never reroutes. Prefer may use another worker or the head. Automatic uses the queue's worker count."));
+    el("option", { value: "require", selected: policy === "require" }, "Wait for it"),
+    el("option", { value: "prefer", selected: policy === "prefer" }, "Use another renderer"));
+  return el("div", { class: "seg" }, el("h3", {}, "Where new clips render"),
+    el("div", { class: "row" }, field("Render on", target), field("When busy or offline", mode)),
+    el("div", { class: "note" }, "New video clips only. Waiting keeps a clip on your chosen renderer, even when it is busy or stopped; it will not render elsewhere. Automatic uses the queue's worker count."));
 }
 const spkMetric = (value, unit) => value != null && Number.isFinite(Number(value)) ? Number(value).toLocaleString(undefined, { maximumFractionDigits: 1 }) + unit : "unavailable";
 function spkLocal(d) {
   const local = d.local_gpus;
   if (!local || !local.supported && !(local.devices || []).some(g => g.worker)) return null;
   const limit = local.limit || 4, devices = local.devices || [], managed = local.managed;
+  if (devices.length <= 1 && !devices.some(g => g.worker) && !local.unavailable) return null;
   return el("div", { class: "local-gpus" }, el("h3", {}, "Local GPUs"),
     local.unavailable ? el("p", { class: "note m-flat", style: "color:var(--warn)" }, "Local GPU workers are off. " + local.unavailable) : null,
-    el("div", { class: "note" }, "Manage 1–" + limit + " NVIDIA GPUs per workstation, including the head GPU. " + managed + " of " + limit + " managed; " + devices.filter(g => g.index != null).length + " detected. One render uses one GPU; VRAM is not pooled. Host RAM is shared and reserved separately."),
+    el("div", { class: "note" }, "Use up to " + limit + " NVIDIA GPUs on this computer, including the head GPU. " + managed + " of " + limit + " in use; " + devices.filter(g => g.index != null).length + " detected. One render uses one GPU; VRAM is not pooled. Host RAM is shared and reserved separately."),
     devices.length ? devices.map(g => {
       const w = g.worker, head = !!g.head, owned = !!(w && w.owned), busy = !!(w && (w.working || w.job)),
         active = owned && w.state !== "stopped", full = !head && !(w && w.enabled) && !active && managed >= limit,
@@ -184,9 +186,10 @@ function spkLocal(d) {
 function viewSparks() { const box = el("section", { class: "card" }, el("h2", {}, "Sparks")), d = SPK.data;
   if (!d) { spkLoad(true).then(() => { if (SPK.data && tab === "Sparks") render(); }); return put(box, el("div", { class: "note" }, "Loading…")), box; }
   if (!d.supported) return put(box, el("div", { class: "note" }, d.note), sparksPick()), box;
+  const local = spkLocal(d);
   if (spkQuiet()) return put(box,
-    spkLocal(d), d.placement !== undefined ? spkPlacement(d) : null, spkMachinesPanel(),
-    el("p", { class: "note m-flat" }, d.local_gpus && d.local_gpus.supported ? "Independent clips can render on separate local GPUs or remote DGX Sparks. Each render uses one GPU. Add a remote DGX Spark below when you have another machine." : "This GPU renders every clip. Add a DGX Spark when you have another one. Clips that do not have to wait on each other then run one per machine, and the number shows up on the queue."),
+    local, spkPlacement(d), spkMachinesPanel(),
+    el("p", { class: "note m-flat" }, local ? "Independent clips can render on separate local GPUs or remote DGX Sparks. Each render uses one GPU. Add a remote DGX Spark below when you have another machine." : "This GPU renders every clip. Add a DGX Spark when you have another one. Clips that do not have to wait on each other then run one per machine, and the number shows up on the queue."),
     spkAdd(d, "Add a DGX Spark")), box;
   const f = SPK.form, a = encodeURIComponent, mac = d.head === "mac", here = spkHere(d);
   if (mac && f.via === null) f.via = d.via || "";
@@ -201,7 +204,7 @@ function viewSparks() { const box = el("section", { class: "card" }, el("h2", {}
       w.disk_gb != null ? w.disk_gb + " GB of disk free" : null, w.job ? "rendering job " + w.job : null].filter(Boolean).join(" · ")),
     w.can ? el("div", { class: "note" }, "Renders: " + spkHas(w.can)) : null,
     w.why || (w.unusable && w.state === "ready") ? el("div", { class: "note", style: "color:var(--warn)" }, w.why || w.unusable) : null);
-  put(box, spkLocal(d), spkPlacement(d), el("div", { class: "note" }, (onCard() ? "A job may use this GPU, configured local GPU workers, and the DGX Sparks you add. Choose how many here, in the queue, or where you queue a job: " + here + " counts as one. Several clips render one per worker, side by side; one clip renders on one GPU. " : "A job may use more than one DGX Spark. Choose how many here, in the queue, or where you queue a job: " + here + " counts as one. Several clips render one per Spark, side by side; one clip renders on one Spark. ") + "Each remote Spark runs its own copy of this Studio, closed to the network: this app reaches it through an ssh tunnel it opens itself, so you need a key login to it as the user who runs this app."
+  put(box, local, spkPlacement(d), el("div", { class: "note" }, (onCard() ? "A job may use this GPU, configured local GPU workers, and the DGX Sparks you add. Choose how many here, in the queue, or where you queue a job: " + here + " counts as one. Several clips render one per worker, side by side; one clip renders on one GPU. " : "A job may use more than one DGX Spark. Choose how many here, in the queue, or where you queue a job: " + here + " counts as one. Several clips render one per Spark, side by side; one clip renders on one Spark. ") + "Each remote Spark runs its own copy of this Studio, closed to the network: this app reaches it through an ssh tunnel it opens itself, so you need a key login to it as the user who runs this app."
       + (mac ? " From a Mac only single FastH3 clips a Spark makes with its own settings go to a Spark (no MiniMax H3 Turbo quality, no 2x decoder preset, no text encoder file of this Mac's); the rest renders on this Mac, and the page says why. A Spark this Mac cannot reach goes through one that can (“Through”): that Spark logs in to it with its own key." : "")),
     sparksPick({ clips: 8 }, spkLocalFleet(d) ? "Workers for new jobs" : "Sparks for new jobs"),
     spkMachinesPanel(),

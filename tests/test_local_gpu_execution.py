@@ -94,12 +94,14 @@ from pathlib import Path
 import subprocess, threading, time
 import local_gpus
 root = Path(sys.argv[1])
-server.hub.local.active = True
+server.LOCAL_GPU_CHILD = True
 local_gpus.memory = lambda: (100000, 100000)
 server.stop_session_comfy = lambda: None  # no Comfy server belongs to this CPU-only regression
 external = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(25)'], start_new_session=True)
 job = {'id':'shutdown-training','kind':'train','status':'running','params':{},'outputs':[],'log':'','finished':None}
 server.jobs[job['id']] = job
+queued = {'id':'queued-director-take','kind':'video','status':'queued','params':{},'outputs':[],'log':'','source':'director'}
+server.jobs[queued['id']] = queued
 child = "from pathlib import Path; import os,sys,time; p=Path(sys.argv[1]); part=p.with_suffix('.part'); part.write_text(str(os.getpid())); part.replace(p); time.sleep(20)"
 runner = "import subprocess,sys,time; subprocess.Popen([sys.executable,'-c',sys.argv[1],sys.argv[2]],start_new_session=True); print('detached child ready',flush=True); time.sleep(20)"
 server.train_free = lambda job: ""  # no model server belongs to this isolated runner
@@ -120,6 +122,7 @@ try:
     assert local_gpus.process_identity(descendant) is None, 'detached training descendant survived shutdown'
     assert external.poll() is None, 'shutdown stopped a foreign process'
     assert job['status'] == 'cancelled' and job['finished'] is not None
+    assert queued['status'] == 'queued', 'shutdown cancelled a Director take that must resume next session'
     assert local_gpus.load(local_gpus.ram_dir()/'reservations.json') == {}
 finally:
     external.terminate()
@@ -133,7 +136,7 @@ from pathlib import Path
 import signal, time
 import local_gpus
 root = Path(sys.argv[1])
-server.hub.local.active = True
+server.LOCAL_GPU_CHILD = True
 job = {'id':'warm-server','kind':'video','status':'running','log':''}
 child = "from pathlib import Path; import os,sys,time; p=Path(sys.argv[1]); q=p.with_suffix('.part'); q.write_text(str(os.getpid())); q.replace(p); time.sleep(20)"
 runner = "import subprocess,sys,time; from pathlib import Path; subprocess.Popen([sys.executable,'-c',sys.argv[1],sys.argv[2]],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,start_new_session=True); p=Path(sys.argv[2]); end=time.monotonic()+5;\nwhile not p.exists() and time.monotonic()<end: time.sleep(.01)\nassert p.exists()"
@@ -149,3 +152,52 @@ finally:
         if identity:
             local_gpus.signal_owned(pid, identity, signal.SIGTERM)
 ''')
+
+
+def test_shutdown_deadline_returns_without_releasing_an_undrained_head_lease(tmp_path, monkeypatch):
+    import threading
+    import local_gpus
+    from test_local_gpus import gpu
+
+    monkeypatch.delenv("STUDIO_LOCAL_GPU_CHILD", raising=False)
+    monkeypatch.delenv("STUDIO_LOCAL_GPU_UUID", raising=False)
+    monkeypatch.setenv("STUDIO_GPU", "0")
+    manager = local_gpus.Manager(tmp_path / "studio", tmp_path / "pack")
+    manager.acquire_head([gpu(0)])
+    lease = manager.path(gpu(0)["gpu_uuid"])
+    assert lease.is_file()
+    monkeypatch.setattr(server.hub, "local", manager)
+    monkeypatch.setattr(server.hub, "closing", False)
+    monkeypatch.setattr(server.hub, "kick", threading.Event())
+    monkeypatch.setattr(server, "stopping", threading.Event())
+    monkeypatch.setattr(server, "wake", threading.Event())
+    monkeypatch.setattr(server, "jobs", {})
+    monkeypatch.setattr(server, "local_threads", {"undrained-take": object()})
+    monkeypatch.setattr(server.voice, "release", lambda *_: None)
+    monkeypatch.setattr(server.music, "release", lambda *_: None)
+    monkeypatch.setattr(server, "stop_session_comfy", lambda: None)
+    clock = [0.0]
+    monkeypatch.setattr(server.time, "monotonic", lambda: clock[0])
+
+    class AdvancingCondition:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_):
+            pass
+
+        def wait(self, timeout):
+            assert 0 < timeout <= 0.2
+            clock[0] = 31.0
+
+    monkeypatch.setattr(server, "local_work", AdvancingCondition())
+    try:
+        server.stop_local_jobs()
+        assert clock[0] == 31.0 and server.local_threads
+        assert manager.close([]) is False
+        assert lease.is_file(), "shutdown released ownership while GPU work had not drained"
+    finally:
+        server.local_threads.clear()
+        manager.drain_failed = False
+        manager.close([])
+    assert not lease.exists()

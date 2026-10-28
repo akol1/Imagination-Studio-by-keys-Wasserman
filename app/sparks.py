@@ -487,6 +487,14 @@ class Hub:
         for worker in found["workers"]:
             worker.setdefault("kind", "ssh")
         found["workers"] = self.local.reconcile(found["workers"])
+        local_rows = [worker for worker in found["workers"] if worker.get("kind") == "local"]
+        if local_rows:
+            devices = {device["gpu_uuid"]: device for device in local_gpus.inventory()["devices"]}
+            for worker in local_rows:
+                if device := devices.get(worker["gpu_uuid"]):
+                    # Names follow the cached inventory immediately; labels.json
+                    # remains the person's separate, stable display override.
+                    worker["name"] = f"GPU {device['index']} · {device['name']}"
         return found
 
     def keep(self, found: dict) -> None:
@@ -550,14 +558,14 @@ class Hub:
         if value is None:
             return None
         if not isinstance(value, dict) or set(value) != {"worker", "policy"}:
-            raise HTTPException(400, "placement is null or {worker, policy}")
+            raise HTTPException(400, "Choose a render worker and whether to Require or Prefer it.")
         target, policy = value["worker"], value["policy"]
         if policy not in ("require", "prefer") or not isinstance(target, str):
-            raise HTTPException(400, "placement policy is require or prefer")
+            raise HTTPException(400, "Choose a render worker, then Require it or Prefer it.")
         if target != "head" and not any(w["address"] == target for w in self.workers()):
-            raise HTTPException(400, "placement names a worker that is not in the list")
+            raise HTTPException(400, "That render worker is no longer in the list. Choose another worker.")
         if target != "head" and kind not in KINDS:
-            raise HTTPException(400, "only single video clips can be placed on a worker")
+            raise HTTPException(400, "Only single video clips can render on another worker.")
         return {"worker": target, "policy": policy}
 
     def estimate_worker(self, params: dict, placement) -> dict | None:
@@ -575,7 +583,12 @@ class Hub:
         live = self.state(worker["address"])
         why = self.usable(worker) or ("the selected worker is busy" if live["job"] or live["state"] == "busy" else "")
         info = live["info"]
-        why = why or (capable("video", params, info, self.spark) if info else "")
+        incapable = capable("video", params, info, self.spark) if info else ""
+        if incapable and selected["policy"] == "require":
+            return {"worker": {"address": worker["address"], "name": self.label_of(worker)},
+                    "memory": {"fits": False, "reason": "The required worker cannot render this clip: " + incapable},
+                    "waiting": False}
+        why = why or incapable
         if why:
             if selected["policy"] == "prefer":
                 return None
@@ -678,6 +691,12 @@ class Hub:
         """Why a worker is given no clip now ("" when it may be): switched off, not up, or rendering for someone else."""
 
         live = self.state(worker["address"])
+        if worker.get("kind") == "local" and self.local.active:
+            device = next((d for d in local_gpus.inventory()["devices"] if d["gpu_uuid"] == worker["gpu_uuid"]), None)
+            why = self.local.guard_reason(worker, device) if device else "This GPU UUID is not present; reconnect the card."
+            if why:
+                live.update(state="down", why=why, info=None)
+                return why
         if not worker.get("enabled", True):
             return "switched off"
         if live["working"]:
@@ -906,7 +925,9 @@ class Hub:
             device = next((d for d in devices if d["gpu_uuid"] == worker["gpu_uuid"]), None)
             if device is None:
                 raise OSError("This GPU UUID is not present")
-            why = self.local.conflict(worker["gpu_uuid"])
+            why = self.local.guard_reason(worker, device)
+            if not why and self.local.active:
+                why = self.local.conflict(worker["gpu_uuid"])
             if why:
                 raise OSError(why)
             self.refresh_local_name(worker, device)
@@ -930,7 +951,7 @@ class Hub:
             live.update(state="down", why=str(error)[-200:], info=None, checked=time.time())
         return live
 
-    def refresh_local_name(self, worker: dict, device: dict | None = None) -> None:
+    def refresh_local_name(self, worker: dict, device: dict | None = None) -> dict:
         """Distinct human labels follow current ordinals; stable addresses remain UUIDs."""
         if device is None:
             device = next((d for d in local_gpus.inventory()["devices"] if d["gpu_uuid"] == worker["gpu_uuid"]), None)
@@ -944,6 +965,7 @@ class Hub:
                 row["name"] = name
                 self.keep(found)
             worker["name"] = name
+        return device
 
     def rename(self, address: str, name: str) -> None:
         with self.local.mutex:
@@ -1130,6 +1152,8 @@ class Hub:
             if selected["policy"] == "require":
                 return [preferred] if preferred else []
             if preferred and not self.state(preferred)["job"]:
+                # Explicit preference precedes the count-based scheduling below;
+                # it must not silently widen a required worker's placement.
                 return [preferred]  # let the selected free worker take it before any fallback
         if self.asked(job) < 2 or here_only(job["kind"], job["params"]) or sparks.get("moves", 0) >= MOVES:
             return []
@@ -1154,6 +1178,18 @@ class Hub:
                     return True
         return False
 
+    def required_failure(self, job: dict) -> str:
+        """Temporary availability can change; an absent row or incompatible model cannot."""
+        selected = job.get("placement")
+        if not selected or selected["policy"] != "require" or selected["worker"] == "head":
+            return ""
+        worker = next((w for w in self.workers() if w["address"] == selected["worker"]), None)
+        if worker is None:
+            return "The required worker was removed from the list. Placement forbids fallback."
+        info = self.state(worker["address"])["info"]
+        why = capable(job["kind"], job["params"], info, self.spark) if info else ""
+        return f"Required worker {self.label_of(worker)} cannot render this clip: {why}. Placement forbids fallback." if why else ""
+
     def claim(self, address: str | None = None) -> dict | None:
         """The next queued job for a machine (None: this Spark), marked as running on it. Called with the queue's lock
         held. This Spark takes first what no idle worker could take, so a clip a worker can render is left to it."""
@@ -1161,6 +1197,12 @@ class Hub:
             return None
 
         ready = [self.jobs[i] for i in self.order if self.jobs[i]["status"] == "queued" and not self.waits(self.jobs[i])]
+        for queued in ready:
+            why = self.required_failure(queued)
+            if why:
+                queued.update(status="failed", error=why, finished=time.time(), progress=None)
+                queued["log"] = (queued.get("log", "") + "[sparks] " + why + "\n")[-20000:]
+        ready = [queued for queued in ready if queued["status"] == "queued"]
         if address is None:
             idle = {worker["address"] for worker in self.workers() if not self.usable(worker) and not self.state(worker["address"])["job"]}
             ours = [job for job in ready
@@ -1169,7 +1211,9 @@ class Hub:
             for queued in ready:
                 selected = queued.get("placement")
                 if selected and selected["policy"] == "require" and selected["worker"] != "head":
-                    queued["progress"] = {"stage": "Waiting for required worker " + selected["worker"], "at": 0, "of": 1}
+                    worker = next((w for w in self.workers() if w["address"] == selected["worker"]), None)
+                    name = self.label_of(worker) if worker else "the selected worker"
+                    queued["progress"] = {"stage": "Waiting for required worker " + name, "at": 0, "of": 1}
             # a clip an idle worker can render is left to it (the hub's loop hands it over); this Spark takes it once
             # its workers are busy, and takes at once what only it can render
             job = next((job for job in ours if not idle.intersection(self.team(job))), None)
@@ -1180,6 +1224,8 @@ class Hub:
         if job is None:
             return None
         job["status"], job["started"] = "running", time.time()
+        if (job.get("progress") or {}).get("stage", "").startswith("Waiting for required worker "):
+            job["progress"] = None
         job["remote"] = address
         job["spark"] = self.name if address is None else next((w.get("name") or address for w in self.workers() if w["address"] == address), address)
         if address is not None:
@@ -1195,7 +1241,12 @@ class Hub:
             if worker.get("kind") == "local" and info.get("gpu_uuid") != worker["gpu_uuid"]:
                 raise OSError("Local worker GPU UUID handshake does not match its lease")
             if worker.get("kind") == "local":
-                self.refresh_local_name(worker)
+                device = self.refresh_local_name(worker)
+                why = self.local.guard_reason(worker, device)
+                if why:
+                    self.hang_up(address)
+                    live.update(state="down", why=why, checked=time.time(), info=None)
+                    return False
         except (OSError, Refused) as error:
             live["fails"] += 1
             if live["fails"] >= 3:
@@ -1271,10 +1322,10 @@ class Hub:
         self.started = True
         devices = local_gpus.inventory()
         if devices["supported"]:
-            # Claim the physical head before any workers. Another Studio cannot take
-            # the head card as one of its children while this session is alive.
+            # Discover the head without taking a lease or changing single-card
+            # execution. Device/RAM ownership starts only with an explicit worker.
             try:
-                self.local.acquire_head(devices["devices"])
+                self.local.validate_head(devices["devices"])
             except (ValueError, OSError) as error:  # the Studio still starts, on its own card, with no local workers
                 self.local.unavailable = str(error)
                 print("[sparks] local GPU workers are off: " + str(error), file=sys.stderr, flush=True)
@@ -1473,8 +1524,13 @@ class Hub:
                 used, mode, count = 1, "one" if target_ready else "wait", name
                 says = f"Only {name} may render this clip. " + ("It waits while that worker is busy; failures never fall back." if target_ready else
                         "The job waits for that worker to become available; it never falls back to the head or another worker.")
+                failed = self.required_failure({"placement": selected, "kind": kind, "params": params})
+                if failed:
+                    mode, says = "refused", failed
             else:
-                says = f"Prefer {name} when free and capable; otherwise use the head or the other eligible workers at the chosen count."
+                says = (f"Prefer {name} when free; otherwise use another eligible worker at the chosen count."
+                        if target == "head" else
+                        f"Prefer {name} when free and capable; otherwise use the head or another eligible worker at the chosen count.")
         estimate = None
         try:  # one clip's time on one Spark: given, or the app's own measured figure for these settings
             seconds = float(body.get("seconds") or self.timing(kind, params) or 0)

@@ -40,7 +40,7 @@ def runtime(tmp_path, monkeypatch):
     monkeypatch.setenv("STUDIO_GPU_RUNTIME_DIR", str(tmp_path / "runtime"))
     monkeypatch.setenv("STUDIO_GPU_RAM_DIR", str(tmp_path / "ram"))
     monkeypatch.setenv("STUDIO_GPU", "0")
-    for name in ("STUDIO_LOCAL_GPU_CHILD", "STUDIO_LOCAL_GPU_UUID", "STUDIO_LOCAL_GPU_KEY", "CUDA_VISIBLE_DEVICES"):
+    for name in ("STUDIO_LOCAL_GPU_CHILD", "STUDIO_LOCAL_GPU_UUID", "STUDIO_LOCAL_GPU_KEY", "CUDA_VISIBLE_DEVICES", "CUDA_DEVICE_ORDER"):
         monkeypatch.delenv(name, raising=False)
     prefix = tmp_path / "prefix"
     (prefix / "venv/bin").mkdir(parents=True)
@@ -50,7 +50,7 @@ def runtime(tmp_path, monkeypatch):
 
 
 @pytest.mark.parametrize("count", [0, 1, 2, 3, 4, 5, 7])
-def test_full_inventory_all_devices_and_mixed_vram(count, monkeypatch):
+def test_full_inventory_all_devices_and_mixed_vram(count, monkeypatch, real_inventory):
     calls = []
 
     def query(argv, **options):
@@ -73,15 +73,16 @@ def test_full_inventory_all_devices_and_mixed_vram(count, monkeypatch):
 
 
 @pytest.mark.parametrize("failure", [OSError("missing"), subprocess.TimeoutExpired("nvidia-smi", 5)])
-def test_inventory_failure_is_bounded_and_unsupported(failure, monkeypatch):
+def test_inventory_failure_is_bounded_and_unsupported(failure, monkeypatch, real_inventory):
     def query(*args, **kwargs):
         raise failure
 
+    monkeypatch.setattr(local_gpus.sys, "platform", "linux")
     monkeypatch.setattr(local_gpus.subprocess, "run", query)
     assert local_gpus.inventory(fresh=True) == {"supported": False, "devices": []}
 
 
-def test_mac_never_queries_nvidia(monkeypatch):
+def test_mac_never_queries_nvidia(monkeypatch, real_inventory):
     monkeypatch.setattr(local_gpus.sys, "platform", "darwin")
     monkeypatch.setattr(local_gpus.subprocess, "run", lambda *a, **k: pytest.fail("Mac queried NVIDIA"))
     assert not local_gpus.inventory(fresh=True)["supported"]
@@ -89,6 +90,8 @@ def test_mac_never_queries_nvidia(monkeypatch):
 
 @pytest.fixture
 def launcher(runtime, monkeypatch):
+    if not sys.platform.startswith("linux"):
+        pytest.skip("local worker leases and launch identities require Linux")
     devices, states, launches, killed = [gpu(0), gpu(1), gpu(2), gpu(3), gpu(4)], {os.getpid(): "synthetic-head-start"}, [], []
     monkeypatch.setattr(local_gpus, "inventory", lambda **kwargs: {"supported": True, "devices": devices})
     monkeypatch.setattr(local_gpus, "process_identity", lambda pid: states.get(int(pid)))
@@ -132,7 +135,7 @@ def test_stable_uuid_survives_ordinal_reordering(launcher):
     devices[3]["index"] = 1
     m.start_worker(target, [])
     assert launcher.launches[0][1]["env"]["STUDIO_GPU"] == "3"
-    assert launcher.launches[0][1]["env"]["CUDA_VISIBLE_DEVICES"] == "3"
+    assert launcher.launches[0][1]["env"]["CUDA_VISIBLE_DEVICES"] == target["gpu_uuid"]
     devices[0]["index"] = 4
     assert m.head(devices) == devices[0]["gpu_uuid"]
     assert m.owned(target)
@@ -261,6 +264,7 @@ def test_child_cannot_spawn_recursively(runtime, monkeypatch):
         manager.start_worker(worker(gpu(1)), [])
 
 
+@pytest.mark.skipif(not sys.platform.startswith("linux"), reason="private runtime ownership requires POSIX Linux")
 def test_runtime_rejects_symlink(runtime):
     outside = runtime / "outside"
     outside.mkdir()
@@ -272,6 +276,8 @@ def test_runtime_rejects_symlink(runtime):
 
 @pytest.fixture
 def ram(runtime, monkeypatch):
+    if not sys.platform.startswith("linux"):
+        pytest.skip("Shared RAM admission requires Linux /proc process identities")
     monkeypatch.setattr(local_gpus, "memory", lambda: (100000, 80000))
     return local_gpus.ram_dir() / "reservations.json"
 
@@ -288,7 +294,7 @@ def test_ram_contention_waits_and_releases(ram, monkeypatch):
 
         monkeypatch.setattr(local_gpus.time, "sleep", release_room)
         with local_gpus.ram_reservation(40000, second) as admitted_second:
-            assert admitted_second and len(waited) == 1 and second["progress"]
+            assert admitted_second and len(waited) == 1 and "progress" not in second
             assert len(local_gpus.load(ram)) == 2
     assert local_gpus.load(ram) == {}
 
@@ -301,11 +307,13 @@ def test_ram_stale_pid_start_is_cleaned(ram):
 
 
 def test_ram_wait_is_cancellable_and_preserves_floor(ram, monkeypatch):
-    monkeypatch.setattr(local_gpus, "memory", lambda: (100000, 19000))
     job = {"status": "running"}
-    monkeypatch.setattr(local_gpus.time, "sleep", lambda seconds: job.update(status="cancelled"))
-    with local_gpus.ram_reservation(10000, job) as admitted:
-        assert not admitted
+    with local_gpus.ram_reservation(1000, {"status": "running"}) as first:
+        assert first
+        monkeypatch.setattr(local_gpus, "memory", lambda: (100000, 19000))
+        monkeypatch.setattr(local_gpus.time, "sleep", lambda seconds: job.update(status="cancelled"))
+        with local_gpus.ram_reservation(10000, job) as admitted:
+            assert not admitted
     assert local_gpus.load(ram) == {}
 
 
@@ -334,6 +342,7 @@ def test_ram_reservation_releases_after_error(ram):
     assert local_gpus.load(ram) == {}
 
 
+@pytest.mark.skipif(not sys.platform.startswith("linux"), reason="listener ownership requires Linux /proc")
 def test_unrelated_comfy_listener_is_refused_without_signalling(runtime, monkeypatch):
     with socket.socket() as listener:
         listener.bind(("127.0.0.1", 0))
@@ -403,6 +412,7 @@ def test_reserved_comfy_port_is_not_reused_by_another_child(launcher, monkeypatc
     assert reserved not in (record["port"], record["comfy_port"])
 
 
+@pytest.mark.skipif(not sys.platform.startswith("linux"), reason="model process ownership requires Linux /proc")
 def test_comfy_stop_uses_private_identity_not_matching_port(runtime, monkeypatch):
     proc = runtime / "synthetic-proc"
     owned_pid, external_pid = os.getpid() + 100001, os.getpid() + 100002
@@ -476,6 +486,7 @@ def test_child_cannot_serve_without_its_committed_process_identity(launcher, run
         child.register_child()
 
 
+@pytest.mark.skipif(not sys.platform.startswith("linux"), reason="head GPU leases require Linux")
 @pytest.mark.parametrize("selection", ["uuid", "unset", "multiple-visible"])
 def test_head_requires_supported_explicit_index_on_multi_gpu_host(runtime, monkeypatch, selection):
     devices = [gpu(0), gpu(1)]
@@ -492,6 +503,7 @@ def test_head_requires_supported_explicit_index_on_multi_gpu_host(runtime, monke
         manager.acquire_head(devices)
 
 
+@pytest.mark.skipif(not sys.platform.startswith("linux"), reason="managed device overview requires Linux")
 @pytest.mark.parametrize("count", [0, 1, 2, 3, 4, 5, 7])
 def test_device_overview_lists_every_physical_card(runtime, monkeypatch, count):
     devices = [gpu(i) for i in range(count)]
@@ -516,6 +528,7 @@ def test_driver_power_layouts_preserve_available_readings_and_unknowns(power, ex
     assert local_gpus.parse_inventory(xml)[0]["power_w"] == expected
 
 
+@pytest.mark.skipif(not sys.platform.startswith("linux"), reason="head GPU leases require Linux")
 @pytest.mark.parametrize("display_first", [True, False])
 def test_the_only_compute_card_beside_a_display_is_the_head_with_no_studio_gpu(runtime, monkeypatch, display_first):
     """As spark/gpu.sh picks it. With a display card at either index and no STUDIO_GPU, the Studio stopped at its start."""
@@ -529,6 +542,7 @@ def test_the_only_compute_card_beside_a_display_is_the_head_with_no_studio_gpu(r
     assert manager.active
 
 
+@pytest.mark.skipif(not sys.platform.startswith("linux"), reason="managed GPU startup requires Linux")
 def test_two_compute_cards_and_no_studio_gpu_start_the_studio_without_local_workers(runtime, monkeypatch):
     import threading
 
@@ -544,3 +558,127 @@ def test_two_compute_cards_and_no_studio_gpu_start_the_studio_without_local_work
     hub.start()  # raised ValueError out of the app's start
     assert not hub.local.active and "STUDIO_GPU" in hub.local.unavailable
     assert hub.local.devices([], lambda w: w)["unavailable"] == hub.local.unavailable
+
+
+def test_head_lease_alone_does_not_enable_managed_execution(launcher, monkeypatch):
+    manager = launcher.manager
+    manager.acquire_head(launcher.devices)
+    assert manager.active and not manager.managed
+    assert os.environ["STUDIO_LOCAL_GPU_KEY"] == manager.key
+    assert os.environ["CUDA_VISIBLE_DEVICES"] == launcher.devices[0]["gpu_uuid"]
+    target = worker(launcher.devices[1])
+    manager.start_worker(target, [])
+    assert manager.managed
+    target["enabled"] = False
+    assert manager.managed
+    manager.stop_worker(target)
+    assert not manager.managed
+    monkeypatch.setenv("STUDIO_LOCAL_GPU_CHILD", "1")
+    assert local_gpus.Manager(manager.home, manager.pack).managed
+
+
+@pytest.mark.parametrize("order", [None, "FASTEST_FIRST", "PCI_BUS_ID"])
+def test_numeric_cuda_visibility_requires_matching_device_order(runtime, monkeypatch, order):
+    monkeypatch.delenv("STUDIO_GPU", raising=False)
+    monkeypatch.setenv("CUDA_VISIBLE_DEVICES", "1")
+    if order is None:
+        monkeypatch.delenv("CUDA_DEVICE_ORDER", raising=False)
+    else:
+        monkeypatch.setenv("CUDA_DEVICE_ORDER", order)
+    manager = local_gpus.Manager(runtime / "studio", runtime / "pack")
+    assert manager.head([gpu(0), gpu(1)]) == (gpu(1)["gpu_uuid"] if order == "PCI_BUS_ID" else None)
+
+
+def test_inactive_configuration_and_shutdown_never_touch_runtime(runtime, monkeypatch):
+    import threading
+    import sparks
+
+    monkeypatch.setattr(local_gpus, "runtime_dir", lambda: pytest.fail("inactive Studio touched GPU runtime"))
+    hub = sparks.Hub(runtime / "studio", runtime / "pack", True, {}, [], threading.RLock(), threading.Event(),
+                     lambda: {}, lambda p: runtime / p, lambda j, w: None)
+    assert hub.config()["workers"] == []
+    assert not hub.local.managed
+    assert hub.close()
+
+
+def test_active_reconciliation_cannot_raise_into_queue(launcher, monkeypatch):
+    manager = launcher.manager
+    manager.active = True
+    rows = [worker(launcher.devices[1])]
+    monkeypatch.setattr(local_gpus, "runtime_dir", lambda: (_ for _ in ()).throw(PermissionError("synthetic runtime")))
+    assert manager.reconcile(rows) is rows
+
+
+def test_reordered_live_worker_keeps_uuid_pin_but_requires_guard_restart(launcher):
+    manager, device = launcher.manager, launcher.devices[1]
+    target = worker(device)
+    manager.start_worker(target, [])
+    env = launcher.launches[0][1]["env"]
+    device["index"] = 3
+    assert env["CUDA_VISIBLE_DEVICES"] == target["gpu_uuid"]
+    assert env["STUDIO_GPU"] == "1"
+    assert "stop and start" in manager.guard_reason(target, device)
+    manager.stop_worker(target)
+    manager.start_worker(target, [])
+    assert launcher.launches[-1][1]["env"]["STUDIO_GPU"] == "3"
+    assert not manager.guard_reason(target, device)
+
+
+def test_head_reorder_never_reassigns_its_numeric_guard(launcher):
+    manager = launcher.manager
+    manager.acquire_head(launcher.devices)
+    launcher.devices[0]["index"] = 1
+    launcher.devices[1]["index"] = 0
+    with pytest.raises(ValueError, match="head GPU's index changed"):
+        manager.validate_head(launcher.devices)
+    with pytest.raises(ValueError, match="head GPU's index changed"):
+        manager.start_worker(worker(launcher.devices[2]), [])
+    assert not launcher.launches
+
+
+def test_failed_head_process_drain_retains_device_lease(launcher):
+    manager = launcher.manager
+    manager.acquire_head(launcher.devices)
+    manager.drain_failed = True
+    assert not manager.close([])
+    assert manager.path(manager.head_uuid).is_file()
+
+
+def test_display_consent_does_not_authorize_unattributed_gpu_memory(launcher):
+    launcher.devices[1].update(display_active=True, used_mb=4096)
+    with pytest.raises(ValueError, match="unattributed GPU workload"):
+        launcher.manager.start_worker(worker(launcher.devices[1]), [], allow_display=True)
+    assert not launcher.launches and not launcher.killed
+
+
+@pytest.mark.parametrize("supported", [False, True])
+def test_startup_without_workers_keeps_legacy_path_and_never_touches_runtime(runtime, monkeypatch, supported):
+    import threading
+    import sparks
+
+    devices = [gpu(0, total=24000 if supported else 0)]
+    monkeypatch.setattr(local_gpus, "inventory", lambda **kw: {"supported": supported, "devices": devices})
+    monkeypatch.setattr(local_gpus, "runtime_dir", lambda: pytest.fail("ordinary startup touched local GPU runtime"))
+    hub = sparks.Hub(runtime / "studio", runtime / "pack", True, {}, [], threading.RLock(), threading.Event(),
+                     lambda: {}, lambda p: runtime / p, lambda j, w: None)
+    monkeypatch.setattr(hub, "loop", lambda: None)
+    monkeypatch.setattr(hub, "sweep", lambda: None)
+    hub.start()
+    assert hub.started and not hub.local.active and not hub.local.managed
+    assert hub.close()
+
+
+@pytest.mark.parametrize("pid,expected,hidden", [("123", [123], False), ("N/A", [], True)])
+def test_mixed_compute_process_types_and_hidden_process_identity(pid, expected, hidden):
+    xml = xml_devices(1).replace("<pid>43210</pid><type>C</type>", f"<pid>{pid}</pid><type>M+C</type>")
+    device = local_gpus.parse_inventory(xml)[0]
+    assert device["compute_pids"] == expected
+    assert device["hidden_compute"] is hidden
+
+
+@pytest.mark.parametrize("index", [0, 1])
+def test_hidden_compute_process_refuses_local_management_even_below_memory_fallback(launcher, index):
+    launcher.devices[index].update(hidden_compute=True, used_mb=32)
+    with pytest.raises(ValueError, match="hidden|unattributed"):
+        launcher.manager.start_worker(worker(launcher.devices[1]), [])
+    assert not launcher.launches and not launcher.killed

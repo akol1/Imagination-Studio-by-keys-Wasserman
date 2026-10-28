@@ -296,6 +296,10 @@ class Served:
     def loaded(self) -> bool:
         return self.process is not None and self.process.poll() is None
 
+    def ram_route(self) -> str:
+        """Identity of this native model/weight route for same-session RAM accounting."""
+        return "native:" + self.owner_tag + ":" + str(getattr(self, "weights", ""))
+
     def note(self, what: str, **more) -> None:
         self.events = (self.events + [{"at": time.time(), "what": what, **more}])[-20:]
 
@@ -408,6 +412,7 @@ class Served:
             env = self.environment()
             if SPARK:
                 env["STUDIO_GPU_MODEL_RAM"] = "1"
+                env["STUDIO_GPU_MODEL_ROUTE"] = self.ram_route()
             self.answers, self.log, self.killed, self.device_gb = queue.Queue(), [], "", None
             began, self.before_gb = time.time(), mem_available_gb()
             self.process = subprocess.Popen(self.argv(), stdin=subprocess.PIPE, stdout=subprocess.DEVNULL,

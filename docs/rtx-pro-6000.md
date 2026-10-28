@@ -64,7 +64,8 @@ What the installer does differently on this card:
 Launch one head with the same `PREFIX`, `SPARK_MODELS`, `STUDIO_HOME` and explicit numeric `STUDIO_GPU` as above.
 Then open **Machine → Sparks**:
 
-1. **Local GPUs** shows every detected card separately, including its own VRAM and current GPU readings. The head
+1. On a multi-card machine, **Local GPUs** shows each card's own VRAM and current readings. A lone card keeps the
+   existing room without worker controls. The head
    has no Start/Stop control. Another card can be started only when it has dedicated VRAM and no external compute
    workload or competing Studio ownership. A display card asks for consent.
 2. Press **Start** on an additional card. This creates a private local Studio process, app/Comfy ports, home and GPU
@@ -73,31 +74,53 @@ Then open **Machine → Sparks**:
 3. A Studio manages **four local GPUs including its head**. Extra cards remain visible; stop and disable/remove a
    worker before choosing a different subset. Unticking **use** stops new assignment, not its process, and a running
    unticked worker still occupies a slot. Missing cards remain identified by UUID, never replaced by the new occupant
-   of their old index.
-4. Set **Default VIDEO placement** to the desired card. **Require** waits while that worker is busy or stopped and
-   never falls back; a failure after dispatch fails the job explicitly. **Prefer** can use the head or another
-   eligible worker when the selected worker is unavailable or cannot fit the clip. **Automatic** uses the worker count.
+   of their old index. CUDA is pinned by UUID; the numeric index used by memory queries is checked too. After a
+   reorder, stop/start affected workers and restart the head if its own index changed.
+4. Set **Render clips on** to the desired worker. **Require** waits while that worker is busy or stopped and
+   never falls back. A removed worker or known capability refusal fails with the reason; a failure after dispatch
+   fails explicitly. **Prefer** can use the head or another eligible worker. **Automatic** uses the worker count.
 5. **Check** only refreshes status. **Stop** drains that owned worker and its model processes, leaving external
    workloads and the other GPUs alone. Quitting the head stops its local workers too. Remote Sparks remain separately
    managed through their existing SSH controls.
 
-On two cards, a useful separation is required VIDEO placement on the second GPU, with pictures and native voice/music
-on the head. This avoids the head's audio/image switches evicting the second GPU's video model. It is not a model
-preloader or a guarantee that every model remains resident: existing idle/memory guards and switches on the same card
-still apply. Only independent single video jobs move to workers; images, audio, training, exports and long/compound
-jobs remain on the head. No render spans multiple cards and their VRAM is never added together.
+On two cards, required video placement on the second GPU keeps its warm video model separate from the head's
+audio/image switches. Pictures and native voice/music remain assigned to the head; assignment does not guarantee
+concurrency. The measured plain int8 video route and sized audio/swap jobs can overlap when their shared-RAM budgets
+fit; unknown GPU work still runs exclusively. Existing idle/memory guards and switches on the same card still apply.
+Only independent single video jobs move to workers; images, audio, training, exports and long/compound jobs remain
+on the head. No render spans multiple cards and their VRAM is never added together.
 
 Optional LoRAs are per-studio, not inherited from the head's registry. Install the desired adapters into the worker's
 `<head studio>/sparks/local/<GPU UUID>` studio folder with the existing `app/loras.py install GROUP|all` CLI, using that
 folder as `STUDIO_HOME`, and press **Check**. The same authors' licences and gates apply. The scheduler checks actual
 worker capabilities and does not silently drop a missing adapter.
 
-**Shared host RAM matters even with four large cards.** Local queues coordinate through a private per-user RAM ledger;
-the existing measured peaks and error margins remain unchanged, with at least max(8 GiB, 10% of physical RAM) free.
-Already allocated anonymous RAM in this GPU session's identity-validated model servers is not counted twice; file
-cache and other GPUs are not credited. Other active GPUs still see the full peak reservation. Unmeasured GPU work is
-exclusive rather than assigned a fabricated budget. Jobs can wait for **shared host RAM** even when their card has room.
-This does not replace the per-card preflight or the runtime guards.
+**Shared host RAM matters even with four large cards.** Starting a local worker activates the head's shared-RAM
+ledger. Its default is `~/.cache/studio-gpus/ram`, with device leases beside it, independent of `XDG_RUNTIME_DIR`.
+Studios using `STUDIO_GPU_RUNTIME_DIR` / `STUDIO_GPU_RAM_DIR` overrides must share those paths to coordinate.
+The ledger keeps at least 8,192 MiB and honors a larger `memory_guard.floor_mb` / `SPARK_MEMORY_FLOOR_MB` floor.
+Identity-validated ComfyUI anonymous PSS is credited only for the same resident route (`comfy.kind`); native
+voice/music credit also requires an exact private model/weight-route marker. File cache and unrelated processes
+are never credited. Active reservations track remaining growth instead of charging allocated RAM twice.
+Unknown GPU kinds are exclusive, with FIFO admission so they cannot starve.
+A job that cannot fit without another active reservation fails with a RAM reason rather than waiting for an idle
+warm server forever; busy reservations can wait for up to two minutes. Stop an idle owned worker if its warm server
+holds needed RAM. Admission clears its waiting stage. Per-card preflight and runtime guards remain unchanged.
+
+Cold plain int8 FastH3 host-RAM measurements on one physical RTX PRO 6000 Blackwell Max-Q 96 GB card in a two-card,
+128 GB-class workstation (four passes, regular encoder; sampling through the complete render):
+
+| Clip | Peak fall in host MemAvailable | Peak owned anonymous PSS |
+|---|---:|---:|
+| 864×480, 22 frames | 34,347 MiB | 31,720 MiB |
+| 1376×768, 243 frames | 35,044 MiB | 34,813 MiB |
+
+For this route on cards with at least 96,000 MiB, no offload budget, at most 243 frames / 75,336 rows and this pixel
+area, the ledger rounds up to 36,000 MiB plus the existing 6,000 MiB error allowance. This is a bounded host-RAM
+estimate, not a VRAM subtraction or a throughput claim. Other encoders, references, LoRAs, smaller/offloaded cards
+and larger clips retain their conservative unified-memory upper bound. YuE2 uses its requested engine's guard
+route; Character Swap uses its own card/offload guard. Quitting cancels running owned work but leaves queued
+Director takes alone; drain deadlines retain ownership when processes have not stopped.
 
 **Physical smoke, not a throughput benchmark:** two RTX PRO 6000 Blackwell Max-Q 96 GB cards, 128 GB-class host RAM.
 GPU 1 rendered 864x480 FastH3 at 22 frames and four passes, producing H.264 with AAC. A cold clip took 26.04 s; the
@@ -106,6 +129,13 @@ Native MiniMax Music 3 and a 44.1 kHz PCM voice take also completed on the head.
 GPU 1 through it freed that card while preserving the resident head voice process. One run per case, not a scaling
 claim. Three/four GPUs, excess inventory, missing/reordered UUIDs and mixed capacities have deterministic test coverage;
 three/four physical cards have not been measured.
+
+**Review-revision smoke:** two cold 864×480, 124-frame clips completed on the two physical cards, with actual model
+pass progress overlapping; both files were H.264/AAC with 124 video frames. A native voice take and a second warm
+voice take completed beside worker video, preserving both model processes. The browser's worker Stop released GPU 1
+without ending GPU 0's resident voice. After stopping the last worker, quitting the head released the remaining
+native process and left device leases and RAM reservations empty. These checks establish lifecycle/concurrency
+behavior for this sample, not production throughput or four-card scaling.
 
 ## How memory works on a card
 

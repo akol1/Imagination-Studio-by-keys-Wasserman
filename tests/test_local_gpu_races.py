@@ -19,6 +19,8 @@ import local_gpus
 from test_local_gpus import gpu, worker, launcher, runtime
 from test_sparks_placement import hub, job
 
+pytestmark = pytest.mark.skipif(not sys.platform.startswith("linux"), reason="local worker process identities and leases require Linux /proc")
+
 
 class ObservedLock:
     """A real RLock with a barrier for a competing transaction, not a time-based race."""

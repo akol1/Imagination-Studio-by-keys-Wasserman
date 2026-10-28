@@ -13,6 +13,9 @@ to discover cards, start/stop owned local workers and select required/preferred 
 private loopback HTTP, not SSH, with isolated homes/ports and shared core runtime/model paths.
 [Local setup, memory rules and physical smoke evidence](rtx-pro-6000.md#one-to-four-local-gpus).
 
+Single-card studios keep their existing behavior. The head takes a GPU lease and joins shared-RAM admission only
+when an additional local worker starts. Stopping the last worker restores the head's ordinary execution path.
+
 The local limit of four includes the head. The remote-only limit remains five participants including the head;
 up to three local workers can raise the combined chooser to eight. A running local worker still counts when **use**
 is unticked. A combined fleet is labelled **Workers**; the Spark-only measurements below do not establish local/mixed
@@ -20,9 +23,10 @@ throughput. One clip is never split across workers.
 
 ## Required and preferred placement
 
-**Default VIDEO placement** is saved for new single video jobs only. It does not redirect pictures, audio,
+The saved **Render clips on** choice applies to new single video jobs only. It does not redirect pictures, audio,
 training, long videos or studio chains. **Require** waits for its target when busy/stopped and never reroutes on a
-failure. **Prefer** uses that target when free and capable, otherwise allows the normal eligible workers/head.
+failure. A removed target or a known unsupported setting fails with the reason rather than waiting indefinitely.
+**Prefer** uses that target when free and capable, otherwise allows the normal eligible workers/head.
 The selected worker's own memory guard answers preflight; a full head GPU does not veto a fitting required worker.
 
 The API accepts top-level placement on job, estimate and plan requests. Omit it to inherit the saved video default.
@@ -35,7 +39,8 @@ For a single job on the head:
 
 For another worker, use its opaque `address` from `GET /api/sparks`; do not identify a GPU by its display name or
 current index. Local addresses remain tied to their GPU UUID. Non-video placement on another worker is refused.
-Initial required-worker unavailability queues a wait; loss/refusal after dispatch fails explicitly, never on another GPU.
+Initial stopped/busy required workers queue a wait; a missing configured target, known capability refusal, or
+loss/refusal after dispatch fails explicitly, never on another GPU.
 
 ## What you need
 

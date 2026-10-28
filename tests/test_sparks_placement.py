@@ -11,7 +11,7 @@ from fastapi.testclient import TestClient
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "app"))
 import local_gpus
 import sparks
-from test_local_gpus import gpu, worker
+from test_local_gpus import gpu, worker, launcher, runtime
 
 
 @pytest.fixture
@@ -152,7 +152,8 @@ def test_worker_capability_uses_selected_card_not_head(hub):
     hub.state(address)["info"]["presets"] = ["tiny"]
     clip = job(hub, {"worker": address, "policy": "require"})
     assert hub.team(clip) == [] and hub.claim() is None
-    assert hub.plan({"placement": clip["placement"], "params": clip["params"]})["mode"] == "wait"
+    assert clip["status"] == "failed" and "Placement forbids fallback" in clip["log"]
+    assert hub.plan({"placement": clip["placement"], "params": clip["params"]})["mode"] == "refused"
 
 
 def test_automatic_remote_spark_behavior_is_unchanged(hub):
@@ -399,3 +400,60 @@ def test_local_overview_keeps_labels_status_and_uuid_placement_together(hub, mon
     clip = job(hub, selected)
     assert hub.claim(local["address"]) is clip
     assert clip["remote"] == local["address"] and clip["spark"] == local["name"]
+
+
+def test_required_progress_uses_label_and_clears_when_worker_claims(hub):
+    address = target(hub)
+    (hub.folder / "labels.json").write_text(json.dumps({address: "Second card"}))
+    hub.state(address).update(state="busy", job="another-clip")
+    clip = job(hub, {"worker": address, "policy": "require"})
+    assert hub.claim() is None
+    assert clip["progress"]["stage"] == "Waiting for required worker Second card"
+    assert "GPU-" not in clip["progress"]["stage"]
+    hub.state(address).update(state="ready", job=None)
+    assert hub.claim(address) is clip and clip["progress"] is None
+
+
+def test_removed_required_worker_fails_instead_of_waiting(hub):
+    address = target(hub)
+    clip = job(hub, {"worker": address, "policy": "require"})
+    found = hub.config()
+    found["workers"] = [row for row in found["workers"] if row["address"] != address]
+    hub.keep(found)
+    assert hub.claim() is None
+    assert clip["status"] == "failed" and clip["finished"]
+    assert "removed from the list" in clip["log"] and "Placement forbids fallback" in clip["log"]
+
+
+def test_missing_required_lora_fails_queue_and_preflight(hub):
+    address = target(hub)
+    clip = job(hub, {"worker": address, "policy": "require"})
+    clip["params"]["loras"] = [{"id": "synthetic-style"}]
+    estimate = hub.estimate_worker(clip["params"], clip["placement"])
+    assert estimate["memory"]["fits"] is False and not estimate["waiting"]
+    assert "LoRA synthetic-style" in estimate["memory"]["reason"]
+    assert hub.claim(address) is None and clip["status"] == "failed"
+    assert "LoRA synthetic-style" in clip["log"]
+
+
+def test_reordered_live_worker_is_down_before_any_clip_is_dispatched(hub, launcher):
+    device = launcher.devices[1]
+    row = hub.workers()[1]
+    hub.local = launcher.manager
+    hub.local.start_worker(row, hub.workers())
+    device["index"] = 3
+    launcher.devices[3]["index"] = 1
+    assert hub.check_local(row)["state"] == "down"
+    assert "index changed" in hub.state(row["address"])["why"]
+    clip = job(hub, {"worker": row["address"], "policy": "require"})
+    assert hub.claim(row["address"]) is None and hub.claim() is None
+    assert clip["status"] == "queued"
+
+
+def test_inventory_refreshes_ordinal_names_without_check_or_runtime_writes(hub, monkeypatch):
+    address = target(hub)
+    devices = [gpu(0), gpu(1), gpu(2)]
+    devices[1]["index"], devices[2]["index"] = 2, 1
+    monkeypatch.setattr(local_gpus, "inventory", lambda **kw: {"supported": True, "devices": devices})
+    monkeypatch.setattr(local_gpus, "runtime_dir", lambda: pytest.fail("inactive overview touched runtime"))
+    assert next(row for row in hub.overview()["workers"] if row["address"] == address)["name"].startswith("GPU 2 ·")

@@ -1788,7 +1788,7 @@ RAN_ON = re.compile(r"\[tensorfold\] engine: (\w+)")
 def run(job: dict, command: list[str], env: dict, label: str = "") -> bool:
     """Run one script for ``job``, following its progress; False when cancelled."""
 
-    managed = SPARK and (LOCAL_GPU_CHILD or hub.local.active)
+    managed = SPARK and (LOCAL_GPU_CHILD or hub.local.managed)
     child_env = environment(env)
     job_key = uuid.uuid4().hex if managed else None
     if job_key:
@@ -1818,9 +1818,9 @@ def run(job: dict, command: list[str], env: dict, label: str = "") -> bool:
     finally:
         # Successful scripts leave ComfyUI warm; only aborted/failed runner trees are drained here.
         if managed and (process.poll() != 0 or job["status"] == "cancelled"):
-            while not local_gpus.stop_job_tree(process.pid, start, key=job_key):
-                job["progress"] = {"stage": "Waiting for owned job processes to exit", "at": 0, "of": 1}
-                time.sleep(0.2)  # keep RAM admission and device ownership while a driver still holds the process
+            if not local_gpus.stop_job_tree(process.pid, start, key=job_key):
+                hub.local.drain_failed = True
+                raise RuntimeError("Owned job processes did not stop; their GPU lease is retained.")
         elif process.poll() is None:
             with contextlib.suppress(ProcessLookupError, OSError):
                 os.killpg(process.pid, signal.SIGKILL)
@@ -1832,10 +1832,10 @@ def run(job: dict, command: list[str], env: dict, label: str = "") -> bool:
     if job["status"] == "cancelled":
         return False
     if code:
+        # The script's own last words explain a refusal better than the runner's exit status.
         said = [line.strip() for line in job["log"].splitlines() if line.strip() and not STEP.search(line)]
         raise RuntimeError((said[-1][-400:] if said else "the script stopped") + f" (status {code})")
     return True
-
 
 
 def take(job: dict, params: dict, label: str = "") -> tuple[bool, dict, list[str]]:
@@ -2006,6 +2006,14 @@ def long_take(job: dict) -> bool:
     return True
 
 
+# Cold host-RAM high-water on a 96 GB RTX PRO 6000 Blackwell card in a two-card 128 GB host,
+# sampled through the complete render: 34,347 MiB at 864x480/22 frames and 35,044 MiB
+# at 1376x768/243 frames (plain TensorFold int8 FastH3, four passes, regular encoder).
+# Round above both observations and retain the guard's full 6 GB error margin.
+# Other routes, smaller/offloaded cards and larger clips keep the unified upper bound.
+LOCAL_VIDEO_HOST_MB = 36000
+
+
 def local_ram_need(job: dict) -> int | None:
     """Conservative shared-host reservations from existing peaks; unmeasured GPU jobs run exclusively."""
     kind, params = job["kind"], job["params"]
@@ -2017,13 +2025,23 @@ def local_ram_need(job: dict) -> int | None:
         frames = lengths.of({"frames": params.get("frames"), "seconds": min(float(params.get("seconds") or 5), LONGEST)})
         found = references(params) if kind == "video" else None
         room = memory_of(params, sized, frames, bool(params.get("loras")), found)
+        card = memory_guard.device()
+        if (room.get("route") == "int8" and card and card["total_mb"] >= 96000
+                and memory_guard.room_budget_mb() is None and not found and not params.get("loras")
+                and not params.get("text_encoder") and os.environ.get("TEXT_ENCODER", "regular") in ("", "regular")
+                and os.environ.get("SPARK_ENGINE", "tensorfold") == "tensorfold"
+                and sized.get("SPARK_BASE") != "h3" and os.environ.get("SPARK_BASE") != "h3"
+                and frames <= 243 and (room.get("rows") or 0) <= 75336
+                and int(sized.get("WIDTH") or 864) * int(sized.get("HEIGHT") or 480) <= 1376 * 768):
+            return LOCAL_VIDEO_HOST_MB + memory_guard.ERROR_MB
     elif kind == "voice":
         return int(voice.backend().NEED_GB * 1024)
     elif kind == "music":
-        room = memory_guard.music_check(float(params.get("seconds") or 60),
-                                         route=getattr(music.engine(), "guard_route", "music"))
+        room = memory_guard.music_check(float(params.get("seconds") or 60), route=music.guard_route(params))
     elif kind in sound.KINDS:
         room = memory_guard.sound_check(kind, float(params.get("seconds") or 10))
+    elif kind in swap.KINDS:
+        room = memory_guard.swap_check(int(params.get("quality") or swap.QUALITY), weights=swap_build.weights())
     elif kind in train.KINDS:
         return int(train.NEED_GB * 1024)
     else:
@@ -2033,7 +2051,7 @@ def local_ram_need(job: dict) -> int | None:
 
 def perform(job: dict, worker: dict | None = None) -> None:
     """Reserve shared RAM for local execution and drain managed jobs before releasing ownership."""
-    managed = SPARK and (LOCAL_GPU_CHILD or hub.local.active)
+    managed = SPARK and (LOCAL_GPU_CHILD or hub.local.managed)
     if not managed:
         return perform_job(job, worker)
     current = threading.current_thread()
@@ -2046,7 +2064,40 @@ def perform(job: dict, worker: dict | None = None) -> None:
     try:
         if worker is not None or job.get("remote") or job["kind"] in ("export", "soundtrack", "finish", "graphics"):
             return perform_job(job, worker)
-        with local_gpus.ram_reservation(local_ram_need(job), job) as admitted:
+        if not LOCAL_GPU_CHILD:
+            hub.local.validate_head(local_gpus.inventory()["devices"])
+        params = job["params"]
+        kind = job["kind"]
+        # Release this card's incompatible idle engines before counting new growth, not after admission.
+        if kind != "voice":
+            voice.release(f"a {kind} job needs the GPU")
+        if kind != "music":
+            music.release(f"a {kind} job needs the GPU")
+        route, native = None, None
+        if kind == "voice":
+            native = voice.backend()
+        elif kind == "music":
+            selected = music.engine(params.get("engine") or "music3")
+            for loaded in music.loaded_engines():
+                if loaded is not selected:
+                    loaded.release("another song engine needs the GPU")
+            native = selected if isinstance(selected, voice.Served) else None
+        if native is not None:
+            route = native.ram_route()
+            local_gpus.stop_child_comfy()  # only this private GPU session, never another card's warm model
+        elif kind in ("video", "long") and not (params.get("references") or params.get("reference_videos")
+                                                     or params.get("reference_audios") or params.get("loras")
+                                                     or params.get("base") == "h3"):
+            encoder = params.get("text_encoder") or "regular"
+            route = "video" + ("+" + encoder if encoder != "regular" else "")
+        need = local_ram_need(job)
+        total, available = local_gpus.memory()
+        if need is not None and available - need + local_gpus.model_ram_mb(route) < memory_guard.floor_mb(total):
+            # A different warm Comfy route on this card is releasable; idle servers on other cards are not ours.
+            local_gpus.stop_child_comfy()
+            if native is not None and native.loaded() and not local_gpus.model_ram_mb(route):
+                native.release("shared host RAM requires loading under the current GPU session")
+        with local_gpus.ram_reservation(need, job, route=route) as admitted:
             if admitted and job["status"] != "cancelled":
                 if LOCAL_GPU_CHILD:
                     local_gpus.check_child_comfy()
@@ -2060,7 +2111,6 @@ def perform(job: dict, worker: dict | None = None) -> None:
         with local_work:
             local_threads.discard(current)
             local_work.notify_all()
-
 
 
 def perform_job(job: dict, worker: dict | None = None) -> None:
@@ -2468,16 +2518,15 @@ def cancel(job_id: str) -> dict:
         start, key = running.get("start"), running.get("key")
     if active:
         if process is not None:
-            if SPARK and (LOCAL_GPU_CHILD or hub.local.active):
+            if SPARK and (LOCAL_GPU_CHILD or hub.local.managed or key):
                 local_gpus.stop_job_tree(process.pid, start, key=key)
             else:
                 with contextlib.suppress(ProcessLookupError):
                     os.killpg(process.pid, signal.SIGTERM)
             if SPARK and job["kind"] not in NOT_ON_COMFY:
                 stop_comfy(job)
-        hub.kick.set()
+        hub.kick.set()  # a worker's render loop sees the cancelled job and interrupts its own prompt
     return public(job)
-
 
 
 NOT_ON_COMFY = ("voice", "export", "soundtrack", "qa", "train", "finish", "graphics")  # jobs a Spark runs without its ComfyUI server
@@ -3160,8 +3209,7 @@ if not LOCAL_GPU_CHILD:
     app.router.on_startup.append(updater.start)
     app.router.on_shutdown.append(updater.stop.set)
 if hasattr(app.router, "on_shutdown"):
-    app.router.on_shutdown.append(lambda: stop_local_jobs())
-    app.router.on_shutdown.append(bolt.shutdown)
+    app.router.on_shutdown.append(bolt.shutdown)  # the brain server belongs to this app session
     app.router.on_shutdown.append(hub.close)
 import telemetry  # noqa: E402  (this machine's readings for the status bar: GPU, memory, disk, queue, beside this file)
 TELEMETRY = telemetry.attach(HOME, jobs, order, lock, memory_guard, engines=lambda: {"bolt": bolt.summary()})
@@ -3206,19 +3254,21 @@ if not media_tools()["ffmpeg"]:
     print("[studio] " + FFMPEG_NOTE, flush=True)
 
 def stop_local_jobs() -> None:
-    """Drain this managed session before its GPU leases or shared RAM can be released."""
-    if not SPARK or not (LOCAL_GPU_CHILD or hub.local.active):
-        return
+    """Drain running managed work, without cancelling the Director's queued takes."""
     stopping.set()
     hub.quiesce()
     with lock:
-        pending = [job["id"] for job in jobs.values() if job["status"] in ("queued", "running")]
+        pending = [job["id"] for job in jobs.values() if job["status"] == "running"]
     for job_id in pending:
         cancel(job_id)
     wake.set()
+    deadline = time.monotonic() + 30
     with local_work:
-        while local_threads:
-            local_work.wait(0.2)
+        while local_threads and time.monotonic() < deadline:
+            local_work.wait(min(0.2, max(0, deadline - time.monotonic())))
+        if local_threads:
+            hub.local.drain_failed = True
+            print("[studio] Owned jobs did not finish shutdown within 30 s; their GPU leases are retained.", flush=True)
     voice.release("the Studio session is ending")
     music.release("the Studio session is ending")
     stop_session_comfy()
@@ -3271,6 +3321,16 @@ def stop_session_comfy() -> None:
         print("[studio] ComfyUI stopped", flush=True)
 
 
+def register_session_stop() -> None:
+    """Only the running app owns engine shutdown; workers may start after app startup."""
+    def stop():
+        if SPARK and (LOCAL_GPU_CHILD or hub.local.managed or getattr(hub.local, "active", False) or local_threads):
+            stop_local_jobs()
+        else:
+            stop_session_comfy()
+    app.router.on_shutdown.insert(0, stop)
+
+
 if __name__ == "__main__":
     import uvicorn
 
@@ -3293,8 +3353,7 @@ if __name__ == "__main__":
         if not os.environ.get("STUDIO_PIDFILE"):
             caption_router.captioner["start"]()
         director.resume_later()
-    if not SPARK or not (LOCAL_GPU_CHILD or hub.local.active):
-        app.router.on_shutdown.append(stop_session_comfy)
+    register_session_stop()
 
     # Update authorization needs the actual socket peer. Tailscale Serve forwards the browser's IP,
     # but its authenticated local proxy is the peer allowed to manage this loopback installation.

@@ -14,6 +14,7 @@ HARNESS = r"""
 const vm = require("vm"), fs = require("fs");
 globalThis.S = { platform: "spark", platform_label: "CUDA · NVIDIA synthetic GPU" };
 globalThis.tab = "Sparks"; globalThis.render = () => {}; globalThis.toasts = [];
+globalThis.history = { replaceState: (state, title, url) => { globalThis.locationHash = url; } };
 globalThis.toast = message => toasts.push(message); globalThis.mmss = seconds => seconds + " s";
 globalThis.localStorage = { getItem: () => null, setItem() {} };
 globalThis.document = { querySelector: () => null, activeElement: { matches: () => false } };
@@ -66,15 +67,14 @@ def run(code):
     return json.loads(done.stdout.strip().splitlines()[-1])
 
 
-@pytest.mark.parametrize("count", [1, 2, 3, 4])
-def test_one_to_four_cards_show_independent_memory_and_head_controls(count):
+@pytest.mark.parametrize("count", [2, 3, 4])
+def test_multiple_cards_show_independent_memory_and_head_controls(count):
     out = run(f"""SPK.data = fixture({count}); const page = viewSparks();
       out.count = cards(page).length; out.page = text(page); out.head = text(cards(page)[0]);
       out.headStop = !!button(cards(page)[0], "Stop"); out.headStart = !!button(cards(page)[0], "Start");
       out.starts = cards(page).slice(1).map(card => !!button(card, "Start") && !button(card, "Start").attrs.disabled);
       out.models = text(page).includes("Models:");""")
     assert out["count"] == count
-    assert "Manage 1–4" in out["page"] and "including the head GPU" in out["page"]
     assert "VRAM is not pooled" in out["page"] and "Host RAM is shared" in out["page"]
     assert "24,576 MiB" in out["head"] and "23,552 MiB" in out["head"]
     assert "0%" in out["head"] and "39 °C" in out["head"] and "35 W" in out["head"]
@@ -100,12 +100,10 @@ def test_absent_telemetry_is_unavailable_not_zero_and_job_state_is_reported():
     out = run("""SPK.data = fixture(2); const gpu = SPK.data.local_gpus.devices[1];
       for (const key of ["used_mb", "free_mb", "total_mb", "util_pct", "temp_c", "power_w", "display_active"]) gpu[key] = null;
       gpu.worker = worker(gpu, { job: "job-synthetic" }); SPK.data.workers = [gpu.worker];
-      out.card = text(cards(viewSparks())[1]);
-      SPK.data.local_gpus.devices = []; out.empty = text(spkLocal(SPK.data));""")
+      out.card = text(cards(viewSparks())[1]);""")
     assert out["card"].count("unavailable") == 7
     assert "0%" not in out["card"] and "null" not in out["card"] and "NaN" not in out["card"]
     assert "Models:" not in out["card"] and "Job: job-synthetic" in out["card"]
-    assert "No NVIDIA GPUs detected" in out["empty"]
 
 
 def test_local_actions_use_stable_gpu_identity_and_only_owned_workers_can_stop():
@@ -154,7 +152,6 @@ def test_video_placement_persists_address_and_require_prefer_not_display_label()
     assert out["required"] == {"worker": out["id"], "policy": "require"}
     assert out["preferred"] == {"worker": out["id"], "policy": "prefer"}
     assert out["head"] == {"worker": "head", "policy": "prefer"} and out["automatic"] is None
-    assert "Require · no fallback" in out["policyText"] and "Prefer · fallback allowed" in out["policyText"]
     assert all(call[0] == "/api/sparks" and list(call[1]) == ["placement"] for call in out["calls"])
 
 
@@ -193,7 +190,8 @@ def test_stopped_workers_can_be_removed_and_use_toggle_preserves_gpu_identity():
 
 
 def test_failed_placement_save_keeps_overview_as_the_source_of_truth():
-    out = run("""SPK.data = fixture(1); answers["/api/sparks"] = new Error("Placement was not saved");
+    out = run("""SPK.data = fixture(2); const gpu = SPK.data.local_gpus.devices[1];
+      gpu.worker = worker(gpu); SPK.data.workers = [gpu.worker]; answers["/api/sparks"] = new Error("Placement was not saved");
       await select(viewSparks(), "Default video worker").attrs.onchange({ target: { value: "head" } });
       out.placement = SPK.data.placement; out.toast = toasts.pop();
       out.selected = select(viewSparks(), "Default video worker").kids.filter(o => o.attrs.selected).map(o => o.attrs.value);""")
@@ -227,27 +225,26 @@ def test_running_disabled_worker_still_occupies_capacity_but_can_be_reenabled():
     assert out["changed"][1] == {"enabled": True}
 
 
-def test_local_fleet_uses_worker_labels_without_changing_sparks_tab_or_remote_wording():
+def test_worker_chooser_opens_fleet_and_keeps_combined_and_remote_limits():
     out = run("""SPK.data = fixture(4); const d = SPK.data;
       for (const gpu of d.local_gpus.devices.slice(1)) { gpu.worker = worker(gpu); d.workers.push(gpu.worker); }
       d.limit = 8; d.available = 4; d.listed = 4; d.local_gpus.managed = 4; SPK.n = 4;
       const queue = el("div"); queue.style = {}; document.querySelector = selector => selector === "#sparks" ? queue : null;
       const pick = sparksPick(); spkQueue();
-      out.label = text(all(pick, n => n.tag === "label")[0]); out.queue = text(queue); out.count = spkCount(d, 4);
       out.choices = all(pick, n => n.tag === "button" && /^[1-8]$/.test(text(n))).length;
-      out.twoTitle = button(pick, "2").attrs.title; out.page = text(viewSparks());
-      out.tab = text(all(viewSparks(), n => n.tag === "h2")[0]);
-      out.plan = text(spkSays({ supported: true, count: "4 workers", says: "one clip per worker", mode: "parallel", without: [], estimate: { seconds: 20, one_spark: 80, faster: 4, note: "estimate" } }));
+      tab = "Home"; button(pick, "Workers…").attrs.onclick(); out.destination = [tab, locationHash];
+      await button(pick, "8").attrs.onclick(); out.requested = calls.pop(); out.selected = SPK.n;
+      out.count = spkCount(d, 4);
       delete d.local_gpus; d.workers = [{ kind: "ssh", address: "worker@example.invalid", name: "Remote", enabled: true, state: "ready" }];
       d.available = 2; d.limit = 5; SPK.n = 2; spkQueue();
-      out.remoteLabel = text(all(sparksPick(), n => n.tag === "label")[0]); out.remoteQueue = text(queue); out.remoteCount = spkCount(d, 2);
+      const remote = sparksPick(); out.remoteChoices = all(remote, n => n.tag === "button" && /^[1-8]$/.test(text(n))).length;
+      tab = "Home"; button(remote, "Sparks…").attrs.onclick(); out.remoteDestination = [tab, locationHash];
+      out.remoteCount = spkCount(d, 2);
       S.platform = "mac"; d.this.kind = "Mac"; out.macCount = spkCount(d, 2);""")
-    assert out["label"] == "Workers" and out["choices"] == 8
-    assert out["count"] == "this GPU and 3 workers" and out["twoTitle"] == "this GPU and 1 worker"
-    assert "Workers" in out["queue"] and "one per worker" in out["queue"]
-    assert out["tab"] == "Sparks" and "Workers for new jobs" in out["page"] and "Manage 1–4" in out["page"]
-    assert "on one worker" in out["plan"] and "on one Spark" not in out["plan"]
-    assert out["remoteLabel"] == "Sparks" and "one per Spark" in out["remoteQueue"]
+    assert out["choices"] == 8 and out["remoteChoices"] == 5
+    assert out["destination"] == ["Sparks", "#Sparks"] and out["remoteDestination"] == ["Sparks", "#Sparks"]
+    assert out["selected"] == 8 and out["requested"] == ["/api/sparks", {"sparks": 8}, "POST"]
+    assert out["count"] == "this GPU and 3 workers"
     assert out["remoteCount"] == "this GPU and 1 Spark" and out["macCount"] == "2 of 2 available Sparks"
 
 
@@ -326,3 +323,54 @@ def test_machine_panel_survives_quiet_gpu_and_no_inventory_fallback():
     assert "Each machine" in out["fallback"] and "Solo renderer" in out["fallback"]
     assert out["cards"] == 0 and "Local GPUs" not in out["fallback"]
     assert "No compatible GPU" in out["unsupported"] and "Loading…" in out["loading"]
+
+
+@pytest.mark.parametrize("platform,kind,label", [
+    ("spark", "GPU", "CUDA · NVIDIA synthetic GPU"),
+    ("spark", "Spark", "DGX SPARK"),
+    ("mac", "Mac", "Apple synthetic"),
+])
+def test_no_worker_machines_have_no_placement_controls(platform, kind, label):
+    out = run(f"""SPK.data = fixture(1); const d = SPK.data;
+      S.platform = {json.dumps(platform)}; S.platform_label = {json.dumps(label)}; d.this.kind = {json.dumps(kind)};
+      if (d.this.kind !== "GPU") delete d.local_gpus;
+      const page = viewSparks(); out.placement = !!select(page, "Default video worker");
+      out.policy = !!select(page, "Video placement policy"); out.cards = cards(page).length;""")
+    assert not out["placement"] and not out["policy"] and out["cards"] == 0
+
+
+def test_single_card_keeps_simple_render_surface_and_inventory_adds_controls():
+    out = run("""SPK.data = fixture(1);
+      const queue = el("div"); queue.style = {}; document.querySelector = selector => selector === "#sparks" ? queue : null;
+      SPK.n = 4; spkQueue(); let page = viewSparks();
+      out.solo = text(page); out.cards = cards(page).length; out.pick = sparksPick();
+      out.queueHidden = queue.style.display === "none" && queue.kids.length === 0; out.count = SPK.n;
+      out.add = !!button(page, "Add");
+      SPK.data = fixture(2); page = viewSparks();
+      out.inventory = cards(page).length; out.start = !!button(cards(page)[1], "Start");
+      out.placement = !!select(page, "Default video worker");""")
+    assert "This GPU renders every clip" in out["solo"] and "Local GPUs" not in out["solo"]
+    assert out["cards"] == 0 and out["pick"] is None and out["queueHidden"] and out["count"] == 1
+    assert out["add"] and out["inventory"] == 2 and out["start"] and not out["placement"]
+
+
+def test_plan_summary_does_not_repeat_the_same_message_or_add_double_periods():
+    out = run("""SPK.data = fixture(1);
+      out.single = text(spkSays({ supported: true, count: "This GPU alone.", says: "This GPU alone.", without: [] })).trim();
+      out.other = text(spkSays({ supported: true, count: "This GPU alone.", says: "One clip renders here.", without: [] })).trim();""")
+    assert out["single"] == "This GPU alone."
+    assert out["other"].count("This GPU alone") == 1 and ".." not in out["other"]
+    assert "One clip renders here." in out["other"]
+
+
+def test_reordered_inventory_updates_gpu_labels_without_changing_saved_worker():
+    out = run("""SPK.data = fixture(2); const d = SPK.data, gpu = d.local_gpus.devices[1];
+      gpu.worker = worker(gpu); d.workers = [gpu.worker]; d.placement = { worker: gpu.id, policy: "require" };
+      const updated = JSON.parse(JSON.stringify(d)); updated.local_gpus.devices[1].index = 3;
+      const draws = []; globalThis.render = () => draws.push(true); answers["/api/sparks"] = updated;
+      await spkLoad(true); const page = viewSparks(), target = select(page, "Default video worker");
+      out.selected = target.kids.filter(o => o.attrs.selected).map(o => [o.attrs.value, text(o)]);
+      out.card = text(cards(page)[1]); out.id = gpu.id; out.draws = draws.length;""")
+    assert out["draws"] == 1
+    assert out["selected"] == [[out["id"], "GPU 3 · Synthetic GPU 1"]]
+    assert "GPU 3" in out["card"] and "GPU 1 ·" not in out["card"]
