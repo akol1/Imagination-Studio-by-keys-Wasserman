@@ -198,12 +198,14 @@ the clone and restart the app; `--swap` installs fetch the int8 Ref2VA they run 
   cut still ends with its counts; the cast's and places' stills use a picture model this machine has (FLUX3-K Fast on
   a Spark without Qwen), only for who and where the shots show; a written age is not followed by "years old", and a
   brain's None or N/A never reaches a prompt.
-- **YuE2**: its refusal gives both figures to a tenth of a gigabyte, a failed song leaves no score folder and its
+- **YuE2**: its refusals (when it loads and when it is queued) give the figures to a tenth of a gigabyte, and on a
+  card name the card and `STUDIO_ROOM_MB`; a song cancelled while Whisper listens leaves no take behind, a failed song leaves no score folder and its
   server gives back PyTorch's cache, the Music tab says why YuE2 is not offered where it is not (a Mac), and an RTX
   machine is told its own installer. Its engine build checks Zig's SHA-256 and tests on the GPU only when it is idle.
 - **The Library** lists failed takes however a project file is shaped (a hand-edited one gave a 500).
 - **Repo**: no machine's paths or job owners in the receipts; tiktoken, the Qwen team's `qwen.tiktoken` and Openjutsu
-  credited in CREDITS.md and Settings; tests that read the machine they ran on stand in for it.
+  credited in CREDITS.md and Settings; tests that read the machine they ran on stand in for it, and none of them
+  starts a real render or ComfyUI, or mistakes a studio already running beside them for their own.
 
 ## New in 4.1.0 (2026-10-27)
 

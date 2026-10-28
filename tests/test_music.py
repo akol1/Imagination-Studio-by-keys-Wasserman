@@ -793,3 +793,23 @@ if __name__ == "__main__":
         if name.startswith("test_"):
             test()
             print("ok", name)
+
+
+def test_a_song_cancelled_as_its_engine_finishes_leaves_no_take(monkeypatch):
+    """Cancelled after the engine wrote the song (YuE2 at its Whisper stage): the job said cancelled, the song stayed."""
+
+    class Finishing:
+        name = "stand-in"
+
+        def make(self, job, params, wav):
+            wav.write_bytes(b"RIFF")
+            wav.with_suffix(".yue2").mkdir(exist_ok=True)
+            job["status"] = "cancelled"  # the cancel lands while the engine hands the song back
+            return {"audio_s": 1.0}
+
+    monkeypatch.setattr(music, "engine", lambda chosen: Finishing())
+    monkeypatch.setattr(music, "loaded_engines", lambda: [])
+    job = {"id": "test-cancel-at-the-end", "status": "running", "params": {"caption": "pop", "lyrics": "", "seconds": 10, "seed": 1}}
+    assert music.perform(job) is False
+    wav = music.HOME / "music" / f"{job['id']}.wav"
+    assert not wav.exists() and not wav.with_suffix(".yue2").exists() and not wav.with_suffix(".take.json").exists()

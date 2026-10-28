@@ -943,7 +943,7 @@ def perform(job: dict) -> bool:
     except BaseException:
         forget_song(wav)
         raise
-    if measured is None:
+    if measured is None or job.get("status") == "cancelled":  # cancelled while the engine was finishing: no take
         forget_song(wav)
         return False
     if not wav.is_file():
@@ -971,6 +971,9 @@ def perform(job: dict) -> bool:
             take["asr"] = {"skipped": str(error)[-200:]}
     elif params.get("asr") and sung(params["lyrics"]):
         take["asr"] = {"skipped": "no speech-to-text tool on this machine (pip install faster-whisper)"}
+    if job.get("status") == "cancelled":  # cancelled while Whisper listened
+        forget_song(wav)
+        return False
     wav.with_suffix(".take.json").write_text(json.dumps(take, indent=1) + "\n")
     job["outputs"] = [take["path"]]
     job["music"] = take

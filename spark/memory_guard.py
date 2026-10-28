@@ -85,7 +85,6 @@ FPS, STEP, BASE, SHORTEST, LONGEST = 24, 17, 5, 22, 362
 SIZES = ((864, 480), (1280, 736), (1344, 768), (1376, 768))
 # What an idle Spark keeps for itself (measured: 124.5 GB in all, 118.7 GB available with nothing running).
 IDLE_MB = 6000
-PORT = os.environ.get("SPARK_COMFY_PORT", "8190")
 # route -> (MB with the models loaded and no rows, MB per thousand rows). See the table above.
 ESTIMATES = {"int8": (54_500, 215), "int8-lora": (54_500, 215), "bf16": (75_000, 47)}
 ERROR_MB = 6000
@@ -210,7 +209,8 @@ def state_file() -> str:
 def server_pid() -> int | None:
     """The ComfyUI server of spark/comfy.sh on this machine, if one runs (by its command line, as comfy.sh finds it)."""
 
-    wanted = b"\x00".join([b"main.py", b"--listen", b"127.0.0.1", b"--port", PORT.encode(), b""])
+    port = os.environ.get("SPARK_COMFY_PORT", "8190").strip() or "8190"  # read now: a test or a second studio sets it after import
+    wanted = b"\x00".join([b"main.py", b"--listen", b"127.0.0.1", b"--port", port.encode(), b""])
     try:
         entries = os.listdir("/proc")
     except OSError:
@@ -598,10 +598,13 @@ def music_check(seconds: float, available_mb: int | None = None, total_mb: int |
     out = {"fits": left >= floor, "reason": "", "need_mb": need, "error_mb": ERROR_MB, "left_mb": left, "floor_mb": floor,
            "available_mb": available_mb, "route": route, "rows": None, "nearest": None}
     if not out["fits"]:
-        who = "GPU" if on_card else "machine"
-        out["reason"] = (f"a song of up to {seconds:g} s needs about {need / 1000:.0f} GB at its peak (give or take "
-                         f"{ERROR_MB / 1000:g}); this {who} has {available_mb / 1000:.0f} GB for it and keeps "
-                         f"{floor / 1000:.0f} GB free as its floor, so it is refused. Something outside the studio holds the rest")
+        named = card_name() if on_card else ""
+        who = (f"GPU ({named})" if named else "GPU") if on_card else "machine"
+        out["reason"] = (f"a song of up to {seconds:g} s needs about {need / 1000:.1f} GB at its peak (give or take "
+                         f"{ERROR_MB / 1000:g}); this {who} has {available_mb / 1000:.1f} GB for it and keeps "
+                         f"{floor / 1000:.1f} GB free as its floor, so it is refused. " +
+                         ("Choose a shorter song, or on a card smaller than the models set STUDIO_ROOM_MB (docs/rtx-5090.md)"
+                          if on_card else "Something outside the studio holds the rest"))
         note = held_note() if measured_here and not on_card else ""
         out["reason"] += "." + note if note else ""
     return out

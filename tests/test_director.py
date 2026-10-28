@@ -297,6 +297,10 @@ def test_two_fast_starts_start_one_run(studio, monkeypatch):
     for one in posts:
         one.join(10)
     release.set()
+    director.runs[project]["thread"].join(10)
+    left = json.loads(director.status_file(project).read_text())  # the stand-in work leaves the film at work: a later
+    left["state"] = "stopped"                                     # resume_all would pick it up with the real one
+    director.status_file(project).write_text(json.dumps(left))
     assert sorted(answers) == [200, 409]
 
 
