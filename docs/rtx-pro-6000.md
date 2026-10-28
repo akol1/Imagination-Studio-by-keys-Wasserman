@@ -133,6 +133,21 @@ before still holds its models.
   the same second.
 - **A note on the times.** They are a GB10's, from the simulation above.
 
+## Character Swap on this card (4.1.1)
+
+Measured on the same imitated card (a DGX Spark under a CUDA MPS limit of 96 GB, `STUDIO_VRAM_GB=96`), a 5 s part of
+an 864x480 clip with one person, int8 Ref2VA (what `--swap` installs), each from a stopped ComfyUI, sampled once a
+second. The memory guard holds a swap to the card's figure before it is queued and again when its turn comes
+(`SWAP_CARD_ESTIMATE` in `spark/memory_guard.py`, plus its 6 GB margin and the card's 2 GB):
+
+| Quality | Peak on the card | The machine fell by | Time (a GB10's) | On an idle 96 GB card |
+|---|---|---|---|---|
+| Fast (480p) | 49.4 GB | 55.4 GB | 346 s | runs |
+| High (768p, 1376x768) | 52.7 GB | 60.1 GB | 795 s | runs |
+
+The same on a DGX Spark itself (one pool): the machine fell by 55.4 GB at 480p and 60.6 GB at 768p, so both run on an
+idle Spark. With Bolt resident beside the queue, a swap that does not fit beside it unloads it first, as a clip does.
+
 Credits: the Studio's engines run on Ash Hart's TensorFold, ComfyUI (Comfy Org) and llama.cpp (Georgi Gerganov and the
 ggml contributors). The models are MiniMax's, FastVideo's, Fish Audio's, NVIDIA's, Qwen's, Black Forest Labs' and
 OpenMOSS's (see CREDITS.md).

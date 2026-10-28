@@ -1,0 +1,75 @@
+{
+ "weights": "int8-groups",
+ "engine": {
+  "weight_bytes": 2599968768,
+  "steps": 0,
+  "graphs": 0,
+  "weights": "int8-groups"
+ },
+ "decode": [
+  {
+   "backend": "torch",
+   "context": 1000,
+   "steps_per_s": 40.891790427653746,
+   "ms_per_step": 24.454786389684067
+  },
+  {
+   "backend": "tensorfold",
+   "context": 1000,
+   "steps_per_s": 130.347573008437,
+   "ms_per_step": 7.671796082733915
+  },
+  {
+   "backend": "torch",
+   "context": 4000,
+   "steps_per_s": 38.5271693572435,
+   "ms_per_step": 25.955709092653333
+  },
+  {
+   "backend": "tensorfold",
+   "context": 4000,
+   "steps_per_s": 104.9176852885911,
+   "ms_per_step": 9.531281568492071
+  },
+  {
+   "backend": "torch",
+   "context": 12000,
+   "steps_per_s": 33.3978212546392,
+   "ms_per_step": 29.94207293869784
+  },
+  {
+   "backend": "tensorfold",
+   "context": 12000,
+   "steps_per_s": 71.9881316921175,
+   "ms_per_step": 13.891178677574946
+  }
+ ],
+ "neighbours_before": {
+  "reservations": [],
+  "processes": [
+   81043
+  ]
+ },
+ "semantic_torch": {
+  "seconds": 37.98343067103997,
+  "prefill_seconds": 0.1749185270164162,
+  "output_tokens": 1500,
+  "output_tps": 39.490903625607935,
+  "attention": "flash"
+ },
+ "semantic_tensorfold": {
+  "seconds": 12.555912398034707,
+  "prefill_seconds": 0.04926363402046263,
+  "output_tokens": 1500,
+  "output_tps": 119.46563120612286,
+  "attention": "tensorfold-int8-groups"
+ },
+ "semantic_same_tokens_before_divergence": 66,
+ "peak_torch_gib": 8.834351062774658,
+ "neighbours_after": {
+  "reservations": [],
+  "processes": [
+   81043
+  ]
+ }
+}

@@ -81,6 +81,8 @@ if [ "$(uname -s)" = Linux ]; then
   fi
   echo "  The Studio runs it as its brain when Settings → Connections leaves the local server's address empty (or picks"
   echo "  \"Studio engine · Bolt\"). BOLT_MODELS=$MODELS if you moved the weights; BOLT_IDLE_S=never on a head that never renders."
+  echo "  A Studio already running picks the engine up within a minute (Settings → Connections shows it managed). If it still"
+  echo "  says external, restart the app (bash scripts/app.sh, or however this machine starts it)."
 else
   step "The Bolt engine on this Mac: TensorFold's Metal engine (branch bolt-metal-115 at ${METAL_COMMIT:0:8}, TensorFold 1.1.5) -> $PREFIX/bolt-metal"
   metal_ok() { [ -x "$PREFIX/bolt-metal/native/bin/tensorfold-native" ] && [ "$(cat "$PREFIX/bolt-metal/COMMIT" 2>/dev/null)" = "$METAL_COMMIT" ] \

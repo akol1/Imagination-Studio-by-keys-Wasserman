@@ -1,7 +1,7 @@
 # Imagination Studio by keys+Wasserman, powered by TensorFold: install it, click it, make things
 
 **Thank you first** to Sam Wasserman (Slate, the Sharp Spec, Motion Previs Studio), the Qwen team (Qwen-Image-2.1),
-Black Forest Labs (FLUX 3 Image Klein) and felix-ab (flux3-mlx), OpenMOSS (MOSS-Image), MiniMax (H3 and MiniMax-Music3), FastVideo / Hao AI
+Black Forest Labs (FLUX 3 Image Klein) and felix-ab (flux3-mlx), OpenMOSS (MOSS-Image), MiniMax (H3 and MiniMax-Music3), m-a-p and the YuE2 authors (YuE2), FastVideo / Hao AI
 Lab (FastH3), Fish Audio (Drama 3), Ash Hart (TensorFold), mrbizarro, LightX2V, Viggle, speach1sdef178 and Apple's MLX
 team. Full list in [CREDITS.md](CREDITS.md). **Built with Fish Audio.**
 
@@ -57,8 +57,10 @@ commercial product must show "MiniMax-Music3" in its interface). The script prin
 **On a DGX Spark** the same `bash oneshot-setup.sh` installs the CUDA build (it hands over to
 `oneshot-setup-spark.sh`). It passes on every flag the CUDA install takes (`--all`, `--yes`, `--ref2va`, `--image-edit`,
 `--h3-base`, `--flux3`, `--moss`, `--music`, `--voice`, `--sound`, `--bolt`, `--motion`, `--train`, `--graphics`, `--finish`,
-`--image-only`, `--no-render`, `--verify`, `--upgrade` and the LoRA flags). There is no `--turbo`, no `--app` and no 2x
-decoder there, and Finish runs Tesseract on a Mac over ssh (Settings → Connections). The steps below are the same on both machines unless they
+`--yue2`, `--swap`, `--image-only`, `--no-render`, `--verify`, `--upgrade` and the LoRA flags). There is no `--turbo`, no `--app` and no 2x
+decoder there, and Finish runs Tesseract on a Mac over ssh (Settings → Connections). Two parts are only there:
+`--yue2` (YuE2 songs, the Music tab's default there, about 14 GB) and `--swap` (the Library's Character Swap, 2.1 GB
+beside Ref2VA, which it adds); both are ticked in the checklist. The steps below are the same on both machines unless they
 say otherwise.
 
 **Prefer to let an agent do it?** Give Claude Code (or another coding agent) this:
@@ -97,7 +99,8 @@ any time to come back. Drag it to the Dock to keep it there.
 - **Library:** everything you have made.
   - Under a picture: *use* (a first frame), *last frame* (end a clip on it), *edit* (Edit a picture), *new angle*
     (with the Multiple Angles LoRA) and *Turnaround*.
-  - Under a clip: *continue* (a new clip on its last frame), *+ timeline*, *Upscale* and *Remove a person*.
+  - Under a clip: *continue* (a new clip on its last frame), *+ timeline*, *Upscale*, *Remove a person* and *Swap the
+    character…*.
   - A clip made on another Spark shows that Spark's name and its seed.
   - Tick files and press **Delete selected** to delete several; **Restore last deletion** puts them back; **Empty
     trash** erases what the trash holds and frees the space.
@@ -153,6 +156,11 @@ press *Make line art of Video 1*, and write Scene "A young martial artist with s
 jacket on a rooftop at dusk, red paper lanterns", Action "He strikes a wooden training dummy". The clip comes back
 drawn as anime on the same outlines and timing.
 
+A take that failed its check stays in the **Library**, marked *failed check*: the takes the QA gate and the shot
+check render again keep the failed one there, and the Director's failed takes are rated *no good* among the shot's
+takes. Type "failed" in the Library's search to list them. The Director's cut leaves them out unless you circle one
+in Slate.
+
 ## 8.6 Library actions: turn a picture round, make a clip larger, take a person out
 
 Three LoRAs of the hub have a job of their own, and the Library has a button for each. On a DGX Spark they come with
@@ -192,6 +200,52 @@ left as they were.
 
 The whole picture is drawn again, so small things elsewhere can change too. It works best on a short, continuous
 shot. The clip keeps its own sound, which still holds the removed person's voice: tick **No sound** to leave it out.
+
+## 8.7 Character Swap: a picture's character in place of the person in a clip
+
+**Swap the character** (under a clip; DGX Spark or a GPU) puts the character in one picture in place of the person
+in a part of the clip. The scene, the performance and the clip's own sound stay: the person's moves, gaze and timing
+carry over, the room and anyone else in it are the clip's own. Install it with `bash oneshot-setup-spark.sh --swap`
+(2.1 GB beside MiniMax H3 Ref2VA, which it adds when it is not there). It is not on a Mac: there the panel says so. The
+app has the same lesson: **Tutorial → Character Swap**.
+
+1. Press **Swap the character** under a clip in the Library. The panel opens with the clip beside its settings.
+2. **The character.** Upload a picture, or press **Pick from the Library** and click one. Head to toe if you can: the
+   face, the hair and the whole outfit come from it.
+3. **The part.** *Part starts at (s)* and *Part length*, 5 to 15 seconds. The line under the slider says where the part
+   ends and in how many windows it is made (one up to 5.2 s, then one more for about every 4.4 s).
+4. **Fast or High.** *Fast · 480p* is the default; *High · 768p* takes a little over twice as long. The time
+   beside it is what the part you chose takes on a DGX Spark.
+5. **The first frame.** Leave **Put the character in the first frame first** on: the picture model (FLUX3-K Fast, or
+   Qwen-Image-2.1 where FLUX3-K is not installed) draws the character into the part's first frame, and the swap starts
+   from that frame. Off, the swap starts from the clip's own first frame.
+6. **Direction (optional).** A few words of your own about the character: *she keeps her hands
+   in her coat pockets*, *the cape moves in the wind*. The seed picks the take.
+7. Press **Swap the character**. The job card shows each stage: the part, finding the person, following them, the first
+   frame, each window, the assembly. The result comes back in the panel and in the Library, beside the part with the
+   swapped person tinted green (so you can see who was swapped) and the first frame it started from.
+
+| Part | Fast (480p) | High (768p) |
+|---|---|---|
+| 5 s, one window | about 6 min | about 12 min |
+| 8 s, two windows | about 9 min | about 20 min |
+| 10 s, three windows | about 11 min | about 26 min |
+| 15 s, four windows | about 16 min | about 39 min |
+
+Measured on a DGX Spark with the GPU to itself; another job on the GPU at the same time makes it slower.
+
+What it refuses, before anything is drawn:
+
+- **A hard cut** in the part: it works on one continuous shot. Choose a part before or after the cut.
+- **No person in the part's first frame** (a title, a fade from black): start the part where the person is in view.
+- **A Mac**: it needs MiniMax H3 Ref2VA on a DGX Spark or another CUDA machine.
+
+With several people in the first frame, the largest one is swapped. A clip without sound gives a result without sound.
+Lip sync and the face can still drift on a long part: start with 5 seconds.
+
+*Licence:* MiniMax H3 and Akatz Labs' Character Swap LoRA are under the MiniMax H3 Community License, which does not
+cover use in the EU, the UK, South Korea or the US; the panel says so beside the button. LightX2V's Turbo LoRA is
+Apache 2.0, and SAM 3.1 (which finds and follows the person) is under Meta's SAM License.
 
 ## 9. Motion Previs: make a clip that moves like another
 
@@ -363,37 +417,58 @@ is sent to Fish Audio. **Built with Fish Audio.**
 The model stays loaded for five idle minutes and is unloaded at once when a video or picture job starts: Drama 3 and
 the video model never run together.
 
-## 11. Music: a song with MiniMax-Music3
+## 11. Music: a song with YuE2 or MiniMax-Music3
 
-The **Music** tab makes a whole song with sung vocals from your lyrics and a style, on this machine: up to five
-minutes, 44.1 kHz stereo. Install it with `bash oneshot-setup.sh --music` (on either machine). The tab, and anything
-that plays a song, shows "MiniMax-Music3", as its licence asks.
+The **Music** tab makes a whole song with sung vocals from your lyrics and a style, on this machine, up to five
+minutes. It has two song engines:
 
-Which engine runs depends on the machine; the tab says which:
+- **YuE2** (m-a-p's YuE2-3B and YuE2-Vae), the default on Linux with an NVIDIA GPU (a DGX Spark, an RTX Pro 6000)
+  where it is installed: `bash oneshot-setup-spark.sh --yue2`, about 14 GB, in an environment of its own. It writes the
+  song's score first (melody and chords), then the song, 48 kHz stereo. Not on a Mac.
+- **MiniMax-Music3**, on every machine, and the only one on a Mac: `bash oneshot-setup.sh --music` (on either
+  machine), 44.1 kHz stereo. The tab, and anything that plays one of its songs, shows "MiniMax-Music3", as its licence
+  asks.
+
+Where both are installed, the **engine picker** above the form (*YuE2* · *MiniMax Music 3*) chooses for the
+next song, and Settings → Presets → **Song engine** sets the default (*Best here* is YuE2 where it is installed,
+MiniMax Music 3 on a Mac). Each engine's licence line shows under the picker.
 
 | Machine | Engine | Plays while it is made | A 60 s song |
 |---|---|---|---|
+| DGX Spark, YuE2 (the default) | YuE2, its tokens on TensorFold's CUDA engine (int8) | no | about 38 s with the model loaded; it loads in 6 to 9 s on the first song |
 | Mac with an M5 or later | TensorFold's native Metal engine (Zig and Metal, since 2.9.2) | no, not yet: the song plays when it is done | 59.5 to 63.0 s on an M5 Ultra on TensorFold's command line, 17.8 GB at the peak; through the app a 33.4 s song took 35.2 s |
 | Mac with an M1 to M4, or `MUSIC3_BACKEND=mlx` | TensorFold's MLX port, int8 | yes: it starts once enough is made that it never stops, about 13 s into a 60 s song | about 63 s on an M5 Ultra, through the app |
-| DGX Spark | TensorFold's CUDA engine, int8 (ComfyUI's nodes where it is not built) | no | about 149 s on one GB10, through the app |
-| GPU | TensorFold's CUDA engine, int8 (ComfyUI's nodes where it is not built) | no | the 149 s above was measured on one GB10 |
+| DGX Spark, MiniMax Music 3 | TensorFold's CUDA engine, int8 (ComfyUI's nodes where it is not built) | no | about 149 s on one GB10, through the app |
+| GPU | YuE2 where installed, else MiniMax Music 3 as on a DGX Spark | no | measured on a GB10 only |
+
+A 2-minute YuE2 song took about 64 s on one DGX Spark, and Whisper heard 94 to 97 % of the words sung in 60 s songs.
 
 1. **Lyrics.** Section tags on lines of their own, above the lines they hold; the buttons under the box add
-   `[Intro]`, `[Verse]`, `[Pre-Chorus]`, `[Chorus]`, `[Bridge]`, `[Instrumental]` and `[Outro]`. Lines in
-   (parentheses) are backing vocals. Leave the box empty for an instrumental. A note says when there are no tags, or
-   a tag the model may sing as words. *Pop example* fills both boxes.
+   `[Intro]`, `[Verse]`, `[Pre-Chorus]`, `[Chorus]`, `[Bridge]`, `[Instrumental]` and `[Outro]`. YuE2 also knows
+   `[Interlude]`, and reads others as the nearest of these (`[Verse 2]` as `[Verse]`, `[Hook]` as `[Chorus]`). Lines in
+   (parentheses) are backing vocals. Leave the box empty for an instrumental: YuE2 then writes its score from the tags
+   alone and gives the melody to the instruments. A note says when there are no tags, or a tag the model may sing as
+   words. *Pop example* fills both boxes.
 2. **Style.** A caption: genre, tempo, key, mood, the voice that sings, the instruments. The **Style helper** has a
    box for each; **Write the style** turns them into the caption.
-3. **Length (s)** is the longest the song may be, 10 to 300; the model may end it sooner. **Seed** picks the take.
+3. **Length (s)** is the longest the song may be, 10 to 300; the model may end it sooner. YuE2 decides a song's length
+   from its lyrics, and a song that would run longer is cut at your length and faded over its last 2 seconds (the
+   take says so). **Seed** picks the take.
 4. **Generate.** On a Mac with the MLX engine, leave **Play while it's made** ticked to hear it as it is made. Tick
    *Have Whisper listen for the lyrics after* for a rough score: sung words are harder to hear than spoken ones.
-5. **Songs.** Under a song: *Download WAV*, *Again, next seed*, and **Use as soundtrack**. Choose a video (a long
-   video, the Editor's export or any Library clip), set the **Music level (dB)** and press **Lay it under**. The song
-   sits under the video's own sound, is lowered while someone speaks, and no peak goes over -1 dBFS. The result is a
-   new file in `exports/`.
+5. **Songs.** Under a song: *Download WAV*, *Download score* (a YuE2 song's melody and chords, in ABC), *Again, next
+   seed* (with the same engine), and **Use as soundtrack**. Choose a video (a long video, the Editor's export or any
+   Library clip), set the **Music level (dB)** and press **Lay it under**. The song sits under the video's own sound,
+   is lowered while someone speaks, and no peak goes over -1 dBFS. The result is a new file in `exports/`.
 
-One song runs at a time, never beside a video or a voice take. The engine stays loaded for five idle minutes and is
-unloaded at once when another job starts. The Metal engine was measured on an M5 Ultra only.
+One song runs at a time, never beside a video or a voice take. Either engine stays loaded for five idle minutes and is
+unloaded at once when another job starts (YuE2 also when a MiniMax Music 3 song starts, and the other way round). The
+Metal engine was measured on an M5 Ultra only.
+
+*Licences:* YuE2's code is Apache 2.0 and its weights are CC BY-NC 4.0 with the YuE2 authors' additional permission
+for creators: personal users, content creators and musicians may publish, sell and license the songs they make, free
+and with no royalties; a company needs a commercial licence from the authors. MiniMax-Music3 is under its Community
+License: commercial use is allowed, and a commercial product shows "MiniMax-Music3".
 
 ## 12. More than one DGX Spark
 
@@ -489,6 +564,10 @@ The same steps are in the app: **Learn → Your phone and other devices**.
 | Very slow renders | check the chip is M5-family and nothing else is using the GPU |
 | The job says "MLX engine" for FastH3 | the native engine is not installed or the chip is older than M5, or the clip has a LoRA: run `bash oneshot-setup.sh --verify` and look for the `tf-h3-dit` line |
 | "This clip will be refused: memory" (DGX Spark or a GPU) | choose the size or length the message names (section 13) |
-| A song does not play while it is made | on an M5 Mac the Metal engine does not stream yet, and a DGX Spark never does; a GPU does not stream either. `MUSIC3_BACKEND=mlx` runs the MLX engine on a Mac, which does |
-| The Voice or Music tab says "Not available here" | install it: `bash oneshot-setup.sh --voice` or `--music`; the tab says what is missing |
+| A song does not play while it is made | YuE2 never streams, nor does MiniMax-Music3 on a DGX Spark, a GPU, or an M5 Mac's Metal engine: the song plays when it is done. `MUSIC3_BACKEND=mlx` runs the MLX engine on a Mac, which does |
+| The Voice or Music tab says "Not available here" | install it: `bash oneshot-setup.sh --voice` or `--music` (YuE2 on a DGX Spark or a GPU: `bash oneshot-setup-spark.sh --yue2`); the tab says what is missing |
+| No engine picker in the Music tab | YuE2 is not installed here, or this is a Mac: the tab uses MiniMax Music 3. On a DGX Spark, `bash oneshot-setup-spark.sh --yue2` adds it |
+| A YuE2 song is shorter than the lyrics, or ends in a fade | it ran past *Length (s)* and was cut there: give it more seconds, or fewer lines |
+| Character Swap refuses the part | a hard cut in it, or nobody in its first frame: choose a part of one continuous shot that opens on the person |
+| Character Swap says it is not available | it runs on a DGX Spark or a GPU: `bash oneshot-setup-spark.sh --swap`; the panel names what is missing |
 | The Render the take button stays off with a clip to clone | tick the consent box |

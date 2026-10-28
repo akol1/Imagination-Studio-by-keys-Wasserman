@@ -414,3 +414,28 @@ def test_the_engine_never_gets_the_studios_own_port_or_host(monkeypatch):
     for engine in (bolt.Cuda(), bolt.Metal()):
         env = engine.environment()
         assert "PORT" not in env and "HOST" not in env and env.get("PATH") == os.environ["PATH"]
+
+
+def test_an_engine_installed_while_the_app_runs_is_picked_up(monkeypatch):
+    """Chosen as external because nothing was installed, the engine is chosen again: Bolt set up beside a running app is
+    managed without a restart. BOLT_BACKEND set is never chosen again."""
+
+    monkeypatch.delenv("BOLT_BACKEND", raising=False)
+    monkeypatch.setattr(bolt, "_engine", None)
+    picked = {"route": (bolt.External, "nothing installed")}
+    monkeypatch.setattr(bolt, "choose", lambda: picked["route"])
+    first = bolt.engine()
+    assert isinstance(first, bolt.External)
+    picked["route"] = (bolt.Cuda, "")
+    assert bolt.engine() is first  # not looked at again before RECHOOSE_S
+    monkeypatch.setattr(bolt, "_chosen_at", time.time() - bolt.RECHOOSE_S - 1)
+    assert isinstance(bolt.engine(), bolt.Cuda)
+    managed = bolt.engine()
+    monkeypatch.setattr(bolt, "_chosen_at", 0.0)
+    picked["route"] = (bolt.External, "gone")
+    assert bolt.engine() is managed  # a managed engine stays the one it is
+    monkeypatch.setenv("BOLT_BACKEND", "external")
+    monkeypatch.setattr(bolt, "_engine", bolt.External())
+    picked["route"] = (bolt.Cuda, "")
+    monkeypatch.setattr(bolt, "_chosen_at", 0.0)
+    assert isinstance(bolt.engine(), bolt.External)

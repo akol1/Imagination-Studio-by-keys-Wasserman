@@ -61,3 +61,55 @@ def test_a_sound_deleted_mid_listing_does_not_take_the_library_down(monkeypatch)
     assert answer.status_code == 200
     paths = {m["path"] for m in answer.json() if m["kind"] == "audio"}
     assert "sound/keep.wav" in paths and "sound/gone.wav" not in paths
+
+
+def test_a_take_that_failed_its_check_is_in_the_library_and_says_so():
+    """The QA gate and the shot check keep a failed take in qa/; the Director rates a failed Slate take no-good. Both are
+    listed, marked failed, and can be deleted like any clip. A clip fetched only to be checked is not listed."""
+
+    home = server.HOME
+    (home / "qa" / "fetched").mkdir(parents=True, exist_ok=True)
+    (home / "qa" / "job1-take1.mp4").write_bytes(b"x")
+    (home / "qa" / "job1-take1.jpg").write_bytes(b"x")
+    (home / "qa" / "fetched" / "q9.mp4").write_bytes(b"x")
+    (home / "slate" / "p-lib" / "takes").mkdir(parents=True, exist_ok=True)
+    for name in ("bad", "good", "mine", "gated"):
+        (home / "slate" / "p-lib" / "takes" / f"{name}.mp4").write_bytes(b"x")
+    (home / "slate" / "p-lib" / "project.json").write_text(json.dumps({"id": "p-lib", "scenes": [{"shots": [{"takes": [
+        {"mediaPath": "slate/p-lib/takes/bad.mp4", "rating": "no-good", "origin": "The Director"}, {"mediaPath": "slate/p-lib/takes/good.mp4", "rating": "good"},
+        {"mediaPath": "slate/p-lib/takes/mine.mp4", "rating": "no-good"}, {"mediaPath": "slate/p-lib/takes/gated.mp4", "rating": "good", "qa": {"passed": False}}]}]}]}))
+    listed = {m["path"]: m for m in client.get("/api/library").json()}
+    assert listed["qa/job1-take1.mp4"]["failed"] is True and listed["qa/job1-take1.mp4"]["kind"] == "video"
+    assert listed["slate/p-lib/takes/bad.mp4"]["failed"] is True and "failed" not in listed["slate/p-lib/takes/good.mp4"]
+    assert listed["slate/p-lib/takes/gated.mp4"]["failed"] is True  # its own QA gate failed it
+    assert "failed" not in listed["slate/p-lib/takes/mine.mp4"]  # rated no good by hand: listed, but no check failed it
+    assert "qa/fetched/q9.mp4" not in listed and "qa/job1-take1.jpg" not in listed
+    assert client.delete("/api/library", params={"path": "qa/job1-take1.mp4"}).status_code == 200
+
+
+def test_a_film_with_odd_shots_and_takes_never_takes_the_library_down():
+    """A project.json edited by hand or written by an older build: a shot that is not an object, takes that are not a
+    list, a check that is not an object. Its readable failed takes are listed; the rest is passed over."""
+
+    home = server.HOME
+    (home / "slate" / "p-odd" / "takes").mkdir(parents=True, exist_ok=True)
+    (home / "slate" / "p-odd" / "takes" / "bad.mp4").write_bytes(b"x")
+    (home / "slate" / "p-odd" / "project.json").write_text(json.dumps({"id": "p-odd", "scenes": [
+        {"shots": ["a shot as a string", None, 7, {"takes": "none yet"}, {"takes": {"mediaPath": "x.mp4"}},
+                   {"takes": [None, "x", {"mediaPath": 5}, {"mediaPath": "slate/p-odd/takes/odd.mp4", "qa": "failed"},
+                              {"mediaPath": "slate/p-odd/takes/bad.mp4", "qa": {"passed": False}}]}]},
+        "a scene as a string", {"shots": {"not": "a list"}}]}))
+    (home / "slate" / "p-list" / "project.json").parent.mkdir(parents=True, exist_ok=True)
+    (home / "slate" / "p-list" / "project.json").write_text(json.dumps(["not", "a", "film"]))
+    try:
+        answer = client.get("/api/library")
+        assert answer.status_code == 200
+        listed = {m["path"]: m for m in answer.json()}
+        assert listed["slate/p-odd/takes/bad.mp4"]["failed"] is True
+        films = client.get("/api/slate/projects")  # Slate's list of films passes them over too
+        assert films.status_code == 200 and "p-list" not in [f["id"] for f in films.json()]
+        assert next(f for f in films.json() if f["id"] == "p-odd")["shotCount"] == 6
+    finally:  # the other tests share this studio folder
+        import shutil
+        for name in ("p-odd", "p-list"):
+            shutil.rmtree(home / "slate" / name, ignore_errors=True)

@@ -1,0 +1,444 @@
+{
+ "torch-int8_ready_s": 21.1,
+ "torch-int8": [
+  {
+   "audio_s": 60.04,
+   "plan_ms": 17469,
+   "semantic_ms": 18571,
+   "nar_ms": 8192,
+   "vae_ms": 1409,
+   "total_ms": 45690,
+   "tokens": {
+    "plan": 1452,
+    "semantic": 1501,
+    "plan_tps": 83.1,
+    "semantic_tps": 80.8
+   },
+   "peak_memory_gb": 15.32,
+   "seconds": 60,
+   "seed": 7,
+   "others_before": [],
+   "others_after": []
+  },
+  {
+   "audio_s": 60.04,
+   "plan_ms": 18950,
+   "semantic_ms": 18922,
+   "nar_ms": 8234,
+   "vae_ms": 1164,
+   "total_ms": 47323,
+   "tokens": {
+    "plan": 1618,
+    "semantic": 1501,
+    "plan_tps": 85.4,
+    "semantic_tps": 79.3
+   },
+   "peak_memory_gb": 15.33,
+   "seconds": 60,
+   "seed": 11,
+   "others_before": [],
+   "others_after": []
+  },
+  {
+   "audio_s": 60.04,
+   "plan_ms": 19495,
+   "semantic_ms": 18701,
+   "nar_ms": 8224,
+   "vae_ms": 1165,
+   "total_ms": 47636,
+   "tokens": {
+    "plan": 1653,
+    "semantic": 1501,
+    "plan_tps": 84.8,
+    "semantic_tps": 80.3
+   },
+   "peak_memory_gb": 15.08,
+   "seconds": 60,
+   "seed": 21,
+   "others_before": [],
+   "others_after": []
+  },
+  {
+   "audio_s": 120.04,
+   "plan_ms": 16824,
+   "semantic_ms": 38142,
+   "nar_ms": 18669,
+   "vae_ms": 2301,
+   "total_ms": 76023,
+   "tokens": {
+    "plan": 1452,
+    "semantic": 3001,
+    "plan_tps": 86.3,
+    "semantic_tps": 78.7
+   },
+   "peak_memory_gb": 17.28,
+   "seconds": 120,
+   "seed": 7,
+   "others_before": [],
+   "others_after": []
+  },
+  {
+   "audio_s": 120.04,
+   "plan_ms": 19061,
+   "semantic_ms": 38368,
+   "nar_ms": 18583,
+   "vae_ms": 2319,
+   "total_ms": 78420,
+   "tokens": {
+    "plan": 1618,
+    "semantic": 3001,
+    "plan_tps": 84.9,
+    "semantic_tps": 78.2
+   },
+   "peak_memory_gb": 17.29,
+   "seconds": 120,
+   "seed": 11,
+   "others_before": [],
+   "others_after": []
+  },
+  {
+   "audio_s": 120.04,
+   "plan_ms": 19399,
+   "semantic_ms": 38436,
+   "nar_ms": 18584,
+   "vae_ms": 2279,
+   "total_ms": 78786,
+   "tokens": {
+    "plan": 1653,
+    "semantic": 3001,
+    "plan_tps": 85.2,
+    "semantic_tps": 78.1
+   },
+   "peak_memory_gb": 17.29,
+   "seconds": 120,
+   "seed": 21,
+   "others_before": [],
+   "others_after": []
+  }
+ ],
+ "blocks-int8_ready_s": 6.0,
+ "blocks-int8": [
+  {
+   "audio_s": 60.04,
+   "plan_ms": 11914,
+   "semantic_ms": 13549,
+   "nar_ms": 8039,
+   "vae_ms": 1435,
+   "total_ms": 34991,
+   "tokens": {
+    "plan": 1236,
+    "semantic": 1501,
+    "plan_tps": 103.7,
+    "semantic_tps": 110.8
+   },
+   "peak_memory_gb": 13.78,
+   "seconds": 60,
+   "seed": 7,
+   "others_before": [],
+   "others_after": []
+  },
+  {
+   "audio_s": 60.04,
+   "plan_ms": 15040,
+   "semantic_ms": 13907,
+   "nar_ms": 8261,
+   "vae_ms": 1116,
+   "total_ms": 38382,
+   "tokens": {
+    "plan": 1611,
+    "semantic": 1501,
+    "plan_tps": 107.1,
+    "semantic_tps": 107.9
+   },
+   "peak_memory_gb": 13.79,
+   "seconds": 60,
+   "seed": 11,
+   "others_before": [],
+   "others_after": []
+  },
+  {
+   "audio_s": 60.04,
+   "plan_ms": 16803,
+   "semantic_ms": 14034,
+   "nar_ms": 8332,
+   "vae_ms": 1123,
+   "total_ms": 40347,
+   "tokens": {
+    "plan": 1788,
+    "semantic": 1501,
+    "plan_tps": 106.4,
+    "semantic_tps": 107.0
+   },
+   "peak_memory_gb": 13.79,
+   "seconds": 60,
+   "seed": 21,
+   "others_before": [],
+   "others_after": []
+  },
+  {
+   "audio_s": 120.04,
+   "plan_ms": 11432,
+   "semantic_ms": 28262,
+   "nar_ms": 18394,
+   "vae_ms": 2251,
+   "total_ms": 60428,
+   "tokens": {
+    "plan": 1236,
+    "semantic": 3001,
+    "plan_tps": 108.1,
+    "semantic_tps": 106.2
+   },
+   "peak_memory_gb": 17.17,
+   "seconds": 120,
+   "seed": 7,
+   "others_before": [],
+   "others_after": []
+  },
+  {
+   "audio_s": 120.04,
+   "plan_ms": 15080,
+   "semantic_ms": 28898,
+   "nar_ms": 18466,
+   "vae_ms": 2245,
+   "total_ms": 64773,
+   "tokens": {
+    "plan": 1611,
+    "semantic": 3001,
+    "plan_tps": 106.8,
+    "semantic_tps": 103.8
+   },
+   "peak_memory_gb": 17.17,
+   "seconds": 120,
+   "seed": 11,
+   "others_before": [],
+   "others_after": []
+  },
+  {
+   "audio_s": 120.04,
+   "plan_ms": 16794,
+   "semantic_ms": 29185,
+   "nar_ms": 18595,
+   "vae_ms": 2254,
+   "total_ms": 66907,
+   "tokens": {
+    "plan": 1788,
+    "semantic": 3001,
+    "plan_tps": 106.5,
+    "semantic_tps": 102.8
+   },
+   "peak_memory_gb": 17.17,
+   "seconds": 120,
+   "seed": 21,
+   "others_before": [],
+   "others_after": []
+  }
+ ],
+ "blocks-int8-pdl_ready_s": 7.0,
+ "blocks-int8-pdl": [
+  {
+   "audio_s": 60.04,
+   "plan_ms": 12148,
+   "semantic_ms": 13843,
+   "nar_ms": 8175,
+   "vae_ms": 1489,
+   "total_ms": 35701,
+   "tokens": {
+    "plan": 1236,
+    "semantic": 1501,
+    "plan_tps": 101.7,
+    "semantic_tps": 108.4
+   },
+   "peak_memory_gb": 13.78,
+   "seconds": 60,
+   "seed": 7,
+   "others_before": [],
+   "others_after": []
+  },
+  {
+   "audio_s": 60.04,
+   "plan_ms": 15336,
+   "semantic_ms": 14151,
+   "nar_ms": 8303,
+   "vae_ms": 1123,
+   "total_ms": 38955,
+   "tokens": {
+    "plan": 1611,
+    "semantic": 1501,
+    "plan_tps": 105.0,
+    "semantic_tps": 106.1
+   },
+   "peak_memory_gb": 13.79,
+   "seconds": 60,
+   "seed": 11,
+   "others_before": [],
+   "others_after": []
+  },
+  {
+   "audio_s": 60.04,
+   "plan_ms": 16934,
+   "semantic_ms": 14199,
+   "nar_ms": 8402,
+   "vae_ms": 1126,
+   "total_ms": 40704,
+   "tokens": {
+    "plan": 1788,
+    "semantic": 1501,
+    "plan_tps": 105.6,
+    "semantic_tps": 105.7
+   },
+   "peak_memory_gb": 13.79,
+   "seconds": 60,
+   "seed": 21,
+   "others_before": [],
+   "others_after": []
+  },
+  {
+   "audio_s": 120.04,
+   "plan_ms": 11524,
+   "semantic_ms": 28394,
+   "nar_ms": 18433,
+   "vae_ms": 2274,
+   "total_ms": 60714,
+   "tokens": {
+    "plan": 1236,
+    "semantic": 3001,
+    "plan_tps": 107.3,
+    "semantic_tps": 105.7
+   },
+   "peak_memory_gb": 17.17,
+   "seconds": 120,
+   "seed": 7,
+   "others_before": [],
+   "others_after": []
+  },
+  {
+   "audio_s": 120.04,
+   "plan_ms": 15082,
+   "semantic_ms": 29047,
+   "nar_ms": 18363,
+   "vae_ms": 2249,
+   "total_ms": 64825,
+   "tokens": {
+    "plan": 1611,
+    "semantic": 3001,
+    "plan_tps": 106.8,
+    "semantic_tps": 103.3
+   },
+   "peak_memory_gb": 17.17,
+   "seconds": 120,
+   "seed": 11,
+   "others_before": [],
+   "others_after": []
+  },
+  {
+   "audio_s": 120.04,
+   "plan_ms": 16848,
+   "semantic_ms": 29315,
+   "nar_ms": 18592,
+   "vae_ms": 2249,
+   "total_ms": 67094,
+   "tokens": {
+    "plan": 1788,
+    "semantic": 3001,
+    "plan_tps": 106.1,
+    "semantic_tps": 102.4
+   },
+   "peak_memory_gb": 17.17,
+   "seconds": 120,
+   "seed": 21,
+   "others_before": [],
+   "others_after": []
+  }
+ ],
+ "lyrics": [
+  {
+   "wav": "torch-int8-s120-seed11.wav",
+   "score": 87,
+   "found": 144,
+   "words": 166,
+   "reached": 97
+  },
+  {
+   "wav": "torch-int8-s120-seed21.wav",
+   "score": 99,
+   "found": 151,
+   "words": 153,
+   "reached": 89
+  },
+  {
+   "wav": "torch-int8-s120-seed7.wav",
+   "score": 79,
+   "found": 118,
+   "words": 149,
+   "reached": 87
+  },
+  {
+   "wav": "torch-int8-s60-seed11.wav",
+   "score": 97,
+   "found": 62,
+   "words": 64,
+   "reached": 37
+  },
+  {
+   "wav": "torch-int8-s60-seed21.wav",
+   "score": 97,
+   "found": 66,
+   "words": 68,
+   "reached": 40
+  },
+  {
+   "wav": "torch-int8-s60-seed7.wav",
+   "score": 68,
+   "found": 61,
+   "words": 90,
+   "reached": 53
+  },
+  {
+   "wav": "blocks-int8-s120-seed11.wav",
+   "score": 97,
+   "found": 135,
+   "words": 139,
+   "reached": 81
+  },
+  {
+   "wav": "blocks-int8-s120-seed21.wav",
+   "score": 97,
+   "found": 152,
+   "words": 157,
+   "reached": 92
+  },
+  {
+   "wav": "blocks-int8-s120-seed7.wav",
+   "score": 97,
+   "found": 166,
+   "words": 171,
+   "reached": 100
+  },
+  {
+   "wav": "blocks-int8-s60-seed11.wav",
+   "score": 94,
+   "found": 61,
+   "words": 65,
+   "reached": 38
+  },
+  {
+   "wav": "blocks-int8-s60-seed21.wav",
+   "score": 97,
+   "found": 66,
+   "words": 68,
+   "reached": 40
+  },
+  {
+   "wav": "blocks-int8-s60-seed7.wav",
+   "score": 97,
+   "found": 71,
+   "words": 73,
+   "reached": 43
+  }
+ ],
+ "machine_memory_above_idle_mb_blocks_seed21": {
+  "30": 17048,
+  "60": 19930,
+  "120": 21035
+ }
+}

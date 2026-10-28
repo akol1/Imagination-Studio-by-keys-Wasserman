@@ -168,7 +168,9 @@ checklist_rows_cuda() {
     "h3-base|opt|0|0|40000|--h3-base|||H3 base|MiniMax H3's own transformer: keyframe LoRAs" \
     "image-edit|opt|0|0|14000|--image-edit|||Image edit (40 steps)|Qwen-Image-2.1's base model (non-commercial)" \
     "flux3|opt|0|0|41000|--flux3|||FLUX3-K|Black Forest Labs' picture models (gated: accept first)" \
-    "moss|opt|0|0|30000|--moss|||MOSS-Image|OpenMOSS's picture model (Apache 2.0)"
+    "moss|opt|0|0|30000|--moss|||MOSS-Image|OpenMOSS's picture model (Apache 2.0)" \
+    "yue2|opt|0|0|13700|--yue2|||YuE2 songs|YuE2 for the Music tab (creators may sell songs; companies need a licence)" \
+    "swap|opt|0|0|23100|--swap|||Character Swap|A picture's character in place of a person in a clip (Ref2VA int8 with it; H3 licence: not EU, UK, KR, US)"
 }
 
 # a size in MB as people read it: 150 MB, 2.3 GB, 41 GB

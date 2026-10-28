@@ -122,7 +122,7 @@ SYSTEM = ("You are working for a filmmaker inside Imagination Studio. Save every
 
 # what the Agent room adds: a conversation that may need the user, and the Studio's own tools by name
 STUDIO_TOOLS = ("studio_state (call first), list_library, search_library, queue_still, queue_edit, queue_clip (references for Ref2VA), queue_long, "
-                "restyle_clip, extend_clip, fix_clip (work on a Library clip), queue_voice, queue_song, queue_sound (sfx, foley), queue_soundtrack, "
+                "restyle_clip, extend_clip, fix_clip (work on a Library clip), swap_character (a character from a picture in place of the person in a clip), queue_voice, queue_song, queue_sound (sfx, foley), queue_soundtrack, "
                 "music_beats, rough_cut (a film or clips cut to a song on the beat, for Resolve), rough_cut_status, check_clip (the QA gate), motion_previs, "
                 "job_status, wait_for_jobs, cancel_job, list_jobs, list_projects, add_to_timeline, export_timeline, upload_file, "
                 "finish_cut (the final cut and mix through Tesseract), export_cut (Premiere or After Effects), "
@@ -2227,7 +2227,7 @@ def answer_of(base: str, body: dict, stopped) -> dict | None:
 
 MAKERS = ("search_library", "queue_still", "queue_clip", "queue_voice", "queue_song", "queue_edit", "queue_long", "queue_sound", "queue_soundtrack", "rough_cut",
           "check_clip", "motion_previs", "slate_new_film", "slate_add_scene", "slate_add_shot", "slate_render_shot", "night_shift", "direct_film",
-          "suite_attach", "add_to_timeline", "export_timeline", "upload_file", "restyle_clip", "extend_clip", "fix_clip", "train_lora", "finish_cut", "export_cut", "make_graphics")
+          "suite_attach", "add_to_timeline", "export_timeline", "upload_file", "restyle_clip", "extend_clip", "fix_clip", "swap_character", "train_lora", "finish_cut", "export_cut", "make_graphics")
 LOCAL_RULES = (" Do only what the filmmaker asked, exactly: one call for each thing asked for, the number of pictures, takes or "
                "shots they asked for (one picture is count 1), the names and lengths they gave, word for word. Never add a picture, "
                "clip, song, voice line, sound or render they did not ask for, never render a Slate shot unless asked, and when they "

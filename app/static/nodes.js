@@ -18,7 +18,7 @@ const ND_TYPES = {
   clip: { label: "Clip", line: "Video Engine: a clip with sound", inputs: { prompt: { types: ["text"], required: true }, first_frame: { types: ["image"] },
     refs: { types: ["image", "video", "audio"], many: true } }, outputs: { video: "video" }, params: { preset: "small", quality: "fh8", seconds: 5, seed: 1, look: "" } },
   voice: { label: "Voice", line: "Fish Audio Drama 3: a spoken line", inputs: { text: { types: ["text"], required: true } }, outputs: { audio: "audio" }, params: { seed: 1 } },
-  song: { label: "Song", line: "MiniMax-Music3: a song from a style", inputs: { style: { types: ["text"], required: true }, lyrics: { types: ["text"] } },
+  song: { label: "Song", line: "YuE2 or MiniMax-Music3: a song from a style", inputs: { style: { types: ["text"], required: true }, lyrics: { types: ["text"] } },
     outputs: { audio: "audio" }, params: { seconds: 30, seed: 1 } },
   reference: { label: "Reference", line: "A file from the Library", inputs: {}, outputs: { file: "image" }, params: { path: "", kind: "image" } },
   timeline: { label: "Timeline", line: "Clips in order, a song under them", inputs: { clips: { types: ["video"], many: true, required: true }, song: { types: ["audio"] } },

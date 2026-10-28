@@ -1,0 +1,37 @@
+[
+ {
+  "engine": "torch",
+  "round": 0,
+  "seed": 7,
+  "audio_seconds": 108.11866666666667,
+  "total_seconds": 174.0922084839549,
+  "rtf": 1.6101956660332002,
+  "abc_tokens": 929,
+  "abc_seconds": 25.143691204022616,
+  "abc_tps": 36.9476379765344,
+  "semantic_tokens": 2704,
+  "semantic_seconds": 72.1437625400722,
+  "semantic_tps": 37.48071773354024,
+  "nar_seconds": 16.304745522793382,
+  "vae_seconds": 60.49200975219719,
+  "peak_torch_gib": 7.991151809692383,
+  "engine_weight_gib": 0,
+  "rms": 0.16744715285614045,
+  "attention": "flash",
+  "neighbours_before": {
+   "reservations": [],
+   "processes": [
+    81043
+   ]
+  },
+  "neighbours_after": {
+   "reservations": [
+    "another-yue2-job"
+   ],
+   "processes": [
+    81043,
+    3877876
+   ]
+  }
+ }
+]

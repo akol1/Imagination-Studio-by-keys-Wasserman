@@ -110,12 +110,14 @@ def list_projects() -> list[dict]:
     for file in sorted((HOME / "slate").glob("*/project.json"), key=lambda f: -f.stat().st_mtime):
         try:
             data = json.loads(file.read_text())
-        except ValueError:
+        except (OSError, ValueError):
             continue
-        scenes = data.get("scenes") or []
+        if not isinstance(data, dict):  # a file that is not a film (edited by hand): not listed, never a 500
+            continue
+        scenes = [scene for scene in data.get("scenes") or [] if isinstance(scene, dict)] if isinstance(data.get("scenes"), list) else []
         out.append({"id": data.get("id", file.parent.name), "name": data.get("name", ""), "logline": data.get("logline", ""),
                     "updatedAt": data.get("updatedAt", ""), "sceneCount": len(scenes),
-                    "shotCount": sum(len(scene.get("shots") or []) for scene in scenes)})
+                    "shotCount": sum(len(scene.get("shots")) for scene in scenes if isinstance(scene.get("shots"), list))})
     return out
 
 
@@ -139,7 +141,13 @@ def get_project(project_id: str) -> dict:
     file = project_file(project_id)
     if not file.is_file():
         raise HTTPException(404, "no such film")
-    return json.loads(file.read_text())
+    try:
+        data = json.loads(file.read_text())
+    except (OSError, ValueError):
+        data = None
+    if not isinstance(data, dict):  # a broken or foreign file in the folder: said as such, never a 500
+        raise HTTPException(422, "this film's project.json cannot be read as a film")
+    return data
 
 
 @router.put("/api/slate/projects/{project_id}")
@@ -372,9 +380,23 @@ def find_local(given: str = "") -> tuple[str | None, list[str]]:
 
 
 def extract_json(text: str):
-    """The first complete JSON value in a reply that may carry fences or a preamble (Slate's extractJson)."""
+    """The first complete JSON value in a reply that may carry fences, a preamble or a model's thinking (Slate's
+    extractJson). With a ``</think>`` in it, the text after the last one is read first: a reply with thinking off can
+    still splice a think tag into its answer and start the answer again after it. A reply cut off inside its JSON has
+    none, and says so: a value nested inside the broken one is never taken for the answer."""
 
-    cleaned = re.sub(r"```(?:json)?", "", text).strip()
+    cleaned = re.sub(r"```(?:json)?", "", text)
+    after = cleaned.rsplit("</think>", 1)[-1] if "</think>" in cleaned else None
+    for part in ([after] if after is not None else []) + [cleaned]:
+        found = first_json(part.strip())
+        if found is not None:
+            return found[0]
+    raise ValueError("no valid JSON in the reply")
+
+
+def first_json(cleaned: str):
+    """(value,) of the first complete JSON object (else list) in ``cleaned``, or None."""
+
     for opener, closer in (("{", "}"), ("[", "]")):
         start = cleaned.find(opener)
         if start == -1:
@@ -394,10 +416,10 @@ def extract_json(text: str):
                 depth -= 1
                 if depth == 0:
                     try:
-                        return json.loads(cleaned[start:at + 1])
+                        return (json.loads(cleaned[start:at + 1]),)
                     except ValueError:
                         break
-    raise ValueError("no valid JSON in the reply")
+    return None
 
 
 def resolve_brain(backend: str, endpoint: str = "", model: str = "") -> tuple[str, str, str]:
@@ -510,18 +532,36 @@ def sentence(text: str) -> str:
     return text if not text or text[-1] in ".!?\"”" else text + "."
 
 
+# what a brain writes in a field it has nothing for: never a word of a prompt ("Hair: None. Wearing None.")
+EMPTY_WORDS = {"none", "n/a", "na", "null", "nil", "unknown", "not specified", "unspecified", "-", "--", "—", "tbd", "?"}
+
+
+def given(value) -> str:
+    """A sheet's field as words for a prompt: "" for a missing value and for a brain's None, N/A or unknown."""
+
+    words = " ".join(value.split()) if isinstance(value, str) else str(value) if isinstance(value, (int, float)) and not isinstance(value, bool) else ""
+    return "" if words.strip(" .").lower() in EMPTY_WORDS else words
+
+
+def age_words(value) -> str:
+    """An age as a prompt says it: "34" is "34 years old"; "mid-thirties" or "34 years old" stay as written."""
+
+    age = given(value)
+    return f"{age} years old" if age.isdigit() else age
+
+
 def person(sheet: dict) -> str:
-    bits = [f"{sheet.get('age')} years old" if str(sheet.get("age") or "").strip().isdigit() else sheet.get("age"), sheet.get("gender"),
-            sheet.get("ethnicity"), sheet.get("faceFeatures"), sheet.get("hair") and "hair: " + sheet["hair"],
-            sheet.get("clothing") and "wearing " + sheet["clothing"]]
+    hair, clothing = given(sheet.get("hair")), given(sheet.get("clothing"))
+    bits = [age_words(sheet.get("age")), given(sheet.get("gender")), given(sheet.get("ethnicity")), given(sheet.get("faceFeatures")),
+            hair and "hair: " + hair, clothing and "wearing " + clothing]
     return ", ".join(bit.strip().rstrip(".") for bit in bits if bit and bit.strip())
 
 
 def voice_of(sheet: dict | None, fallback: str = "") -> str:
     if not sheet:
         return fallback.strip() or "a natural voice"
-    sound = ", ".join(bit.strip().rstrip(".") for bit in (sheet.get(key, "") for key in ("accent", "timbre", "pitch", "pacing", "texture")) if bit and bit.strip())
-    who = (sheet.get("ageGender") or "").strip().rstrip(".")
+    sound = ", ".join(bit.strip().rstrip(".") for bit in (given(sheet.get(key)) for key in ("accent", "timbre", "pitch", "pacing", "texture")) if bit and bit.strip())
+    who = given(sheet.get("ageGender")).strip().rstrip(".")
     if who:
         return f"the voice of {who}" + (f" ({sound})" if sound else "")
     return f"a voice that is {sound}" if sound else "a natural voice"
@@ -769,8 +809,9 @@ def compile_shot(project: dict, shot_id: str, chain: str | None = None) -> dict:
     # the picture: who is in it and where (Slate repeats bible descriptions in every prompt), then the sections
     named = [f"{sheet.get('name')} is {person(sheet)}." for sheet in cast if sheet.get("name") and person(sheet) and not references]
     where = place and sentence(", ".join(bit for bit in (
-        f"{place.get('name')}: {place.get('description') or ''}".strip(": "), place.get("timeOfDay"), place.get("weather"),
-        place.get("architecture"), place.get("textures"), place.get("practicalLights") and "lit by " + place["practicalLights"]) if bit))
+        f"{given(place.get('name'))}: {given(place.get('description')).rstrip('.')}".strip(": "), given(place.get("timeOfDay")),
+        given(place.get("weather")), given(place.get("architecture")), given(place.get("textures")),
+        given(place.get("practicalLights")) and "lit by " + given(place.get("practicalLights"))) if bit))
     look = part["style"] or next((sentence("; ".join(bit for bit in (s.get("tone"), s.get("palette"), s.get("lighting")) if bit))
                                   for s in project.get("lookbook") or [] if s.get("tone") or s.get("palette")), "")
     picture = " ".join(bit for bit in (look, *named, where or "", part["subject"], part["composition"], part["lighting"], part["mood"]) if bit)
@@ -821,6 +862,12 @@ def compile_shot(project: dict, shot_id: str, chain: str | None = None) -> dict:
         warnings.append(f"The prompt is {len(prompt)} characters; MiniMax H3's guide suggests at most {limit}. Tighten the shot.")
     if not (shot.get("prompt") or "").strip():
         warnings.append("The shot has no prompt yet.")
+    # a character named only in the prompt's words: not cast, so their pictures are not attached and no line is theirs
+    uncast = [c.get("name") for c in project.get("characters") or [] if c.get("name") and c.get("id") not in (extra.get("cast") or [])
+              and re.search(r"(?<!\w)" + re.escape(c["name"].strip().lower()) + r"(?!\w)", (shot.get("prompt") or "").lower())]
+    if uncast:
+        warnings.append(", ".join(uncast) + (" is" if len(uncast) == 1 else " are") + " named in the prompt but not cast in this shot: "
+                        "cast them so their pictures and lines go with the shot.")
     # a LoRA for this shot alone (the hub's, as a job carries them): it stands in for the film's on this shot. The
     # bible's LoRAs (a character's, the place's) join it in every mode: the shot's own first, at most 4, none twice
     own = lora_list(extra.get("loras"))

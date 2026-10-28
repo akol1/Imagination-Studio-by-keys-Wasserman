@@ -1427,11 +1427,14 @@ def bolt_need(job: dict, resident_gb: float) -> tuple[bool, str] | None:
             said = memory_of(params, sized, frames, bool(params.get("loras")), found, available_mb=room)
         elif kind == "music":
             said = memory_guard.music_check(float(params.get("seconds") or 60), available_mb=room,
-                                            route=getattr(music.engine(), "guard_route", "music"), card=on_card)
+                                            route=music.guard_route(params), card=on_card)
         elif kind in sound.KINDS:
             said = memory_guard.sound_check(kind, float(params.get("seconds") or 10), available_mb=room, card=on_card)
             if said.get("need_mb") is None:
                 return None
+        elif kind in swap.KINDS:
+            said = memory_guard.swap_check(int(params.get("quality") or swap.QUALITY), available_mb=room, card=on_card,
+                                           weights=swap_build.weights())
         elif kind == "voice":
             one = voice.backend()
             need = 0 if one.loaded() else int(float(getattr(one, "NEED_GB", 50)) * 1024)
@@ -1577,6 +1580,8 @@ def build(kind: str, params: dict, job_id: str, room: bool = True) -> tuple[list
         if room:
             mac_comfy_room(kind)
         return built
+    if kind in swap.KINDS:  # Character Swap, a Library action on a clip (swap.py: spark/spark_swap.py)
+        return swap_build(kind, params, job_id)
     if kind in sound.KINDS:  # a sound effect or a clip's foley (sound.py)
         return sound_build(kind, params, job_id)
     if kind in train.KINDS:  # a LoRA trained on this Spark (train.py: spark/train_lora.py)
@@ -1756,8 +1761,10 @@ def export(job: dict) -> None:
         job["progress"] = None
 
 
-STEP = re.compile(r"\[tensorfold\] (step|voice|ar|dit|train) (\d+)/(\d+)")
-STEP_WORDS = {"step": "picture", "voice": "sound", "ar": "the model writes the song", "dit": "the sound", "train": "training step"}  # MiniMax Music 3: ar, dit
+STEP = re.compile(r"\[tensorfold\] (step|voice|ar|dit|train|frame) (\d+)/(\d+)")
+STEP_WORDS = {"step": "picture", "voice": "sound", "ar": "the model writes the song", "dit": "the sound", "train": "training step",
+              "frame": "frame"}  # MiniMax Music 3: ar, dit; frame: a clip followed frame by frame (Character Swap)
+STAGE = re.compile(r"\[tensorfold\] stage (\d+)/(\d+) (.+)$")  # a job of several stages (Character Swap): said above its passes
 RAN_ON = re.compile(r"\[tensorfold\] engine: (\w+)")
 
 
@@ -1773,6 +1780,10 @@ def run(job: dict, command: list[str], env: dict, label: str = "") -> bool:
             engine = RAN_ON.search(line)
             if engine:
                 job["engine"] = engine.group(1)
+            staged = STAGE.search(line.rstrip())
+            if staged:
+                label = staged.group(3).strip() + " · "
+                job["progress"] = {"stage": staged.group(3).strip(), "at": int(staged.group(1)), "of": int(staged.group(2))}
             found = STEP.search(line)
             if found:
                 kind, at, total = found.group(1), int(found.group(2)), int(found.group(3))
@@ -2048,6 +2059,8 @@ def perform(job: dict, worker: dict | None = None) -> None:
     finally:
         if job["status"] != "queued":
             job["finished"] = time.time()
+            if job["kind"] in swap.KINDS:  # a cancelled or failed swap's frames do not stay behind
+                swap.tidy(HOME, job["id"])
 
 
 def work() -> None:
@@ -2247,7 +2260,7 @@ def queue_job(body: dict) -> dict:
     if body.get("title") is not None and not isinstance(body.get("title"), str):
         raise HTTPException(400, "title is text")
     params = dict(body.get("params") or {})
-    if kind not in ("scout", "video", "studio", "export", "long", "edit") + actions.KINDS + sound.KINDS + finish.KINDS + graphics.KINDS:
+    if kind not in ("scout", "video", "studio", "export", "long", "edit") + actions.KINDS + swap.KINDS + sound.KINDS + finish.KINDS + graphics.KINDS:
         raise HTTPException(400, "unknown job kind")
     if kind == "long" and (params.get("last_image") or params.get("last_same") or params.get("last_frame_from")):
         raise HTTPException(400, "a last frame is for single clips: a long video is a chain of clips")
@@ -2257,7 +2270,7 @@ def queue_job(body: dict) -> dict:
             raise HTTPException(400, f"a long video is over {LONGEST} seconds and at most {max(LONG) // 60} minutes")
         pieces = plan(total, int(params.get("segment_seconds", LONGEST)))
         build("video", {**params, "seconds": pieces[0], "output": None}, "check")
-    if kind not in ("export", "edit", "foley") + actions.KINDS + finish.KINDS + graphics.KINDS and not (params.get("prompt") or "").strip():
+    if kind not in ("export", "edit", "foley") + actions.KINDS + swap.KINDS + finish.KINDS + graphics.KINDS and not (params.get("prompt") or "").strip():
         raise HTTPException(400, "a prompt is needed")
     if kind != "video" and params.get("references"):
         raise HTTPException(400, "reference pictures are for single clips")
@@ -2300,10 +2313,12 @@ def queue_job(body: dict) -> dict:
               room=not (kind in ("video", "studio") and said["used"] > 1))
     if kind in graphics.KINDS and not body.get("title"):
         body = {**body, "title": graphics_title(params)}
+    if kind in swap.KINDS and not body.get("title"):
+        body = {**body, "title": swap_title(params)}
     job = {"id": job_id, "kind": kind, "status": "queued", "title": body.get("title") or (action_title(kind, params) if kind in actions.KINDS else sound_title(kind, params) if kind in sound.KINDS else kind), "params": params,
-           "source": action_source(kind, params) if kind in actions.KINDS else sound_source(kind, params) if kind in sound.KINDS else None,
+           "source": action_source(kind, params) if kind in actions.KINDS else swap_source(params) if kind in swap.KINDS else sound_source(kind, params) if kind in sound.KINDS else None,
            "outputs": [], "progress": None, "error": None, "log": "", "created": time.time(), "started": None,
-           "finished": None, "estimate": clip_estimate(kind, params, referenced, ref_media)}
+           "finished": None, "estimate": swap_estimate(params) if kind in swap.KINDS else clip_estimate(kind, params, referenced, ref_media)}
     if referenced:  # the passes a reference clip runs: the number set by hand, or the model's 20, or the adapter's 4
         job["passes"] = int(params["steps"]) if params.get("steps") not in (None, "") else 4 if params.get("ref_turbo") else 20
     if kind in ("video", "studio", "long"):
@@ -2447,8 +2462,9 @@ def library() -> list[dict]:
     found = []
     for folder, kinds in (("renders", (".mp4",)), ("exports", (".mp4",)), ("scouts", (".png",)), ("sound", (".mp4",)),
                           ("uploads", (".png", ".jpg", ".jpeg", ".webp", ".mp4", ".mov")), ("projects", (".mp4",)), ("slate", (".mp4",)),
-                          ("agent", (".png", ".jpg", ".jpeg", ".webp", ".mp4", ".mov"))):
-        for path in (HOME / folder).rglob("*"):
+                          ("agent", (".png", ".jpg", ".jpeg", ".webp", ".mp4", ".mov")), ("qa", (".mp4",))):
+        # qa: the takes the QA gate and the shot check kept when they failed (not the clips fetched to be checked)
+        for path in ((HOME / folder).glob("*") if folder == "qa" else (HOME / folder).rglob("*")):
             if path.suffix.lower() in kinds and not hidden(path.relative_to(HOME)) and path.is_file():
                 try:
                     stat = path.stat()
@@ -2460,10 +2476,49 @@ def library() -> list[dict]:
     found += library_sounds()
     found = sorted(found, key=lambda item: -item["modified"])[:400]
     made = hub.takes()  # which Spark rendered a clip, and at which seed (sparks.py)
+    failed = failed_takes()
     for item in found:
         if item["path"] in made:
             item.update(spark=made[item["path"]].get("spark"), seed=made[item["path"]].get("seed"))
+        if item["path"] in failed or item["folder"] == "qa":
+            item["failed"] = True  # shown in the Library to look at; the Director never cuts it in unless it is circled
     return found
+
+
+FAILED_SEEN: dict = {}  # project.json -> (its mtime, the failed takes in it): a film is read again only when it changed
+
+
+def failed_takes() -> set[str]:
+    """The clips of Slate shots that failed their check: a take whose own QA gate or shot check failed it, and one the
+    Director rated no-good (it rates a failed take so). A take rated no-good by hand is the user's call, not a check's."""
+
+    def listed(value) -> list:
+        return value if isinstance(value, list) else []
+
+    def failed(take) -> bool:
+        try:  # a take written by hand or by an older build: one that cannot be read is not counted
+            return isinstance(take, dict) and isinstance(take.get("mediaPath"), str) and bool(
+                director.failed_check(take) or take.get("rating") == "no-good" and str(take.get("origin") or "").startswith("The Director"))
+        except Exception:  # noqa: BLE001 - one odd take never takes the Library down
+            return False
+
+    out, seen = set(), set()
+    for file in (HOME / "slate").glob("*/project.json"):
+        seen.add(file)
+        try:
+            stamp = file.stat().st_mtime_ns
+            if FAILED_SEEN.get(file, (None,))[0] != stamp:
+                film, found = json.loads(file.read_text()), set()
+                for scene in listed(film.get("scenes")) if isinstance(film, dict) else []:
+                    for shot in listed(scene.get("shots")) if isinstance(scene, dict) else []:
+                        found.update(take["mediaPath"] for take in (listed(shot.get("takes")) if isinstance(shot, dict) else []) if failed(take))
+                FAILED_SEEN[file] = (stamp, found)
+        except (OSError, ValueError):
+            continue
+        out |= FAILED_SEEN[file][1]
+    for gone in set(FAILED_SEEN) - seen:
+        FAILED_SEEN.pop(gone, None)
+    return out
 
 
 SOUND_FILES = (".wav", ".mp3", ".flac", ".m4a", ".ogg")
@@ -2510,7 +2565,7 @@ def discard(path: str) -> dict:
     """Take a clip or still out of the library: it is moved to the studio's trash folder, not erased."""
 
     target = inside(path)
-    if not target.is_file() or relative(target).split("/")[0] not in ("renders", "exports", "scouts", "uploads", "projects", "slate") \
+    if not target.is_file() or relative(target).split("/")[0] not in ("renders", "exports", "scouts", "uploads", "projects", "slate", "qa") \
             or target.suffix.lower() not in (".mp4", ".mov", ".png", ".jpg", ".jpeg", ".webp"):
         raise HTTPException(400, "not a library file")
     with lock:
@@ -2838,8 +2893,19 @@ def slate_room(plan: dict, lora: bool) -> dict:
 app.include_router(slate.attach(HOME, DURATIONS, compose, compose_references, REFERENCE_LIMIT,
                                 lambda: {"ref2va": ref2va_ready(), "ref2va_turbo": ref2va_turbo_ready()}, slate_room, within=inside))
 import director  # noqa: E402  (the Director: a logline to a checked, cut film, beside this file)
+
+
+def resident_words() -> str:
+    """What the Studio has loaded beside the queue now, in words, for a refusal the Director reports."""
+
+    return ", ".join(name for name, loaded in (("Fish Audio Drama 3", voice.room_mb()), ("MiniMax Music 3", music.room_mb()),
+                                               (bolt.NAME, bolt.room_mb())) if loaded)
+
+
 app.include_router(director.attach(HOME, queue=queue_job, lookup=jobs.get, stop_job=cancel, check=qa_gate, new_project=new_project,
-                                   save_project=save_project, presets={k: v[1] for k, v in PRESETS.items()}, app=app, references=ref2va_ready))
+                                   save_project=save_project, presets={k: v[1] for k, v in PRESETS.items()}, app=app, references=ref2va_ready,
+                                   renderers=lambda: 1 + sum(1 for w in hub.workers() if w.get("enabled", True)), loaded=resident_words,
+                                   picture_models=image_models))
 import agents  # noqa: E402  (Brains and agents: the user's own CLI sign-ins and MCP tools, beside this file)
 app.include_router(agents.attach(HOME))
 
@@ -2875,6 +2941,9 @@ import motion  # noqa: E402  (Motion Previs: a Python port of Sam Wasserman's Mo
 app.include_router(motion.attach(HOME, PACK, SPARK))
 import actions  # noqa: E402  (Turnaround sheet, Upscale and Remove a person: Library actions, beside this file)
 action_router, action_build, action_title, action_source = actions.attach(HOME, PACK, SPARK, inside, relative)
+import swap  # noqa: E402  (Character Swap: the person in a part of a clip replaced by a character, a Library action, beside this file)
+swap_router, swap_build, swap_title, swap_source, swap_estimate = swap.attach(HOME, PACK, SPARK, inside, relative, media_seconds, held_room)
+app.include_router(swap_router)
 import sound  # noqa: E402  (sound effects and foley: Stable Audio Open and MMAudio, run locally, beside this file)
 sound_router, sound_build, sound_title, sound_source = sound.attach(HOME, PACK, SPARK, inside, relative, held_room, media_seconds)
 app.include_router(action_router)

@@ -426,6 +426,8 @@ class Spark:
 
     def __enter__(self):
         self.had = (music.SPARK, music.PREFIX, music._engine, music._chosen_why, {k: os.environ.get(k) for k in self.env})
+        # Models & weights' scan of the machine the tests run on finds its own engine and weights: not this install's
+        self.discover, voice.discover = voice.discover, None
         music.SPARK, music.PREFIX, music._engine = True, self.folder / "prefix", None
         for key in ("MUSIC3_BACKEND", "MUSIC3_CUDA_BIN", "MUSIC3_MODEL", "MUSIC3_WEIGHTS"):
             self.had[4].setdefault(key, os.environ.get(key))
@@ -436,7 +438,10 @@ class Spark:
     def __exit__(self, *_):
         if music._engine is not None and hasattr(music._engine, "release"):
             music._engine.release("test over")
+        if "music_yue2" in sys.modules:  # YuE2's engine, asked about by the Music tab's state here, is not kept
+            sys.modules["music_yue2"]._engine = None
         music.SPARK, music.PREFIX, music._engine, music._chosen_why, saved = self.had
+        voice.discover = self.discover
         for key, value in saved.items():
             if value is None:
                 os.environ.pop(key, None)
@@ -788,3 +793,23 @@ if __name__ == "__main__":
         if name.startswith("test_"):
             test()
             print("ok", name)
+
+
+def test_a_song_cancelled_as_its_engine_finishes_leaves_no_take(monkeypatch):
+    """Cancelled after the engine wrote the song (YuE2 at its Whisper stage): the job said cancelled, the song stayed."""
+
+    class Finishing:
+        name = "stand-in"
+
+        def make(self, job, params, wav):
+            wav.write_bytes(b"RIFF")
+            wav.with_suffix(".yue2").mkdir(exist_ok=True)
+            job["status"] = "cancelled"  # the cancel lands while the engine hands the song back
+            return {"audio_s": 1.0}
+
+    monkeypatch.setattr(music, "engine", lambda chosen: Finishing())
+    monkeypatch.setattr(music, "loaded_engines", lambda: [])
+    job = {"id": "test-cancel-at-the-end", "status": "running", "params": {"caption": "pop", "lyrics": "", "seconds": 10, "seed": 1}}
+    assert music.perform(job) is False
+    wav = music.HOME / "music" / f"{job['id']}.wav"
+    assert not wav.exists() and not wav.with_suffix(".yue2").exists() and not wav.with_suffix(".take.json").exists()

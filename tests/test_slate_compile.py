@@ -199,9 +199,11 @@ def bible_film() -> dict:
     return made
 
 
-def with_ref2va(test):
+def with_ref2va(test, installed: bool = True):
+    """``test`` as on a machine with (or without) the Ref2VA model, whatever the machine the tests run on has."""
+
     had = slate.ready
-    slate.ready = lambda: {"ref2va": True}
+    slate.ready = lambda: {"ref2va": installed}
     try:
         return test()
     finally:
@@ -239,7 +241,7 @@ def test_the_bible_puts_the_casts_and_the_places_pictures_in_a_shot():
         assert slate.compile_shot(made, "shot-1")["mode"] == "text"
     with_ref2va(test)
     # without the Ref2VA model a shot from text stays one, and says nothing of pictures
-    told = slate.compile_shot(bible_film(), "shot-1")
+    told = with_ref2va(lambda: slate.compile_shot(bible_film(), "shot-1"), installed=False)
     assert told["mode"] == "text" and not any("Ref2VA" in w for w in told["warnings"])
 
 
@@ -411,6 +413,48 @@ def test_a_takes_sound_becomes_a_characters_voice():
         sp.run([ffmpeg, "-v", "error", "-y", "-f", "lavfi", "-i", "color=c=black:s=64x64:d=3", "-c:v", "libx264", str(silent)], check=True)
         none = client.post("/api/slate/voice-from-take", json={**ask, "take": "take-b", "character": "char-leo"})
         assert none.status_code == 400 and "no sound" in none.json()["error"]
+
+
+def test_a_reply_with_a_think_tag_spliced_in_gives_the_copy_after_it():
+    """A brain with thinking off can still splice a think tag into its answer and start the answer again after it: the
+    first copy breaks off inside a prompt, the whole one follows the tag."""
+
+    whole = {"shots": [{"scene": "The Keeper Waves", "name": "Keeper Waves Lamp", "prompt": "# Subject\nThe keeper waves a lamp.\n# Mood\nDread."}]}
+    reply = '{"shots":[{"scene":"The Keeper Waves","name":"Keeper Waves Lamp","prompt":"# Subject\\nThe keeper waves a lamp.\\n# Mood</think>' + __import__("json").dumps(whole)
+    assert slate.extract_json(reply) == whole
+    # a reply cut off inside its JSON says so: a value nested in the broken one is not taken for the answer
+    for cut in ('{"issues":[{"severity":"warn","text":"a"},{"severity":', '{"shots":[{"name":"cut off" ... then {"shots": [{"name": "A"}]}'):
+        try:
+            slate.extract_json(cut)
+            raise AssertionError("a fragment was taken for the answer: " + cut)
+        except ValueError:
+            pass
+    # the usual fences and preamble still work
+    assert slate.extract_json('Here you go:\n```json\n{"a": [1, {"b": 2}]}\n```') == {"a": [1, {"b": 2}]}
+    assert slate.extract_json("[1, 2] and nothing else") == [1, 2]
+    try:
+        slate.extract_json("no json at all </think> still none")
+        raise AssertionError("no JSON was found and none was made up")
+    except ValueError:
+        pass
+
+
+def test_a_character_named_only_in_the_prompt_is_said():
+    made = slate.compile_shot(film(tf={"start": "text", "cast": ["char-leo"], "location": "loc-1", "lines": [], "soundscape": "", "music": "N/A", "seed": 1}), "shot-1")
+    assert any(w.startswith("Mia is named in the prompt but not cast") for w in made["warnings"])
+    cast = slate.compile_shot(film(), "shot-1")
+    assert not any("named in the prompt" in w for w in cast["warnings"])
+
+
+def test_a_place_s_none_and_n_a_never_reach_the_prompt():
+    """A brain's None or N/A on a location sheet is no word of the shot's prompt (the cast's fields already drop them)."""
+
+    project = film()
+    project["locations"][0].update({"description": "A white stone lighthouse on a rocky cape at night.", "timeOfDay": "N/A",
+                                    "weather": "None", "architecture": "unknown", "practicalLights": "n/a"})
+    prompt = slate.compile_shot(project, "shot-1")["prompt"].replace("non_diegetic_music: N/A", "")  # the film's own no-music line
+    assert "Campus Walkway: A white stone lighthouse on a rocky cape at night." in prompt
+    assert "N/A" not in prompt and "None" not in prompt and "unknown" not in prompt and "lit by" not in prompt and "night.," not in prompt
 
 
 if __name__ == "__main__":

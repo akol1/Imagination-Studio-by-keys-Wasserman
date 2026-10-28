@@ -19,6 +19,8 @@ HOME = re.compile(r"(?:/home/|/Users/)([A-Za-z0-9._-]+)")
 HOME_OK = {"you", "me", "someone", "spark", "runner", "user", "name", "shared", "Shared"}
 TAILNET = re.compile(r"\b(tail[0-9a-f]+)\.ts\.net\b")
 TAILNET_OK = {"tail1234", "tail9999"}
+# a machine's own folders and the names its jobs ran under: a receipt or a default copied from one machine
+MACHINE = re.compile(r"/data/model_vault\b|\bclaude-\d+-[a-z]")
 
 
 def tracked():
@@ -47,6 +49,8 @@ def found():
             for match in TAILNET.finditer(line):
                 if match.group(1) not in TAILNET_OK:
                     yield f"{name}:{number}: tailnet {match.group()}"
+            for match in MACHINE.finditer(line):
+                yield f"{name}:{number}: a machine's own name {match.group()}"
 
 
 def test_no_personal_information_in_tracked_files():
@@ -56,7 +60,9 @@ def test_no_personal_information_in_tracked_files():
 @pytest.mark.parametrize("given, bad", [
     ("write to someone@gmail.com", True), ("Author <a.b@company.co.uk>", True), ("cd /home/alice/studio", True),
     ("https://studio.tail5f3e.ts.net", True), ("1+drowzeys@users.noreply.github.com", False), ("tests@example.invalid", False),
-    ("you@your-mac.local", False), ("/Users/you/Movies", False), ("spark.tail1234.ts.net", False), ("git@github.com:x/y", False)])
+    ("you@your-mac.local", False), ("/Users/you/Movies", False), ("spark.tail1234.ts.net", False), ("git@github.com:x/y", False),
+    ("/data/model_vault/governor/admission_client.py", True), ('"owner": "claude-34-swap"', True), ("/data/studio/models", False),
+    ("claude-code", False)])
 def test_the_patterns(given, bad, monkeypatch):
     monkeypatch.setattr(sys.modules[__name__], "tracked", lambda: iter([("x", given)]))
     assert bool(list(found())) is bad

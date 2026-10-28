@@ -40,7 +40,7 @@ const STARTS = () => [
   { id: "sharp", art: "start-sharp", sign: "video", k: "RECIPE", title: "Sharp Spec", one: "Sam's locked recipe: 1376 × 768, 8 passes", run: () => { if (typeof sharpCreate === "function") sharpCreate(); go("Create"); } },
   { id: "long", art: "start-long", sign: "video", k: "VIDEO", title: "A long take", one: "Chained clips, 30 seconds and up", run: () => { const k = S && S.long ? Object.keys(S.long)[0] : null; startCreate({ goes: "video", start: "text", ...(k ? { seconds: k } : {}) }); } },
   { id: "voice", art: "start-voice", sign: "sound", k: "SOUND", title: "A voice line", one: "Fish Audio Drama 3: cast or clone a voice", run: () => go("Voice") },
-  { id: "song", art: "start-song", sign: "sound", k: "SOUND", title: "A song", one: "MiniMax-Music3: lyrics and a style", run: () => go("Music") },
+  { id: "song", art: "start-song", sign: "sound", k: "SOUND", title: "A song", one: "YuE2 or MiniMax-Music3: lyrics and a style", run: () => go("Music") },
   { id: "sfx", art: "start-sfx", sign: "sound", k: "SOUND", title: "Sound effects & foley", one: "Foley for a clip, or a sound from words", run: () => go("Foley") },
   { id: "looks", art: "vault-looks", sign: "looks", k: "LOOKS", title: "Looks", one: "LoRA styles for pictures and clips", run: () => go("Looks") },
   { id: "previs", art: "engine-previs", sign: "previs", k: "PREVIS", title: "Previs", one: "Motion, depth and camera from a clip", run: () => go("Previs") },

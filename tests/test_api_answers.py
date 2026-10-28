@@ -82,7 +82,8 @@ def test_music_runs_no_tool_without_a_time_limit():
         [ast.unparse(call)[:80] for call in calls if not any(keyword.arg == "timeout" for keyword in call.keywords)]
     started = time.time()
     state = client.get("/api/state").json()["music"]
-    assert time.time() - started < 25 and "available" in state and state["credit"] == "MiniMax-Music3"
+    # the credit is the engine this machine picks: YuE2 where its engine is built, else MiniMax Music 3
+    assert time.time() - started < 25 and "available" in state and state["credit"] in ("MiniMax-Music3", "YuE2")
 
 
 if __name__ == "__main__":

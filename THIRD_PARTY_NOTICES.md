@@ -135,6 +135,57 @@ those nodes through ComfyUI's HTTP API as a separate program. The three LoRAs co
   of `Comfy-Org/sam3.1` on Hugging Face, SHA-256
   `9ba99c92703c2e8b4f47de2d34a539bb8e18923049e238b780d70dbe6368eb03`. SAM License. Run by ComfyUI's own SAM 3 nodes.
 
+# Third-party notices: Character Swap
+
+"Character Swap" (`app/swap.py`, `app/static/swap.js`, `spark/spark_swap.py`, `spark/swap_plan.py`,
+`spark/setup-swap.sh`) replaces the person in a part of a clip with the character in a picture. Its code is this
+pack's own and runs on ComfyUI's own nodes (SAM 3, MiniMax H3, the latent and video nodes) through ComfyUI's HTTP API;
+no node pack is installed for it and no code of anyone below is copied into this repository.
+
+## Openjutsu, by Comfy Org
+
+- <https://github.com/Comfy-Org/comfy-openjutsu>, commit `70ec62df0eda7c58697ea3ac2050588513651583`. MIT License,
+  Copyright (c) 2026 Comfy Org. The idea (one picture's character in place of the person in a 5 to 15 second part of
+  one shot, the clip's own sound kept), its limits, the prompt and the settings of its `workflows/swap.api.json` were
+  read and followed. Its optional first frame went to a paid picture service; here the studio's own FLUX3-K edit draws
+  it, on this machine.
+
+## H3 Character Swap, by Akatz Labs
+
+- The workflow: Akatz Labs' H3 Character Swap workflow (MIT, Copyright (c) 2026 Akatz Labs), as Openjutsu carries it,
+  and the example workflows on the LoRA's Hugging Face page (`examples/`, under the MIT notice kept there). Their
+  settings are used: strength 1 for both LoRAs, 8 passes of `er_sde` with the `normal` schedule at CFG 1, sigma shift
+  12 for the picture and 3 for the sound, SAM finding "person" at 0.35 with two refinement passes and following them
+  at 0.5 with one object, the largest person, masks grown by 64 pixels, windows of at most 124 frames, 18 of them the
+  history carried from the window before, seed 904239.
+- Their ComfyUI node pack for it (`h3_character_swap` in akatz-labs/h3-character-swap-tool) and their H3 Relay pack
+  are GNU General Public License v3.0. Neither is installed for this action and no code of either was read into or
+  copied into this pack: how the mask, the history and the windows work here was written from the LoRA's model card,
+  the MIT workflows' settings and H3 Relay's published documentation (`docs/windowed-edit.md`).
+- The LoRA: `h3_character_swap_v1.5.safetensors` from `akatz-ai/MiniMax-H3-Character-Swap-LoRA` (revision
+  `d06323b7c8e70e97cdab48b78a1e05f786c8cba9`), SHA-256
+  `8f2c3c3eba161df8d0c6099598b4730f641f5ce01e04cd16d2427cff8a35218f`. A Model Derivative of MiniMax H3 under the
+  MiniMax H3 Community License Agreement (its `NOTICE`: "Modified by Akatz Labs").
+
+## MiniMax H3 Turbo, by LightX2V (ModelTC)
+
+- `minimax_h3_fl2v_turbo_8step_v1.0_768p_comfyui_bf16.safetensors` from `lightx2v/Minimax-h3-Turbo` (revision
+  `3ec17a324ced54151364f24f8b5fb6bf7e26414f`), SHA-256
+  `08cfe946033af7d27719b964b6e0a0e50c32138daabbd6ce4137e23df6bf9980`. Apache License 2.0
+  (<https://github.com/ModelTC/Minimax-H3-Turbo>). It derives from MiniMax H3, whose Community License applies to it too.
+
+## MiniMax H3 (MiniMax)
+
+- Ref2VA (`minimax_h3_ref2va_pruned_int8_convrot.safetensors`, or the bf16 file where it is the one installed), its
+  text encoder and decoders from `Comfy-Org/MiniMax-H3`, the files the studio's H3 install already has. MiniMax H3
+  Community License Agreement: its grant does not cover the European Union, the United Kingdom, the Republic of Korea
+  or the United States of America, and it carries an Acceptable Use Policy. "MiniMax H3 is licensed under the
+  MiniMax H3 Community License Agreement, Copyright © 2026 MiniMax. All Rights Reserved." Powered by MiniMax H3.
+- SAM 3.1 is the build listed under the Library's actions above (SAM License).
+- `spark/patches/tensorfold-h3-gateless.patch` changes TensorFold's H3 CUDA family (drowzeys/TensorFold at
+  `1f7ecc75ded5df6da151d4d5eeee87b35161e3c2`, Apache License 2.0) so it loads a MiniMax H3 transformer without
+  FastH3's gate weights, for the optional `SWAP_ENGINE=tensorfold` route. It is not applied by any installer.
+
 # Third-party notices: the Music tab
 
 The Music tab (app/music.py, app/static/music.js) makes songs with MiniMax-Music3. Nothing of the model is in this
@@ -177,6 +228,61 @@ release since 3.3.1), built from source into
 
 On an older Mac, or with `MUSIC3_BACKEND=mlx`, the song runs on TensorFold's MLX port of MiniMax Music 3 (drowzeys/TensorFold, branch `music3-mlx`, commit
 6844b413, Apache-2.0), installed into its own environment by `scripts/setup-music.sh`.
+
+## YuE2 (Multimodal Art Projection, the YuE2 authors)
+
+The Music tab's YuE2 engine (app/music_yue2.py, spark/yue2_server.py) runs YuE2 in its own environment under
+`$PREFIX/yue2`, installed by `spark/setup-yue2.sh` (`oneshot-setup-spark.sh --yue2`). None of YuE2's code or weights is
+copied into this pack.
+
+- Code: github.com/multimodal-art-projection/YuE at commit 1647252d68b70cbead046ffd3f7caf036dde47ee (the `yue2-infer`
+  0.1.6 package and the yue2-music 1.2.0 skill), Apache License 2.0, Copyright (c) 2026 the YuE2 authors. Its
+  `modeling_vae.py` keeps code derived from stable-audio-tools (Copyright (c) 2023 Stability AI, MIT) and SnakeBeta /
+  BigVGAN (Copyright (c) 2022 NVIDIA CORPORATION, MIT). The skill's instrumental helpers (`skills/yue2-music/instrumental`,
+  `convert_score`, run from that checkout to move a score's vocal melody to the instruments) are MIT, Copyright (c)
+  2026 yue2-music contributors.
+- Weights: m-a-p/YuE2-3B (revision 8f24312f, model.safetensors sha256 1d55c42c...) and m-a-p/YuE2-Vae (revision
+  152733a1, sha256 807ce9d5...), under Creative Commons Attribution-NonCommercial 4.0 International (CC BY-NC 4.0),
+  with the additional "Individual creator permission and academic use (2026-09-16)" of the repository's
+  MODEL_LICENSE, which reads in part:
+
+  > In addition to the CC BY-NC 4.0 license below, the YuE2 model licensors grant personal users, content creators
+  > and musicians acting in an individual capacity permission to use the model weights free of charge to generate
+  > outputs, and to publish, distribute, sell, license or otherwise monetize those outputs, subject to the
+  > responsible-use conditions below.
+  >
+  > For these individual creative activities, the model licensors waive the NonCommercial restriction to the extent
+  > necessary. These users do not need a separate commercial license from, or owe license fees or royalties to, the
+  > model licensors for this use or for monetizing their outputs.
+  >
+  > The individual creator permission does not authorize commercial use of the model weights by companies.
+  >
+  > Under this permission, you must not use the model weights or generated outputs for illegal, harmful, deceptive or
+  > otherwise unethical purposes, including fraud, harassment or deceptive impersonation.
+  >
+  > This permission concerns generating and using outputs; it does not extend to commercial redistribution or sale of
+  > the model weights.
+
+  Academic users may use YuE2 free of charge for non-commercial research and education under CC BY-NC 4.0. Companies
+  wishing to use the weights commercially contact the authors for a commercial licence. The weights are not
+  redistributed by this pack; read the full MODEL_LICENSE (copied next to the weights by the installer) before use.
+- YuE2's environment also installs, at the versions YuE2 pins: Hugging Face transformers 4.57.6, huggingface_hub
+  0.36.2, safetensors 0.7.0 and accelerate 1.13.0 (Apache 2.0), tiktoken 0.12.0 (MIT, OpenAI), NumPy 2.2.6 (BSD-3),
+  soundfile 0.13.1 (BSD-3), and the studio's PyTorch 2.14.1 for CUDA 13 (BSD-3) with Triton (MIT).
+- YuE2-3B's tokenizer vocabulary, `qwen.tiktoken`, is the Qwen team's (Alibaba Cloud), released with Qwen under the
+  Tongyi Qianwen licence; it is downloaded with the YuE2-3B weights from m-a-p's repository as the YuE2 authors
+  distribute it, and is not part of this pack.
+
+## TensorFold yue2 decode engine (CUDA)
+
+On a DGX Spark the YuE2 song model's decode steps can run on `libtf_yue2.so`, built into `$PREFIX/tf-yue2` by
+`spark/build-yue2-engine.sh` from TensorFold (drowzeys/TensorFold, branch `music3-cuda-115`, commit 5505dbfa: TensorFold
+1.1.5 with the music3 family, Apache-2.0, Ash Hart and the TensorFold contributors) with this pack's yue2 family
+(`spark/tensorfold_yue2/tensorfold`) laid over it. The family's kernels include TensorFold music3's decode GEMVs and
+int8 quantizers (`zig/kernels/cuda/music3_ar.cuh`, Apache-2.0); the build fetches Zig 0.17.0 (MIT) and uses NVIDIA's
+CUDA toolkit. The Python side (`spark/tensorfold_yue2/__init__.py`) subclasses the `GraphAR` decode class of the YuE2
+inference package (`yue2-infer`, multimodal-art-projection/YuE, Apache-2.0) and keeps its step checks; no YuE2 weights
+are part of the engine or this pack (they are CC BY-NC 4.0, see the YuE2 entry).
 
 ## Typefaces
 

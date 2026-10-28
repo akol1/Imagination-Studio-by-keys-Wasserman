@@ -738,11 +738,25 @@ def choose() -> tuple[type, str]:
     return External, "no Studio engine for this platform"
 
 
+RECHOOSE_S = 30.0  # how often an engine chosen as external (nothing installed) looks again for one installed since
+_chosen_at = 0.0
+_choosing = threading.Lock()  # one choice at a time: two threads never each make an engine
+
+
 def engine():
-    global _engine, _chosen_why
-    if _engine is None:
-        route, _chosen_why = choose()
-        _engine = route()
+    """The engine the brains use. One chosen as external because nothing was installed yet is chosen again (at most
+    every RECHOOSE_S): ``oneshot-setup-spark.sh --bolt`` run beside a running app is picked up without a restart.
+    ``BOLT_BACKEND`` set is never chosen again, and a managed engine stays the one it is."""
+
+    global _engine, _chosen_why, _chosen_at
+    again = lambda: isinstance(_engine, External) and not (os.environ.get("BOLT_BACKEND") or "").strip() and time.time() - _chosen_at >= RECHOOSE_S
+    if _engine is None or again():
+        with _choosing:
+            if _engine is None or again():
+                _chosen_at = time.time()
+                route, why = choose()
+                if _engine is None or route is not External:
+                    _engine, _chosen_why = route(), why
     return _engine
 
 

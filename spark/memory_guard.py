@@ -85,7 +85,6 @@ FPS, STEP, BASE, SHORTEST, LONGEST = 24, 17, 5, 22, 362
 SIZES = ((864, 480), (1280, 736), (1344, 768), (1376, 768))
 # What an idle Spark keeps for itself (measured: 124.5 GB in all, 118.7 GB available with nothing running).
 IDLE_MB = 6000
-PORT = os.environ.get("SPARK_COMFY_PORT", "8190")
 # route -> (MB with the models loaded and no rows, MB per thousand rows). See the table above.
 ESTIMATES = {"int8": (54_500, 215), "int8-lora": (54_500, 215), "bf16": (75_000, 47)}
 ERROR_MB = 6000
@@ -210,7 +209,8 @@ def state_file() -> str:
 def server_pid() -> int | None:
     """The ComfyUI server of spark/comfy.sh on this machine, if one runs (by its command line, as comfy.sh finds it)."""
 
-    wanted = b"\x00".join([b"main.py", b"--listen", b"127.0.0.1", b"--port", PORT.encode(), b""])
+    port = os.environ.get("SPARK_COMFY_PORT", "8190").strip() or "8190"  # read now: a test or a second studio sets it after import
+    wanted = b"\x00".join([b"main.py", b"--listen", b"127.0.0.1", b"--port", port.encode(), b""])
     try:
         entries = os.listdir("/proc")
     except OSError:
@@ -561,13 +561,29 @@ MUSIC_CUDA_ESTIMATE = {"music-cuda-int8": (15_900, 30), "music-cuda-bf16": (23_2
 MUSIC_CUDA_MEASURED = {"music-cuda-int8": ((30, 30.0, 16_632), (60, 60.0, 17_928), (120, 63.3, 18_885), (120, 120.0, 19_291),
                                            (60, 55.2, 18_656)),  # the last: through the app (Studio 2.9.1), Whisper after it
                        "music-cuda-bf16": ((30, 30.0, 24_012), (60, 60.0, 25_485), (120, 61.3, 25_683), (120, 120.0, 26_647))}
+# YuE2 (app/music_yue2.py, spark/yue2_server.py: YuE2-3B and YuE2-Vae in YuE2's own environment, PyTorch 2.14.1), bf16
+# and with the int8 weight-only token loop: (MB, MB per second of song asked for). Measured 2026-10-27 on a GB10 Spark:
+# the server's own peak through each song, its GPU memory (nvidia-smi, per process) and its resident memory, sampled
+# twice a second; the machine's MemTotal - MemAvailable above idle rose by the same give or take 0.5 GB. The weights and
+# the decoder stay on the GPU throughout (7.5 GB bf16, 9.3 GB with the int8 copies); the length adds the KV cache and
+# the flow matching's frames. A load peaks at 15.1 GB (the file read once into memory beside its copy on the GPU).
+# Songs over 120 s are not measured: the line goes on at the same slope.
+MUSIC_YUE2_ESTIMATE = {"music-yue2-bf16": (14_100, 45), "music-yue2-int8": (15_600, 30),
+                       # the tokens on TensorFold's decode engine (its own int8 copy, 2.6 GB, beside the bf16 model)
+                       "music-yue2-blocks": (18_200, 30)}
+# (seconds asked, seconds made, MB): English pop lyrics seed 21 at 30, 60, 120 s; the int8 65 and 70 s rows are the two
+# A/B instrumentals at seed 42 and 43
+MUSIC_YUE2_MEASURED: dict = {"music-yue2-bf16": ((30, 30.0, 12_193), (60, 60.0, 15_809), (120, 120.0, 19_438)),
+                             "music-yue2-int8": ((30, 30.0, 13_495), (60, 60.0, 17_031), (120, 120.0, 19_149),
+                                                 (65, 65.0, 16_752), (70, 70.0, 17_079)),
+                             "music-yue2-blocks": ((30, 30.0, 17_048), (60, 60.0, 19_930), (120, 120.0, 21_035))}
 
 
 def music_check(seconds: float, available_mb: int | None = None, total_mb: int | None = None, route: str = "music",
                 card: bool = False) -> dict:
     """Whether a MiniMax Music 3 song of up to ``seconds`` fits this machine, as ``check`` answers for a clip:
-    ``route`` "music" (ComfyUI's nodes) or "music-cuda-int8" / "music-cuda-bf16" (TensorFold's CUDA engine);
-    everything fits where there is no /proc/meminfo."""
+    ``route`` "music" (ComfyUI's nodes), "music-cuda-int8" / "music-cuda-bf16" (TensorFold's CUDA engine) or
+    "music-yue2-bf16" / "music-yue2-int8" (YuE2); everything fits where there is no /proc/meminfo."""
 
     if total_mb is None:
         total_mb = meminfo().get("MemTotal", 0)
@@ -575,17 +591,20 @@ def music_check(seconds: float, available_mb: int | None = None, total_mb: int |
         return {"fits": True, "reason": "", "route": None}
     measured_here = available_mb is None and not card
     available_mb, floor, on_card = _pool(available_mb, total_mb, card)
-    fixed, per_second = MUSIC_CUDA_ESTIMATE.get(route) or MUSIC_ESTIMATE
-    route = route if route in MUSIC_CUDA_ESTIMATE else "music"
+    fixed, per_second = MUSIC_CUDA_ESTIMATE.get(route) or MUSIC_YUE2_ESTIMATE.get(route) or MUSIC_ESTIMATE
+    route = route if route in MUSIC_CUDA_ESTIMATE or route in MUSIC_YUE2_ESTIMATE else "music"
     need = int(fixed + per_second * float(seconds))
     left = available_mb - need - ERROR_MB
     out = {"fits": left >= floor, "reason": "", "need_mb": need, "error_mb": ERROR_MB, "left_mb": left, "floor_mb": floor,
            "available_mb": available_mb, "route": route, "rows": None, "nearest": None}
     if not out["fits"]:
-        who = "GPU" if on_card else "machine"
-        out["reason"] = (f"a song of up to {seconds:g} s needs about {need / 1000:.0f} GB at its peak (give or take "
-                         f"{ERROR_MB / 1000:g}); this {who} has {available_mb / 1000:.0f} GB for it and keeps "
-                         f"{floor / 1000:.0f} GB free as its floor, so it is refused. Something outside the studio holds the rest")
+        named = card_name() if on_card else ""
+        who = (f"GPU ({named})" if named else "GPU") if on_card else "machine"
+        out["reason"] = (f"a song of up to {seconds:g} s needs about {need / 1000:.1f} GB at its peak (give or take "
+                         f"{ERROR_MB / 1000:g}); this {who} has {available_mb / 1000:.1f} GB for it and keeps "
+                         f"{floor / 1000:.1f} GB free as its floor, so it is refused. " +
+                         ("Choose a shorter song, or on a card smaller than the models set STUDIO_ROOM_MB (docs/rtx-5090.md)"
+                          if on_card else "Something outside the studio holds the rest"))
         note = held_note() if measured_here and not on_card else ""
         out["reason"] += "." + note if note else ""
     return out
@@ -640,6 +659,85 @@ def sound_check(kind: str, seconds: float, available_mb: int | None = None, tota
         note = held_note() if measured_here and not on_card else ""
         out["reason"] += "." + note if note else ""
     return out
+
+# Character Swap (app/swap.py, spark/spark_swap.py): SAM 3.1, the anchor's picture model (FLUX3-K Fast) and MiniMax H3
+# Ref2VA with its two LoRAs in one ComfyUI, the windows at most 124 frames however long the part, so its peak is one per
+# quality. Measured 2026-10-27 through the app on a DGX Spark (GB10, 121.7 GB), a 5 s part of an 864x480 clip with one
+# person, int8 Ref2VA, each from a stopped ComfyUI, MemAvailable and every CUDA process's memory sampled once a second;
+# the need is what the machine had before the job less its lowest point (the GPU's share is in it: one pool): 480p
+# 55.4 GiB (347 s), 768p (1376x768) 60.6 GiB (811 s).
+SWAP_ESTIMATE = {480: 56_800, 768: 62_100}
+# On a card the models are on the card. Measured the same way under a CUDA MPS limit of 96 GB (an RTX Pro 6000 imitated,
+# STUDIO_VRAM_GB=96): the studio's processes' peak on the card, 49.4 GiB at 480p and 52.7 GiB at 768p (the machine
+# fell by 55.4 and 60.1, as on the Spark).
+SWAP_CARD_ESTIMATE = {480: 50_600, 768: 54_000}
+# With STUDIO_ROOM_MB on a card smaller than the models (docs/rtx-5090.md), ComfyUI keeps them in RAM and streams them
+# to the card. Measured under a 32 GB limit (an RTX 5090 imitated) with STUDIO_ROOM_MB=84000: the machine's drop, the
+# card's share included (one pool on the Spark it was measured on, so a card's own RAM is held to more than it uses):
+# 480p 37.8 GiB with 32.1 GiB on the card (349 s), 768p 39.5 GiB with 32.1 on the card (800 s): ComfyUI no longer keeps
+# every model resident, so the machine gives less than on a Spark.
+SWAP_OFFLOAD_ESTIMATE = {480: 38_800, 768: 40_500}
+# the bf16 Ref2VA (ComfyUI's own blocks on its 40.2 GB file) was not measured: its weights are 19.3 GB more than the
+# int8 file's 21.0 GB, and they are held throughout, so that is added
+SWAP_BF16_EXTRA_MB = 19_300
+SWAP_NAMES = {480: "Fast (480p)", 768: "High (768p)"}
+
+
+def card_name() -> str:
+    """The studio's card as nvidia-smi names it ("" when it says nothing)."""
+
+    found = smi("--query-gpu=name")
+    return found[0][0] if found and found[0] else ""
+
+
+def swap_check(quality: int, available_mb: int | None = None, total_mb: int | None = None, card: bool = False,
+               weights: str = "int8") -> dict:
+    """Whether a Character Swap at ``quality`` (480 or 768) fits this machine, as ``check`` answers for a clip: on a
+    Spark the machine's measured peak, on a card the card's (or, with STUDIO_ROOM_MB, the RAM's with the models
+    offloaded). A refusal names the GPU and what fits instead. Everything fits where there is no /proc/meminfo."""
+
+    if total_mb is None:
+        total_mb = meminfo().get("MemTotal", 0)
+    if not total_mb:
+        return {"fits": True, "reason": "", "route": None}
+    measured_here = available_mb is None and not card
+    available_mb, floor, on_card = _pool(available_mb, total_mb, card)
+    offloaded = not on_card and room_budget_mb() is not None and discrete()
+    table = SWAP_CARD_ESTIMATE if on_card else SWAP_OFFLOAD_ESTIMATE if offloaded else SWAP_ESTIMATE
+    extra = SWAP_BF16_EXTRA_MB if weights == "bf16" else 0
+
+    def need_of(q: int) -> int:
+        return table[q] + extra
+
+    def fits(q: int) -> bool:
+        return available_mb - need_of(q) - ERROR_MB >= floor
+
+    need = need_of(quality)
+    left = available_mb - need - ERROR_MB
+    out = {"fits": left >= floor, "reason": "", "need_mb": need, "error_mb": ERROR_MB, "left_mb": left, "floor_mb": floor,
+           "available_mb": available_mb, "route": f"swap-{quality}" + ("-card" if on_card else "-offload" if offloaded else ""),
+           "rows": None, "nearest": None}
+    if out["fits"]:
+        return out
+    named = card_name() if on_card or offloaded else ""
+    who = (f"this GPU ({named})" if named else "this GPU") if on_card else "this machine"
+    where = ("of the card's memory with the models on the card" if on_card else
+             "of RAM with ComfyUI keeping the models in RAM (STUDIO_ROOM_MB)" if offloaded else "at its peak")
+    said = (f"Character Swap at {SWAP_NAMES.get(quality, quality)} needs about {need / 1000:.0f} GB {where} (give or take "
+            f"{ERROR_MB / 1000:g}); {who} has {available_mb / 1000:.0f} GB for it and keeps {floor / 1000:.0f} GB free as its "
+            "floor, so it is refused")
+    smaller = [q for q in sorted(SWAP_NAMES) if q < quality and fits(q)]
+    if smaller:
+        out["nearest"] = {"quality": smaller[-1]}
+        said += f". {SWAP_NAMES[smaller[-1]]} fits: choose it in the panel"
+    elif on_card:
+        said += (". On a card smaller than the models, set STUDIO_ROOM_MB (docs/rtx-5090.md) and ComfyUI keeps them in RAM "
+                 "and streams them to the card")
+    out["reason"] = said + "."
+    if measured_here and not on_card:
+        out["reason"] += held_note()
+    return out
+
 
 # ---------- layer 2: the floor under a running server ----------
 

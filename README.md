@@ -128,11 +128,13 @@ FastH3 video with sound (125 GB), motion graphics, Finish and phone notification
 | `--all` | Every feature below, about 400 GB (on a Mac, every feature its memory runs, without `--train`) |
 | `--image-only` | Qwen-Image-2.1 only (26 GB) |
 | `--ref2va` | Reference pictures to video (39 GB more) |
+| `--swap` | The Library's Character Swap: MiniMax H3 Ref2VA in int8, two LoRAs and SAM 3.1 (23 GB more; 2.1 GB where the int8 Ref2VA is already there). DGX Spark and CUDA only |
 | `--h3-base` | MiniMax H3's own transformer, for keyframe LoRAs and the Library actions (40 GB more) |
 | `--image-edit` | Qwen-Image-2.1's 40-step model (14 GB more) |
 | `--flux3` | FLUX3-K pictures (41 GB more, gated) |
 | `--moss` | MOSS-Image (30 GB more) |
 | `--music` | MiniMax Music 3 (22 GB more) |
+| `--yue2` | YuE2 songs, the Music tab's default engine on Linux with an NVIDIA GPU (about 14 GB more; not on a Mac) |
 | `--bolt` | Nemotron 3.5 Bolt, the studio's brain (about 25 GB more) |
 | `--sound` | Sound effects and foley (11 GB more, gated) |
 | `--motion` | Motion Previs analysis (0.5 GB) |
@@ -167,13 +169,120 @@ Full recipes, every option and the measured memory of each job: [Install, and th
 design and build the studio in collaboration with Keys, made Wasserman's Filmmaker Suite, and shaped the production side (Slate, the Sharp Spec, Motion Previs). See
 [Big credit: Sam Wasserman and Wasserman Productions](#big-credit-sam-wasserman-and-wasserman-productions-wassermanproductionscom), below the release notes, and [CREDITS.md](CREDITS.md).*
 
-**3.3.3** · Apple-silicon Macs (measured on a Mac Studio M5 Ultra 256 GB), the NVIDIA DGX Spark, and the NVIDIA RTX Pro
+**4.1.1** · Apple-silicon Macs (measured on a Mac Studio M5 Ultra 256 GB), the NVIDIA DGX Spark, and the NVIDIA RTX Pro
 6000 (96 GB) ·
 [TensorFold](https://github.com/ashhart/TensorFold) **0.6.5** + two families, and TensorFold **1.0**'s native Zig
 runtime for FastH3 on Metal and on CUDA, TensorFold **1.1.5** for the music engines and both Bolt engines:
 **Qwen 2.1 Turbo**, **Qwen 2.1 Full**, **FLUX3-K Fast** and **FLUX3-K Full** (text to image, and Edit a picture) · **MOSS-Image** (text to image, DGX Spark) · **MiniMax H3**
-(video with sound) · **Fish Audio Drama 3** (Voice) · **MiniMax-Music3** (Music: songs with sung vocals) · int8 kernels on the M5 tensor units and on the GB10's tensor
+(video with sound) · **Fish Audio Drama 3** (Voice) · **YuE2** and **MiniMax-Music3** (Music: songs with sung vocals) · int8 kernels on the M5 tensor units and on the GB10's tensor
 cores · a 2x video decoder for 2K finals on the Mac
+
+## New in 4.1.1 (2026-10-28)
+
+Fixes to 3.4.0 and 4.1.0 on all four machines: the DGX Spark, the RTX Pro 6000, a 32 GB RTX 5090 and the Mac. Update
+the clone and restart the app; `--swap` installs fetch the int8 Ref2VA they run on (below).
+
+- **Character Swap checks memory before it is queued**, like a clip, a song or a sound, from peaks measured on a DGX
+  Spark and on a Spark capped to 96 GB and to 32 GB: 55.4 / 60.6 GB of a Spark at Fast / High, 49.4 / 52.7 GB on a
+  96 GB card, and with `STUDIO_ROOM_MB` on a 32 GB card the machine gave 37.8 / 39.5 GB (docs/rtx-pro-6000.md,
+  docs/rtx-5090.md). An RTX 5090 without `STUDIO_ROOM_MB` is refused with
+  the card's name and what to set; with it, ComfyUI keeps the models in RAM and the swap runs. A Mac is told it has no
+  swap before anything about its clip.
+- **Nobody in the part is refused in words.** SAM 3.1 must be at least 75% sure of a person (people scored 0.93 to 0.99
+  on synthetic frames, empty rooms, a coat on a rack, gradients and a Mandelbrot 0.31 to 0.67). A flat colour no longer
+  fails with *index 0 is out of bounds*.
+- **A cancelled or failed swap leaves nothing behind**: no mask preview, no anchor.
+- **`--swap` fetches MiniMax H3 Ref2VA in int8 (21 GB)**, the weights it runs on, instead of requiring the 40 GB bf16
+  file; the Library's actions run on either. The disk check counts it on each machine.
+- **The Director** says why the QA gate failed a take and keeps the gate's report on the take; a run with nothing to
+  cut still ends with its counts; the cast's and places' stills use a picture model this machine has (FLUX3-K Fast on
+  a Spark without Qwen), only for who and where the shots show; a written age is not followed by "years old", and a
+  brain's None or N/A never reaches a prompt.
+- **YuE2**: its refusals (when it loads and when it is queued) give the figures to a tenth of a gigabyte, and on a
+  card name the card and `STUDIO_ROOM_MB`; a song cancelled while Whisper listens leaves no take behind, a failed song leaves no score folder and its
+  server gives back PyTorch's cache, the Music tab says why YuE2 is not offered where it is not (a Mac), and an RTX
+  machine is told its own installer. Its engine build checks Zig's SHA-256 and tests on the GPU only when it is idle.
+- **The Library** lists failed takes however a project file is shaped (a hand-edited one gave a 500).
+- **Repo**: no machine's paths or job owners in the receipts; tiktoken, the Qwen team's `qwen.tiktoken` and Openjutsu
+  credited in CREDITS.md and Settings; tests that read the machine they ran on stand in for it, and none of them
+  starts a real render or ComfyUI, or mistakes a studio already running beside them for their own.
+
+## New in 4.1.0 (2026-10-27)
+
+The Director tells you what really happened, and shows you what did not work. Nothing to install: update the clone
+and restart the app (`git pull`, then quit and reopen the Mac app, or `bash scripts/app.sh`).
+
+- **An honest run report.** The run's last line counts what passed the check, what was not checked, and by name what
+  the queue refused, what failed to render and what failed its check, then says what the cut is missing
+  (*5 of 11 shots passed the check, 3 refused by the queue: Gull Strike, Pier Fall, Night Ferry, ..., cut
+  without 6 shots*). A shot the memory guard refused is never counted as rendered, and the refusal says what the
+  Studio had loaded beside the queue at the time. When the run is done the panel lists each shot left out of the cut
+  with its reason.
+- **A failed take stays where you can see it, out of the cut.** A take that fails its check is rated *no good* and
+  kept among the shot's takes and in the **Library**, marked *failed check* (type "failed" in the Library's search to
+  list them). So are the takes the QA gate and the shot check keep when they render a clip again. The Director cuts in
+  only takes that passed, or not checked, unless you circle a failed one in Slate. With no retakes the choice reads
+  *No retake* (it said *Keep it*).
+- **Shots keep their people.** The shot check sends the brain's shots back when a character is named in the prompt
+  and the shot's cast is empty, or when someone speaks inside the prompt and the shot has no lines: their pictures and
+  voices would never reach the clip. Slate's preflight says so too when a character is named in a prompt but not cast.
+- **A new angle opens on the cast.** A new size or angle is a cut, opening on the cast's stills (same pictures, same
+  order, no first frame) where Ref2VA is installed; only a beat carried on in the same size and angle opens on the
+  shot before. "The shots of a scene follow each other without a cut" is gone from what the brain is asked.
+- **Costumes in the reference stills.** When a character's clothing names a hat, a coat or a uniform, the reference
+  portrait is from the knees up with all of it in frame, instead of a head-and-shoulders with "no props".
+- **A brain reply with a stray think tag still reads.** When a reply carries `</think>`, the answer after it is read;
+  when the first JSON in a reply is broken, the longest whole one is.
+- **One render in the queue for each machine.** The Director keeps one clip in the queue for each machine that renders
+  (this one and its Sparks, at most three), so on one Spark a retake no longer waits behind the next shots. A render
+  the machine's workload limits stopped (heat, memory pressure) is not a take: it is queued once more, at the same
+  seed, after the queue's own cool-down gate, and left out after a second stop. The limits themselves are unchanged.
+- **Setup.** `scripts/setup-voice.sh` stops at once, before the engine, when the folder for Fish's checkpoint is not
+  yours to write (a root-owned `~/models`), and says how to fix it. An app that is already running picks up the Bolt
+  engine within a minute of `oneshot-setup-spark.sh --bolt`, with no restart (before, it stayed *external* until one).
+
+## New in 3.4.0 (2026-10-27)
+
+Two new things to make, both on this machine with no account and no cloud: songs by **YuE2**, now the Music tab's
+default on Linux with an NVIDIA GPU, and **Character Swap**, a Library action that puts the character in one picture in
+place of the person in a part of a clip. Add them to a DGX Spark (both are ticked in the installer's checklist and part
+of `--all`), then restart the app; after that, `--upgrade` keeps them up to date:
+
+```bash
+git pull && bash oneshot-setup-spark.sh --yue2 --swap --no-render
+```
+
+A Mac has nothing new to install: neither runs on a Mac, and its Music tab stays on MiniMax Music 3.
+
+- **YuE2 songs.** m-a-p's YuE2-3B and its YuE2-Vae decoder write the song's score first (melody and chords), then the
+  song: sung vocals and accompaniment, 48 kHz stereo, up to five minutes. It runs as a resident server in an
+  environment of its own (`$PREFIX/yue2`); on a DGX Spark the song's tokens run on TensorFold's CUDA engine (int8).
+  Measured on one DGX Spark: a 60 s song in about **38 s**, a 2-minute song in about **64 s**, the model loaded in
+  6 to 9 s, and Whisper heard **94 to 97 %** of the words sung. MiniMax Music 3 stays one click away: the **engine picker**
+  above the Music tab's form (YuE2 · MiniMax Music 3) chooses for each song, and Settings → Presets → *Song engine* sets
+  the default (*Best here*: YuE2 where it is installed, MiniMax Music 3 on a Mac). Each take keeps its score
+  (*Download score*). `--yue2` is about 14 GB. [YuE2 songs](#yue2-songs).
+- **Character Swap.** *Swap the character* under a clip in the Library: choose a picture of the character and a part
+  of the clip (5 to 15 seconds), and the person in it is drawn again as that character, with the clip's own scene,
+  performance and sound kept. **Fast** (480p, the default) or **High** (768p); the picture model first puts the
+  character into the part's first frame and the swap starts from it (*Put the character in the first frame first*).
+  It runs on the studio's own MiniMax H3 Ref2VA (int8), with LightX2V's 8-step Turbo LoRA, Akatz Labs' Character Swap
+  LoRA v1.5 and SAM 3.1 to find and follow the person. Measured on a DGX Spark with the GPU to itself: a 5 s part in
+  about **6 minutes** at Fast and about **12 minutes** at High. A part with a hard cut, or with nobody in its first
+  frame, is refused before anything is drawn. DGX Spark and CUDA only. `--swap` is 23 GB: the int8 Ref2VA it runs on
+  (21 GB, without `--ref2va`'s 40 GB bf16 file) and 2.1 GB beside it. [Character Swap](#character-swap).
+
+Licences, also in Settings → About and beside each choice in the app:
+
+- **YuE2:** the code is Apache 2.0; the weights are CC BY-NC 4.0 with the YuE2 authors' additional permission for
+  creators: personal users, content creators and musicians may publish, sell and license the songs they make, free and
+  with no royalties; a company needs a commercial licence from the authors. Do not redistribute the weights.
+- **Character Swap:** MiniMax H3 and Akatz Labs' Character Swap LoRA are under the MiniMax H3 Community License, which
+  does not cover use in the EU, the UK, South Korea or the US; LightX2V's Turbo LoRA is Apache 2.0; SAM 3.1 is under
+  Meta's SAM License. The idea and its settings come from Comfy Org's Openjutsu and Akatz Labs' workflow (MIT).
+
+The TUTORIAL and the app's **Learn** tab have a lesson for each: *A song with YuE2 or MiniMax-Music3* and
+*Character Swap*.
 
 ## New in 3.3.3 (2026-10-26)
 
@@ -2190,6 +2299,71 @@ Agents have the same three as `restyle_clip`, `extend_clip` and `fix_clip`; over
 `POST /api/revise {kind: "restyle" | "extend" | "fix", params}` (or `POST /api/jobs` with the same kind), which
 returns the first job and `revise`, the steps so far; `GET /api/revise/<id>` follows them.
 
+### Character Swap
+
+*Swap the character* under a clip in the Library replaces the person in a part of the clip with the character in one
+picture. The scene, the performance and the clip's own sound stay: the person's moves, gaze and timing carry over, the
+room and the other people are the clip's own, and the part keeps its soundtrack.
+
+![Character Swap in the Library: the clip, the character's picture, the part, Fast or High, the first-frame switch, a direction and the licence line](docs/screenshots/character-swap.webp)
+
+1. Press **Swap the character** under a clip. The panel opens with the clip beside its settings.
+2. Choose **the character**: upload a picture or pick one from the Library. Head to toe if you can: the face, the hair
+   and the whole outfit come from it.
+3. Choose **the part**: where it starts and how long it is (5 to 15 seconds).
+4. Choose **Fast** (480p, the default) or **High** (768p), and leave **Put the character in the first frame first** on: the
+   picture model draws the character into the part's first frame and the swap starts from that frame (FLUX3-K Fast,
+   or Qwen-Image-2.1 where FLUX3-K is not installed). A **direction** (optional) adds your own words.
+5. Press **Swap the character**. The job card shows the stages: the part, finding the person, following them, the
+   first frame, each window, and the assembly. The result is in the Library (`renders/<job>.mp4`), beside the part
+   with the swapped person tinted green, so you can see who was swapped, and the first frame it started from.
+
+How it works: SAM 3.1 finds the people in the part's first frame and the largest one is swapped; it follows them
+through the part, and the mask is grown by 64 pixels so hair, hands and the outfit's edges are inside it. Only that
+person is drawn again: the rest of each frame is the clip's own. MiniMax H3 Ref2VA with Akatz Labs' Character Swap
+LoRA and LightX2V's 8-step Turbo LoRA draws the person, 8 passes a window, in windows of at most 124 frames (5.2 s),
+each starting with the last 18 frames of the window before so the joins hold: 106 new frames a window after the first.
+It all runs on this machine on the studio's own engine: no ComfyUI to open, no account, no cloud.
+
+How long it takes on a DGX Spark with the GPU to itself, from the measured stages, as the panel shows it for the part
+you chose (High takes a little over twice as long as Fast; another job on the GPU at the same time makes it slower:
+9.7 min for the 5 s Fast swap beside a language model):
+
+| Part | Fast (480p) | High (768p) |
+|---|---|---|
+| 5 s, one window | about 6 min | about 12 min |
+| 8 s, two windows | about 9 min | about 20 min |
+| 10 s, three windows | about 11 min | about 26 min |
+| 15 s, four windows | about 16 min | about 39 min |
+
+Where the time goes, 5 s at 480p: cutting the part 1 s, finding the person 5 s, following them 37 s, the first frame 40 s,
+then the window: the prompt and the references read 25 s, the frames encoded 21 s, eight passes of 21 to 23 s, the
+frames decoded 16 s, and the assembly 1 s. The passes are most of it. To keep them short, `<Video 1>` (the part as the
+model reads the performance) goes in at half the canvas: at 768p a pass took 146 s with it at full size and 65 s at
+half, the moves and timing followed as closely. The largest memory use measured was about 45 GB at 480p and 57 GB at
+768p.
+
+TensorFold's int8 engine (the one FastH3 runs on) can run these blocks too, with
+`SWAP_ENGINE=tensorfold`, but it needs an engine build that takes a checkpoint without FastH3's gate weights
+(`spark/patches/tensorfold-h3-gateless.patch`, not part of the install). Measured, it is no faster here: FastH3's speed
+is its sparse attention, which those weights drive, and on 54,500 rows a dense pass took 72 s against ComfyUI's 67 s.
+
+Limits:
+
+- **One continuous shot.** A part with a hard cut in it is refused (choose a part before or after the cut).
+- **A person in the first frame.** A part that opens on nobody (a title, a fade from black) is refused before
+  anything is drawn.
+- **The largest person is swapped** when several are in the first frame.
+- A clip without sound gives a result without sound. Lip sync and identity can still drift on long parts: the model
+  is an experimental one.
+
+Needs: a DGX Spark (or another CUDA machine) with MiniMax H3 Ref2VA, and `bash oneshot-setup-spark.sh --swap` (it adds
+Ref2VA when it is not there, Akatz Labs' Character Swap LoRA v1.5, LightX2V's 8-step Turbo LoRA and SAM 3.1, about
+2.1 GB beside Ref2VA; ticked in the installer's checklist). Not on a Mac. MiniMax H3 and the LoRA are under the
+MiniMax H3 Community License, which does not cover use in the EU, the UK, South Korea or the US; the panel says so
+beside the button. Agents have it as `swap_character` (clip, picture, start, seconds, quality, direction); over the
+API it is `POST /api/jobs {kind: "swap", params: {video, image, start, seconds, quality, anchor, direction, seed}}`.
+
 ### Clearing prompts and deleting clips
 
 From 2.6. Nothing below erases a file except *Empty trash*.
@@ -2568,15 +2742,21 @@ In the **Director** room of the sidebar (or at the bottom of the First AD tab), 
 the film's logline and a few numbers (scenes, shots a scene, seconds a shot, quality, how many retakes a failed take
 gets, whether to cut it and a song from the Music tab under the cut) and runs the whole production while you watch.
 The film's brain writes what the film lacks: characters with their voices and places when it has none, then the
-scenes, then each scene's shots with their sectioned prompts, cast, place and short spoken lines (the first shot of a
-scene is a cut, on the cast's stills where Ref2VA is installed; the rest carry on from the shot before). Each
-character without a pinned picture gets a reference still and a turnaround of it, each place a plate, pinned to their
-sheets. Then every shot is rendered in order, at most three in the queue at once, and each take is checked by the QA
-gate; a take that fails is rendered again at the next seed. The take that passes is rated *good* and a failed one
-*no good*. Last, the best take of every shot is cut: with a song, by the rough cut on the song's beats (each shot near its own length) with the
+scenes, then each scene's shots with their sectioned prompts, cast, place and short spoken lines. A shot that names a
+character in its prompt has them in its cast, and what anyone says is in its lines, or the brain is asked again. A new
+size or angle is a cut, on the cast's stills where Ref2VA is installed (the same pictures in the same order, no first
+frame); a beat carried on in the same size and angle opens on the shot before. Each character without a pinned
+picture gets a reference still (from the knees up when the clothing names a hat, a coat or a uniform) and a turnaround
+of it, each place a plate, pinned to their sheets. Then every shot is rendered in order, one in the queue for each
+machine that renders (at most three), and each take is checked by the QA gate; a take that fails is rendered again at
+the next seed. The take that passes is rated *good* and a failed one *no good*: it stays among the shot's takes and in
+the Library, marked *failed check*, and out of the cut unless you circle it. A render the workload limits stopped is
+queued once more at the same seed; a shot the queue refused (the memory guard) is left out, with the reason. Last, the
+take of every shot that passed (or was not checked, or is circled) is cut: with a song, by the rough cut on the song's beats (each shot near its own length) with the
 song under it, its FCPXML, EDL and Resolve zip in exports/; without one, on an Editor timeline that is exported, with
-the timeline's FCPXML, EDL and package beside it. The panel shows the stage, the counts (*7 of 9 shots rendered, 2 retakes*), the job at
-work and the run's log; *Stop* takes the jobs still waiting out of the queue, and *Direct it again* carries on: what
+the timeline's FCPXML, EDL and package beside it. The panel shows the stage, the counts (*7 of 9 shots rendered, 6 passed the check,
+1 refused by the queue, 2 retakes*), the job at work and the run's log, and at the end each shot left out of the cut
+with its reason; the log's last line says the same (*cut without 1 shot*). *Stop* takes the jobs still waiting out of the queue, and *Direct it again* carries on: what
 is written, cast and rendered is kept, and so are shots that had a take before the Director came to them. A restart
 of the app picks a run up where it was. For scripts and agents: `POST /api/slate/direct {"project", "logline",
 "scenes", "shotsPerScene", "seconds", "quality", "retakes", "cut", "song"}`, `GET /api/slate/direct/{project}`,
@@ -2942,6 +3122,60 @@ top_k?, title?, asr?, live?}` (a job of kind `music`; `live: false` does not str
 product or service must display "MiniMax-Music3" in its user interface; a licensee above US$20 million of yearly
 revenue needs MiniMax's prior written authorisation; a hosted service must keep safeguards against misuse. Do not
 redistribute the weights.
+
+## YuE2 songs
+
+**YuE2.** On Linux with an NVIDIA GPU (a DGX Spark, an RTX Pro 6000) the **Music** tab makes songs with YuE2 by
+default where it is installed: from your lyrics and a style it first writes the song's score (melody and chords), then
+the song itself, sung vocals and accompaniment, 48 kHz stereo WAV, up to five minutes (10 to 300 s). MiniMax Music 3
+stays one click away: the **engine picker** above the form (YuE2 · MiniMax Music 3) chooses for each song, and
+Settings → Presets → *Song engine* sets the default (*Best here*: YuE2 where it is installed, MiniMax Music 3 on a Mac,
+which YuE2 does not run on). Each engine's licence line shows under the picker.
+
+![The Music tab on a DGX Spark: the engine picker (YuE2 · MiniMax Music 3), YuE2's licence line and the song form](docs/screenshots/music-yue2.webp)
+
+- **Install.** `bash oneshot-setup-spark.sh --yue2` (in `--all`, and ticked in the install checklist): about 14 GB,
+  the YuE2-3B model and its YuE2-Vae decoder at pinned revisions with their checksums, in an environment of their own
+  under `$PREFIX/yue2` (`spark/setup-yue2.sh`, safe to run again). The studio's own environment is not touched.
+- **Lyrics.** The same section tags as the tab's buttons: `[Intro]`, `[Verse]`, `[Pre-Chorus]`, `[Chorus]`,
+  `[Bridge]`, `[Interlude]`, `[Outro]`, `[Instrumental]`. Others are read as the nearest of those (`[Verse 2]` as
+  `[Verse]`, `[Hook]` and `[Post-Chorus]` as `[Chorus]`, `[Solo]` and `[Break]` as `[Interlude]`).
+- **Instrumentals.** Empty lyrics (or tags alone) make an instrumental: YuE2 writes a score from the section tags,
+  the melody is given to the instruments, and that score is played with no words to sing. The style gets
+  "Instrumental ... no vocals, no singing, no choir, no spoken words" added where it does not say so.
+- **Length** is the longest the song may be. YuE2 decides a song's length from its lyrics; a song that would run
+  longer is cut at the length you set and faded out over its last 2 seconds (the take says so).
+- **The score.** Each YuE2 take keeps its score (`score.abc`, *Download score* on the take) and what it was made from,
+  in `~/ImaginationStudio/music/<id>.yue2/`.
+- **Each song** is a job in the queue, as with MiniMax Music 3: YuE2 loads on the first song (about 15 s on a DGX
+  Spark), stays loaded for five minutes after a song (`YUE2_IDLE_S`), and is unloaded at once when any other job
+  starts, MiniMax Music 3 included. While loaded it holds the studio's GPU lock. Whisper's lyrics check works as for
+  MiniMax Music 3.
+- **Speed.** On a DGX Spark the score and the song's tokens run on TensorFold's CUDA engine for YuE2
+  (`libtf_yue2.so`, built by `--yue2`: int8 weights, a scale for each group of 128, one CUDA graph a token), about
+  3x the speed of bf16, its next-token choices checked against YuE2's own bf16 ones token by token over whole songs;
+  the flow matching and the decoder run on YuE2's own bf16 and fp32 weights. Where the engine is not built (another GPU) the tokens use an int8 copy of the
+  model's projections in PyTorch instead. `YUE2_BACKEND=torch` runs that loop on a Spark too; `YUE2_QUANT=bf16` runs
+  bf16 only.
+
+Measured on one DGX Spark (GB10), the model loaded, English indie-pop lyrics at seeds 7, 11 and 21 (each song ran
+longer than its length and was cut there); Whisper's check on each song; the peak is the server's own memory:
+
+| Setting | 60 s song | 120 s song | Whisper heard (60 s / 120 s) | Ready in | At the peak (120 s) |
+|---|---|---|---|---|---|
+| TensorFold engine, int8 (default on a DGX Spark) | 35.0 to 40.4 s | 60.4 to 66.9 s | 94 to 97 % / 97 % | 6 to 9 s | 21.1 GB |
+| int8 PyTorch token loop (`YUE2_BACKEND=torch`, other GPUs) | 45.7 to 47.6 s | 76.0 to 78.8 s | 68 to 97 % / 79 to 99 % | 21 s | 19.1 GB |
+| bf16 (`YUE2_QUANT=bf16 YUE2_BACKEND=torch`) | 94.9 s | 146.7 s | 98 and 97 % (60 s, seeds 7 and 11) | about 15 s | 19.4 GB |
+
+The score comes first, about 1,200 to 1,800 tokens whatever the length (11 to 17 s on the engine, 17 to 19 s on the
+PyTorch loop); the song then takes about 0.4 s a second of song (0.5 s on the PyTorch loop). Through the app (a test
+studio), a 45 s song on the PyTorch loop, the model loading first, took 76.9 s and Whisper heard 92 % of its words.
+Four instrumentals of 65 and 70 s took 47 to 76 s on the PyTorch loop.
+
+**Licence.** YuE2's code is Apache 2.0. Its weights are CC BY-NC 4.0 with the YuE2 authors' additional permission for
+individual creators: personal users, content creators and musicians may publish, sell and license the songs they make,
+free and with no royalties; a company needs a commercial licence from the authors; the songs must not be used for
+anything illegal, harmful or deceptive. Do not redistribute the weights.
 
 ## The brain engine (NVIDIA Nemotron 3.5 Bolt)
 

@@ -7,11 +7,17 @@ restart picks it up where it stopped:
              applied through the same actions the First AD uses (``apply`` mirrors slate.js ``slApply``)
   casting    a reference still for every character without a pinned picture, then a turnaround of it; a plate for
              every place without one
-  rendering  every shot compiled (slate.compile_shot) and queued in order, at most three at a time; a shot that opens
-  checking   on the shot before waits for it; each clip comes back as a take, is checked by the QA gate (the job's
-  retaking   own, else POST /api/qa) and, when it fails, rendered again at the next seed, up to ``retakes`` times
-  cutting    the best take of every shot cut on the song's bars by the rough cut (roughcut.py), with its FCPXML, EDL
-             and Resolve zip; without a song (or the rough cut) an Editor timeline and an export job
+  rendering  every shot compiled (slate.compile_shot) and queued in order, one for each machine that renders (at most
+  checking   three); a shot that opens on the shot before waits for it; each clip comes back as a take, is checked by
+  retaking   the QA gate (the job's own, else POST /api/qa) and, when it fails, rendered again at the next seed, up to
+             ``retakes`` times; a render the machine's workload limits stopped (heat, memory pressure) is not a take
+             and is queued once more
+  cutting    the take that passed of every shot (or the one circled) cut on the song's bars by the rough cut
+             (roughcut.py), with its FCPXML, EDL and Resolve zip; without a song (or the rough cut) an Editor timeline
+             and an export job. A take that failed its check stays in the Library and the shot's takes, out of the cut
+
+Each shot ends with an outcome (``OUTCOMES``) and the run's last line counts them: what passed, what the queue refused,
+what failed its check and what was left out of the cut.
 
 The server hands in the queue and the job table (``attach``); tests stand in for them.
 """
@@ -31,7 +37,13 @@ router = APIRouter()
 HOME: Path = Path()
 STAGES = ("writing", "casting", "rendering", "cutting")
 ACTIVE = ("writing", "casting", "rendering", "checking", "retaking", "cutting")
-AT_ONCE = 3  # render jobs a run keeps in the queue
+AT_ONCE = 3  # the most render jobs a run keeps in the queue (with as many machines to render them)
+WORKLOAD_STOPS = 2  # a shot whose render the machine's workload limits stopped this often is left out (no third try)
+WORKLOAD_STOP = "stopped by this machine's workload limits"  # spark_generate.py's words for a heat or memory stop
+# how a shot ended: in the cut (passed, not checked, kept from before) or out of it, and why
+OUTCOMES = {"passed": "passed the check", "unchecked": "not checked", "kept": "kept as it was", "failed": "failed the check",
+            "refused": "refused by the queue", "broken": "the render failed", "stopped": "stopped by the workload limits", "removed": "removed"}
+IN_CUT = ("passed", "unchecked", "kept")
 TICK = 2.0  # seconds between looks at the queue
 LOG = 200  # lines of the run's log kept
 
@@ -44,6 +56,12 @@ editor_new = editor_save = None  # POST /api/projects, PUT /api/projects/{id}
 sizes: dict = {}  # preset -> (width, height)
 APP = None  # the FastAPI app
 ref2va = lambda: False  # whether shots can open on cast stills
+machines = lambda: 1  # how many machines render the queue's clips (this one and its Sparks, sparks.py)
+resident = lambda: ""  # what is loaded beside the queue now, in words (server.resident_words), for a refusal
+pictures = lambda: []  # the picture models installed here (server.image_models)
+# the picture model of the cast's and places' stills where Settings' default is not installed here: the app's own order
+# (Qwen first, as every page's default), then FLUX3-K Fast, which draws whole figures, then the slower ones
+PICTURE_ORDER = ("qwen", "flux3k-fast", "moss-image", "qwen-full", "flux3k-full")
 
 runs: dict[str, dict] = {}  # project -> {"thread", "stop"}
 guard = threading.RLock()  # one read-modify-write of a film file at a time
@@ -59,10 +77,11 @@ class Failed(Exception):
 
 
 def attach(home: Path, *, queue, lookup, stop_job, check, new_project, save_project, presets: dict, app=None,
-           references=None) -> APIRouter:
-    global HOME, submit, job_of, cancel, qa_start, editor_new, editor_save, sizes, APP, ref2va
+           references=None, renderers=None, loaded=None, picture_models=None) -> APIRouter:
+    global HOME, submit, job_of, cancel, qa_start, editor_new, editor_save, sizes, APP, ref2va, machines, resident, pictures
     HOME, submit, job_of, cancel, qa_start, editor_new, editor_save = home, queue, lookup, stop_job, check, new_project, save_project
     sizes, APP, ref2va = presets, app, references or ref2va
+    machines, resident, pictures = renderers or machines, loaded or resident, picture_models or pictures
     return router
 
 
@@ -334,22 +353,36 @@ def context(film: dict, scene: dict | None = None) -> str:
     return "\n".join(out)
 
 
-def sheet_picture(c: dict) -> str:
-    """A character's reference portrait prompt (slate.js slSheetPicture)."""
+# clothing a head-and-shoulders crop would lose: a hat, a coat, a uniform (slate.js SL_COSTUME)
+COSTUME = re.compile(r"\b(hat|hats|cap|caps|fedora|bowler|beret|helmet|hood|bonnet|turban|crown|veil|coat|overcoat|greatcoat|trench|"
+                     r"jacket|blazer|cloak|cape|robe|gown|dress|uniform|armou?r|apron|overalls|suit|tuxedo|waistcoat|vest|kilt|"
+                     r"scarf|shawl|boots|holster|belt|badge|costume)\b", re.I)
 
-    who = ", ".join(x for x in (text(c.get("gender")), text(c.get("ethnicity"))) if x)
-    words = (f"{c.get('name')}, " + (f"{c['age']} years old, " if c.get("age") else "") + f"{who}. {text(c.get('faceFeatures'))}. Hair: {text(c.get('hair'))}. "
-             f"Wearing {text(c.get('clothing'))}. {text(c.get('expression'))}. Character reference portrait: centered head-and-shoulders, facing the camera, "
-             f"plain seamless backdrop, generous headroom, no props. {c.get('keyLightSide') or 'Key light from left'}, {c.get('lightingMood') or 'natural soft light'}, "
-             "clean catchlights, gentle fill. Photoreal, neutral grade, true-to-skin color, crisp detail for identity reference.")
+
+def sheet_picture(c: dict) -> str:
+    """A character's reference portrait prompt (slate.js slSheetPicture). When the clothing names a hat, a coat or a
+    uniform the portrait is from the knees up and shows all of it: later shots match the costume to this picture, and a
+    head-and-shoulders crop with "no props" lost a period overcoat and a fedora."""
+
+    g = lambda key: slate.given(c.get(key))  # noqa: E731 - a brain's None, N/A or unknown is no words
+    who = ", ".join(x for x in (slate.age_words(c.get("age")), g("gender"), g("ethnicity")) if x)
+    framing = ("three-quarter length from the knees up, facing the camera, the whole costume in frame as described, hat and coat included, "
+               "plain seamless backdrop, generous headroom" if COSTUME.search(g("clothing")) else
+               "centered head-and-shoulders, facing the camera, plain seamless backdrop, generous headroom, no props")
+    bits = [", ".join(x for x in (g("name") or "A person", who) if x), g("faceFeatures"), g("hair") and "Hair: " + g("hair"),
+            g("clothing") and "Wearing " + g("clothing"), g("expression"), f"Character reference portrait: {framing}",
+            f"{g('keyLightSide') or 'Key light from left'}, {g('lightingMood') or 'natural soft light'}, clean catchlights, gentle fill",
+            "Photoreal, neutral grade, true-to-skin color, crisp detail for identity reference"]
+    words = ". ".join(bit.strip().rstrip(".") for bit in bits if bit and bit.strip()) + "."
     return re.sub(r"\.\s*\.", ".", re.sub(r"\s+\.", ".", words))
 
 
 def plate_picture(l: dict) -> str:
     """A location's plate prompt (slate.js slPlatePicture)."""
 
-    bits = [f"{l.get('name')}: {l.get('description') or ''}", l.get("timeOfDay"), l.get("weather"), l.get("architecture"), l.get("textures"),
-            l.get("practicalLights") and "lit by " + l["practicalLights"]]
+    g = lambda key: slate.given(l.get(key))  # noqa: E731
+    bits = [f"{g('name')}: {g('description')}".strip(": "), g("timeOfDay"), g("weather"), g("architecture"), g("textures"),
+            g("practicalLights") and "lit by " + g("practicalLights")]
     return ". ".join(b for b in bits if isinstance(b, str) and b.strip()) + \
         ". Location plate: a wide establishing still of the empty place at eye level, natural perspective, photographic, every surface in focus."
 
@@ -396,16 +429,37 @@ def change(project: str, mutate) -> dict:
         return slate.write(film)
 
 
+def outcome_of(rec: dict) -> str | None:
+    """How a settled shot ended (OUTCOMES); for a run written before outcomes were kept, read from what it has."""
+
+    if rec.get("outcome"):
+        return rec["outcome"]
+    if not rec.get("settled"):
+        return None
+    if rec.get("kept"):
+        return "kept"
+    if rec.get("best"):
+        return "passed"
+    attempts = rec.get("attempts") or []
+    if not attempts:
+        return "removed"
+    return "failed" if any(a.get("status") == "done" for a in attempts) else "refused" if attempts[-1].get("job") is None else "broken"
+
+
 def counts(run: dict, film: dict | None = None) -> dict:
     shots = run.get("shots") or {}
     attempts = [a for s in shots.values() for a in s.get("attempts") or []]
+    mine = [shots[sid] for sid in run.get("order") or [] if sid in shots]
+    ended = lambda *names: sum(1 for s in mine if s.get("settled") and outcome_of(s) in names)
     out = {"scenes": len((film or {}).get("scenes") or []) or run.get("counts", {}).get("scenes", 0),
            "shots": len(run.get("order") or []),
-           "rendered": sum(1 for s in shots.values() if any(a.get("status") == "done" for a in s.get("attempts") or []) or s.get("kept")),
-           "settled": sum(1 for s in shots.values() if s.get("settled")),
-           "passed": sum(1 for s in shots.values() if s.get("settled") and s.get("best")),
+           "rendered": sum(1 for s in mine if any(a.get("status") == "done" for a in s.get("attempts") or []) or s.get("kept")),
+           "settled": sum(1 for s in mine if s.get("settled")),
+           "passed": ended("passed"), "kept": ended("kept"), "unchecked": ended("unchecked"), "inCut": ended(*IN_CUT),
+           "failedCheck": ended("failed"), "refused": ended("refused"), "broken": ended("broken"), "stopped": ended("stopped"),
+           "leftOut": sum(1 for s in mine if s.get("settled") and outcome_of(s) not in IN_CUT + ("removed",)),
            "failed": sum(1 for a in attempts if a.get("passed") is False),
-           "retakes": sum(max(0, len(s.get("attempts") or []) - 1) for s in shots.values()),
+           "retakes": sum(1 for a in attempts if a.get("retake") and not a.get("refused") and a.get("status") != "stopped"),
            "cast": len(run.get("casting") or {}),
            "castDone": sum(1 for c in (run.get("casting") or {}).values() if c.get("step") == "done")}
     run["counts"] = out
@@ -534,17 +588,38 @@ def work(run: dict, stop: threading.Event) -> None:
                 job = job_of(one.get("job") or "") if one.get("status") == "queued" else None
                 if job and job.get("status") == "queued":
                     cancel(one["job"])
+        for one in (run.get("casting") or {}).values():  # and the cast's and places' stills waiting their turn
+            job = job_of(one.get("job") or "") if one.get("job") and one.get("step") != "done" else None
+            if job and job.get("status") == "queued":
+                cancel(one["job"])
         run["state"], run["finished"] = "stopped", slate.now()
         say(run, "Stopped. Direct it again to carry on from here: what is written, cast and rendered is kept.")
     except Exception as error:  # noqa: BLE001 - the reason goes to the page
         run["state"], run["finished"], run["error"] = "failed", slate.now(), str(getattr(error, "detail", error))[:600]
-        say(run, "Failed: " + run["error"])
+        # a run that got as far as its shots still says what became of each of them (a cut with nothing to cut)
+        tally = ". " + summary(run) if run.get("order") and run.get("shots") else ""
+        say(run, "Failed: " + run["error"] + tally)
 
 
 def summary(run: dict) -> str:
-    c = counts(run)
-    return f"{c['settled']} of {c['shots']} shots rendered and checked, {c['retakes']} retake{'s' if c['retakes'] != 1 else ''}" + \
-        (", cut" if run.get("cut") else "")
+    """The run's last line: what passed, what did not and why, by name; never a shot the queue refused as rendered."""
+
+    c, shots = counts(run), run.get("shots") or {}
+    plural = lambda n, word: f"{n} {word}" + ("" if n == 1 else "s")
+    who = lambda outcome: ", ".join(shots[sid].get("name") or "?" for sid in run.get("order") or [] if outcome_of(shots.get(sid) or {}) == outcome)
+    bits = [f"{c['passed']} of {plural(c['shots'], 'shot')} passed the check"]
+    if c["kept"]:
+        bits.append(f"{c['kept']} kept as rendered before")
+    if c["unchecked"]:
+        bits.append(f"{c['unchecked']} not checked (in the cut)")
+    for key, words in (("failedCheck", "failed the check (in the Library, out of the cut)"), ("refused", "refused by the queue"),
+                       ("broken", "failed to render"), ("stopped", "stopped by the workload limits")):
+        if c[key]:
+            bits.append(f"{c[key]} {words}: {who({'failedCheck': 'failed'}.get(key, key))}")
+    bits.append(plural(c["retakes"], "retake"))
+    if run.get("cut"):
+        bits.append("cut without " + plural(c["leftOut"], "shot") if c["leftOut"] else "cut")
+    return ", ".join(bits)
 
 
 def wait(stop: threading.Event, seconds: float = None) -> None:
@@ -570,7 +645,7 @@ def brain(film: dict, task: str, prompt: str, check) -> dict:
 
     d = film.get("defaults") or {}
     problem, asked = "", prompt
-    for _ in range(2):
+    for again in range(2):
         try:
             answer = slate.ask(d.get("brain") or slate.AUTO, SYSTEM, asked, "top", d.get("localEndpoint") or "", d.get("localModel") or "")
             data = slate.extract_json(answer)
@@ -579,7 +654,7 @@ def brain(film: dict, task: str, prompt: str, check) -> dict:
             problem = str(error)
         except Exception as error:  # noqa: BLE001 - a brain that does not answer
             raise Failed(f"the brain did not answer ({task}): {str(error)[:300]}")
-        if not problem:
+        if not problem or (again and isinstance(problem, Soft)):  # asked once to fix a soft problem; the second answer stands
             return data
         asked = prompt + f"\n\nYOUR LAST ANSWER COULD NOT BE USED: {problem}. Answer again, with the JSON only."
     raise Failed(f"the brain's {task} could not be used twice: {problem}")
@@ -600,20 +675,56 @@ def check_scenes(data: dict) -> str:
     return "" if good else "\"scenes\" is a list of scenes, each with a name and a synopsis"
 
 
+class Soft(str):
+    """A problem the brain is asked to fix once; a second answer with only these is taken (a cast or a line guessed
+    from the words is worse than the shot as written, and two refusals would stop the whole run)."""
+
+
+SPEAKING = (r"says?|said|asks?|asked|tells?|told|answers?|answered|repl(?:y|ies|ied)|shouts?|shouted|yells?|yelled|whispers?|"
+            r"whispered|mutters?|muttered|murmurs?|murmured|cries|cried|screams?|screamed|speaks?|spoke")
+
+
+def spoken_in(prompt: str, names: list[str]) -> list[str]:
+    """Speech written into a prompt: one of the bible's characters (or he, she, they) speaking, then a quotation within a
+    few words. A sign that says something, a diner called something or a radio announcer is not the cast speaking."""
+
+    who = "|".join([re.escape(n) for n in names if n] + ["[Hh]e", "[Ss]he", "[Tt]hey"])
+    return re.findall(r"(?<!\w)(?:" + who + r")(?![\w'’])[^\"“.]{0,30}?\b(?:" + SPEAKING + r")\b[^\"“]{0,40}?[\"“]([^\"”]+)[\"”]", prompt)
+
+
+def named_in(prompt: str, names: list[str], places: list[str] = ()) -> list[str]:
+    """The bible's characters a prompt names, by whole name as written (case and all), places' names left out first."""
+
+    for place in sorted((p for p in places if p), key=len, reverse=True):  # "Marlowe House" is a place, not Marlowe
+        prompt = re.sub(re.escape(place), " ", prompt, flags=re.I)
+    # "Ada's boat" is about Ada, not of her: a possessive alone does not put her in the shot
+    return sorted(n for n in names if n and re.search(r"(?<!\w)" + re.escape(n) + r"(?![\w'’])", prompt))
+
+
 def check_shots(film: dict, seconds: int):
-    names = {(c.get("name") or "").strip().lower() for c in film.get("characters") or []}
-    places = {(l.get("name") or "").strip().lower() for l in film.get("locations") or []}
+    as_written = [(c.get("name") or "").strip() for c in film.get("characters") or []]
+    names = {n.lower() for n in as_written}
+    place_names = [(l.get("name") or "").strip() for l in film.get("locations") or []]
+    places = {n.lower() for n in place_names}
 
     def check(data: dict) -> str:
-        shots = data.get("shots")
+        shots, soft = data.get("shots"), ""
         if not isinstance(shots, list) or not shots:
             return "\"shots\" is a list of shots"
         for i, shot in enumerate(shots, 1):
             if not isinstance(shot, dict) or "# subject" not in text(shot.get("prompt")).lower():
                 return f"shot {i} needs a sectioned \"prompt\" starting with # Subject"
-            for who in shot.get("cast") or []:
+            cast = shot.get("cast") if isinstance(shot.get("cast"), list) else []
+            for who in cast:
                 if str(who).strip().lower() not in names:
                     return f"shot {i} casts \"{who}\", who is not in the bible: use these names only: " + ", ".join(sorted(names))
+            # a shot whose people are only in the prompt's words renders from text: their pictures are never attached
+            seen = named_in(text(shot.get("prompt")), as_written, place_names)
+            if seen and not cast and not soft:
+                soft = Soft(f"shot {i} names {', '.join(seen)} in its prompt and has an empty \"cast\": list in \"cast\" the characters seen in the shot")
+            spoken = [l for l in shot.get("lines") or [] if isinstance(l, dict) and text(l.get("text")).strip()]
+            if not spoken and not soft and any(len(q.split()) >= 3 for q in spoken_in(text(shot.get("prompt")), as_written)):
+                soft = Soft(f"shot {i} has speech inside its prompt and no \"lines\": the exact words go in \"lines\", each with its speaker")
             if shot.get("location") and str(shot["location"]).strip().lower() not in places:
                 return f"shot {i} is set at \"{shot['location']}\", which is not in the bible: use these only: " + ", ".join(sorted(places))
             lines = [l for l in shot.get("lines") or [] if isinstance(l, dict) and text(l.get("text")).strip()]
@@ -623,7 +734,7 @@ def check_shots(film: dict, seconds: int):
             for line in lines:
                 if text(line.get("speaker")).strip().lower() not in names:
                     return f"a line of shot {i} has no speaker from the bible"
-        return ""
+        return soft
     return check
 
 
@@ -671,11 +782,11 @@ Return JSON: {{"scenes":[{{"name":"<short scene name>","synopsis":"<what happens
         say(run, f"Writing the shots of \"{scene['name']}\"")
         data = brain(film, "shots", f"""{context(film, scene)}
 
-Write exactly {asked['shotsPerScene']} shots for this scene, in order, each {asked['seconds']} seconds: one or two actions a shot. Vary size, angle and movement like a seasoned director. The shots of a scene follow each other without a cut, each starting where the one before ends.
+Write exactly {asked['shotsPerScene']} shots for this scene, in order, each {asked['seconds']} seconds: one or two actions a shot. Vary size, angle and movement like a seasoned director. A new size or angle is a cut to a new shot. "continues": true only for a shot that carries the shot before on in the same size and angle, starting where it ends; a new angle is false.
 {PROMPT_FORMAT}
 Spoken lines: short and speakable, at most {asked['seconds'] * 3} words a shot in all, each with its speaker's name from the bible; a shot without lines is silent.
-"cast" names the characters seen in the shot and "location" the place, by their names in the bible.
-Return JSON: {{"shots":[{{"name":"<short>","intent":"<one line for the crew: what the shot is for>","prompt":"<sectioned prompt>","size","angle","movement","lens","cast":["<names>"],"location":"<name>","lines":[{{"speaker":"<name>","text":"<the exact words>"}}],"soundscape":"<ambience and physical sound>"}}]}}
+"cast" names every character seen in the shot and "location" the place, by their names in the bible: a character in the prompt is in "cast", and what anyone says is in "lines", never only in the prompt.
+Return JSON: {{"shots":[{{"name":"<short>","intent":"<one line for the crew: what the shot is for>","prompt":"<sectioned prompt>","size","angle","movement","lens","continues":false,"cast":["<names>"],"location":"<name>","lines":[{{"speaker":"<name>","text":"<the exact words>"}}],"soundscape":"<ambience and physical sound>"}}]}}
 Spec vocabulary: {SIZES_WORDS}.""", check_shots(film, asked["seconds"]))
 
         def put(f, scene_id=scene["id"], shots=data["shots"][:asked["shotsPerScene"]]):
@@ -685,14 +796,43 @@ Spec vocabulary: {SIZES_WORDS}.""", check_shots(film, asked["seconds"]))
                           "spec": {"durationSec": asked["seconds"], **{k: s.get(k) or None for k in ("size", "angle", "movement", "lens")}},
                           "cast": [str(x) for x in s.get("cast") or []], "location": s.get("location") or "",
                           "lines": [l for l in s.get("lines") or [] if isinstance(l, dict)], "soundscape": text(s.get("soundscape")),
-                          # the first shot of a scene is a cut (on the cast's stills where it can), the rest carry on from it
-                          "opensOn": "previous" if n else "cast" if s.get("cast") and ref2va() else "text"})
+                          "opensOn": opening(s, shots[n - 1] if n else None)})
         film = change(project, put)
         say(run, f"Wrote {len(film['scenes'][index].get('shots') or [])} shots of \"{scene['name']}\"")
     run["counts"]["scenes"] = len(film.get("scenes") or [])
 
 
+def opening(shot: dict, before: dict | None) -> str:
+    """What a written shot opens on. A beat carried on in the same size and angle opens on the shot before (a join:
+    the camera does not snap back). A new angle is a cut: on the cast's stills, the same pictures in the same order
+    and no first frame, where the shot has cast and Ref2VA is here; a join carries no reference pictures, and a new
+    angle written as one is how a face slips. Without Ref2VA a new angle still opens on the shot before, the only
+    continuity a text clip has; the first shot of a scene opens on text then."""
+
+    same = lambda key: (text(shot.get(key)) or "").strip().lower() == (text((before or {}).get(key)) or "").strip().lower()
+    carries = before is not None and shot.get("continues") in (True, "true") and same("size") and same("angle")
+    if carries:
+        return "previous"
+    if shot.get("cast") and ref2va():
+        return "cast"
+    return "previous" if before is not None else "text"
+
+
 # ---------- casting ----------
+
+def picture_model() -> str | None:
+    """The picture model of the cast's and places' stills: Settings' default picture model where it is installed, else
+    the first of PICTURE_ORDER that is (a machine with FLUX3-K and no Qwen); None where none is, and the queue says why."""
+
+    have = list(pictures() or [])
+    try:
+        import settings
+
+        wanted = settings.load()["presets"].get("image_model") if settings.HOME else None
+    except Exception:  # noqa: BLE001 - a settings file that cannot be read leaves the order below
+        wanted = None
+    return wanted if wanted in have else next((one for one in PICTURE_ORDER if one in have), None)
+
 
 def queue(body: dict) -> dict | None:
     try:
@@ -706,11 +846,15 @@ def cast_stage(run: dict, stop: threading.Event) -> None:
 
     project, casting = run["project"], run.setdefault("casting", {})
     film = film_of(project)
+    # only who and where a shot shows: a character the bible has and no shot casts gets no portrait
+    shots = [tf_of(s) for scene in film.get("scenes") or [] for s in scene.get("shots") or []]
+    seen = {one for tf in shots for one in tf.get("cast") or []}
+    places = {tf.get("location") for tf in shots if tf.get("location")}
     for c in film.get("characters") or []:
-        if not (c.get("images") or []) and c["id"] not in casting:
+        if not (c.get("images") or []) and c["id"] in seen and c["id"] not in casting:
             casting[c["id"]] = {"kind": "cast", "name": c.get("name"), "step": "scout", "job": None}
     for l in film.get("locations") or []:
-        if not (l.get("images") or []) and (l.get("description") or "").strip() and l["id"] not in casting:
+        if not (l.get("images") or []) and slate.given(l.get("description")).strip() and l["id"] in places and l["id"] not in casting:
             casting[l["id"]] = {"kind": "place", "name": l.get("name"), "step": "scout", "job": None}
     save(run)
     while True:
@@ -738,12 +882,14 @@ def cast_queue(run: dict, sid: str, one: dict) -> None:
     if sheet is None:
         one["step"] = "done"
         return
+    model = picture_model()
+    model = {"image_model": model} if model else {}
     if one["step"] == "turn":
         body = {"kind": "turnaround", "title": "Turnaround: " + sheet.get("name", ""), "params": {"image": (sheet.get("images") or [None])[0], "size": 1024, "strength": 1, "seed": 0}}
     elif one["kind"] == "cast":
-        body = {"kind": "scout", "title": "Reference: " + sheet.get("name", ""), "params": {"prompt": sheet_picture(sheet), "count": 1, "seed": 1, "width": 1024, "height": 1024}}
+        body = {"kind": "scout", "title": "Reference: " + sheet.get("name", ""), "params": {"prompt": sheet_picture(sheet), "count": 1, "seed": 1, "width": 1024, "height": 1024, **model}}
     else:
-        body = {"kind": "scout", "title": "Plate: " + sheet.get("name", ""), "params": {"prompt": plate_picture(sheet), "count": 1, "seed": 1, "width": 1344, "height": 768}}
+        body = {"kind": "scout", "title": "Plate: " + sheet.get("name", ""), "params": {"prompt": plate_picture(sheet), "count": 1, "seed": 1, "width": 1344, "height": 768, **model}}
     try:
         job = queue(body)
     except Failed as error:
@@ -784,10 +930,11 @@ def render_stage(run: dict, stop: threading.Event) -> None:
     for sc in film.get("scenes") or []:
         for s in sc.get("shots") or []:
             if s["id"] in run["order"] and s["id"] not in shots:
-                kept = slate.best_take(s) if any(on_disk(t.get("mediaPath")) for t in s.get("takes") or []) else None
+                kept = kept_take(s)
                 # a shot rendered before the Director came to it is kept as it is
-                shots[s["id"]] = {"scene": sc["id"], "name": s.get("name"), "attempts": [], "settled": bool(kept and on_disk(kept)),
-                                  "best": kept if kept and on_disk(kept) else None, "kept": bool(kept and on_disk(kept))}
+                there = bool(kept and on_disk(kept))
+                shots[s["id"]] = {"scene": sc["id"], "name": s.get("name"), "attempts": [], "settled": there,
+                                  "best": kept if there else None, "kept": there, **({"outcome": "kept"} if there else {})}
     save(run)
     while True:
         for sid in run["order"]:
@@ -803,14 +950,40 @@ def render_stage(run: dict, stop: threading.Event) -> None:
         wait(stop)
 
 
+def failed_check(take: dict) -> bool:
+    """Whether a take's own QA gate or shot check failed it (Slate rates a take good when it queues it, before that)."""
+
+    return any(isinstance(take.get(key), dict) and take[key].get("passed") is False for key in ("qa", "shot"))
+
+
+def kept_take(shot: dict) -> str | None:
+    """The clip a shot rendered before the Director came to it stands on: its circled take, else its newest take on
+    disk that is not rated no-good and did not fail its own check; None when it has none."""
+
+    takes = [t for t in shot.get("takes") or [] if isinstance(t, dict) and on_disk(t.get("mediaPath"))]
+    circled = next((t["mediaPath"] for t in takes if t.get("rating") == "circled"), None)
+    return circled or next((t["mediaPath"] for t in takes if t.get("rating") != "no-good" and not failed_check(t)), None)
+
+
+def at_once() -> int:
+    """Render jobs a run keeps in the queue: one for each machine that renders, at most AT_ONCE. One machine renders
+    one clip at a time; more queued at once only sit there, and a retake then waits behind the next shots."""
+
+    try:
+        return max(1, min(AT_ONCE, int(machines())))
+    except (TypeError, ValueError):
+        return 1
+
+
 def fill(run: dict) -> None:
-    """Shots without a take queued in order while fewer than three render; one that opens on the shot before waits for it."""
+    """Shots without a take queued in order while fewer than ``at_once()`` render; one that opens on the shot before
+    waits for it."""
 
     shots = run["shots"]
     busy = sum(1 for s in shots.values() for a in s.get("attempts") or [] if a.get("status") == "queued")
     film = film_of(run["project"])
     for sid in run["order"]:
-        if busy >= AT_ONCE:
+        if busy >= at_once():
             return
         rec = shots[sid]
         if rec["settled"] or rec["attempts"]:
@@ -818,20 +991,26 @@ def fill(run: dict) -> None:
         try:
             scene, shot, index = slate.find_shot(film, sid)
         except HTTPException:
-            rec["settled"] = True  # the shot was removed on the page meanwhile
+            rec.update(settled=True, outcome="removed")  # the shot was removed on the page meanwhile
             continue
         before = scene["shots"][index - 1] if index else None
         if tf_of(shot).get("start") == "previous" and before and before["id"] in shots and not shots[before["id"]]["settled"]:
             continue
         render(run, film, sid, seed=None)
-        busy += 1
+        busy += 1 if (rec["attempts"] or [{}])[-1].get("status") == "queued" else 0  # a refusal holds no place in the queue
 
 
-def render(run: dict, film: dict, sid: str, seed: int | None) -> None:
-    """One take of a shot queued as slate.js slRender queues it; at ``seed`` for a retake."""
+def render(run: dict, film: dict, sid: str, seed: int | None, retake: bool | None = None) -> None:
+    """One take of a shot queued as slate.js slRender queues it; at ``seed`` for a retake (or, ``retake`` False, for
+    the same take again after the workload limits stopped it)."""
 
+    retake = seed is not None if retake is None else retake
     rec = run["shots"][sid]
-    scene, shot, index = slate.find_shot(film, sid)
+    try:
+        scene, shot, index = slate.find_shot(film, sid)
+    except HTTPException:  # removed on the page while it was retaken or queued again: the run goes on without it
+        rec.update(settled=True, outcome="removed")
+        return
     tf = tf_of(shot)
     before = scene["shots"][index - 1] if index else None
     chain = (run["shots"].get(before["id"]) or {}).get("best") if before and tf.get("start") == "previous" else None
@@ -852,14 +1031,16 @@ def render(run: dict, film: dict, sid: str, seed: int | None) -> None:
     try:
         job = queue({"kind": "video", "title": f"{scene.get('name')} · {shot.get('name')}", "params": params})
     except Failed as error:
-        rec["attempts"].append({"job": None, "output": output, "seed": plan["seed"], "prompt": prompt, "status": "failed",
-                                "passed": False, "reason": str(error), "retake": seed is not None, "checked": True})
-        say(run, f"{shot.get('name')}: refused by the queue ({error})")
+        # refused before it started (the memory guard, a missing model): no clip, no take, never counted as rendered
+        beside = resident()
+        rec["attempts"].append({"job": None, "output": output, "seed": plan["seed"], "prompt": prompt, "status": "failed", "refused": True,
+                                "passed": False, "reason": str(error), "retake": retake, "checked": True})
+        say(run, f"{shot.get('name')}: refused by the queue ({error})" + (f" Loaded beside the queue now: {beside}." if beside else ""), shot=sid)
         return
     rec["attempts"].append({"job": job["id"], "output": output, "seed": plan["seed"], "prompt": prompt, "status": "queued",
-                            "passed": None, "reason": "", "retake": seed is not None, "checked": False,
+                            "passed": None, "reason": "", "retake": retake, "checked": False,
                             "settings": {k: (job.get("params") or params).get(k) for k in ("preset", "quality", "frames", "seconds", "width", "height", "loras") if (job.get("params") or params).get(k) is not None}})
-    say(run, f"{'Retake' if seed is not None else 'Rendering'}: {scene.get('name')} · {shot.get('name')}" + (f" at seed {plan['seed']}" if seed is not None else ""), job=job["id"], shot=sid)
+    say(run, f"{'Retake' if retake else 'Rendering' if seed is None else 'Rendering again'}: {scene.get('name')} · {shot.get('name')}" + (f" at seed {plan['seed']}" if seed is not None else ""), job=job["id"], shot=sid)
 
 
 def follow(run: dict, sid: str) -> None:
@@ -879,6 +1060,10 @@ def follow(run: dict, sid: str) -> None:
         elif job.get("status") == "cancelled":
             rec["attempts"].pop()  # taken out of the queue: queued again, not a retake
             return
+        elif job.get("status") == "failed" and WORKLOAD_STOP in (job.get("error") or ""):
+            # heat or memory pressure stopped it: not a take and not a retake (below: queued once more, then left out)
+            one.update(status="stopped", passed=None, checked=True, reason=job.get("error") or "")
+            say(run, f"{rec['name']}: {one['reason'][:200]}", shot=sid)
         elif job.get("status") == "failed":
             one.update(status="failed", passed=False, checked=True, reason=job.get("error") or "the render failed")
             say(run, f"{rec['name']}: the render failed ({one['reason'][:160]})")
@@ -887,12 +1072,28 @@ def follow(run: dict, sid: str) -> None:
             record(run, sid, one, job)
         else:
             return
+    if one["status"] == "stopped":
+        # the same take queued once more at its seed (the queue's own gate waits for the machine to cool before it
+        # starts it), counted from the end: a stop of an earlier take does not use this take's try. Here too when the
+        # one queued again was lost to a restart or a cancel, so it is queued again rather than left out.
+        stops = 0
+        for a in reversed(rec["attempts"]):
+            if a.get("status") != "stopped" or a.get("seed") != one.get("seed"):
+                break
+            stops += 1
+        if stops < WORKLOAD_STOPS:
+            say(run, f"{rec['name']}: queued once more at seed {one.get('seed')}", shot=sid)
+            render(run, film_of(run["project"]), sid, one["seed"], retake=one.get("retake", False))
+            return
+        return settle(run, sid)
     if one["status"] == "done" and not one["checked"]:
         check(run, sid, one)
         if not one["checked"]:
             return
-    # checked: a pass (or a clip the gate could not check) settles the shot, a failure is taken again while it may be
-    if one["passed"] is False and sum(1 for a in rec["attempts"]) <= run["asked"]["retakes"]:
+    # checked: a pass (or a clip the gate could not check) settles the shot, a failure is taken again while it may be;
+    # a refusal is not (the next seed needs the same memory), nor are the renders the workload limits stopped
+    tries = sum(1 for a in rec["attempts"] if a.get("status") != "stopped")
+    if one["passed"] is False and not one.get("refused") and tries <= run["asked"]["retakes"]:
         seeds = {a["seed"] for a in rec["attempts"]}
         seed = int(one["seed"] or 0) + 1
         while seed in seeds:
@@ -951,14 +1152,36 @@ def check(run: dict, sid: str, one: dict) -> None:
     say(run, f"Checking {run['shots'][sid]['name']}", job=gate["id"], shot=sid)
 
 
+def failed_because(take: dict) -> str:
+    """Why one checked take failed, in the gate's own words: its reason, or the note of each gate that failed it (the
+    QA gate keeps them under ``audio`` and ``identity``)."""
+
+    said = take.get("reason") or take.get("why")
+    if said:
+        return str(said)
+    return "; ".join(f"{gate}: {take[gate]['note']}" for gate in ("audio", "identity")
+                     if isinstance(take.get(gate), dict) and take[gate].get("result") == "fail" and take[gate].get("note"))
+
+
 def verdict(run: dict, sid: str, one: dict, report: dict, unchecked: str = "") -> None:
+    gate = report
     if report.get("passed") is None:
         shot_check = (job_of(one["job"]) or {}).get("shot") or {} if one.get("job") else {}
         if shot_check.get("passed") is False:
             report = {"passed": False, "takes": shot_check.get("takes") or [], "why": "the shot check"}
     takes = report.get("takes") or []
-    reason = "; ".join(str(t.get("reason") or t.get("why") or "") for t in takes if isinstance(t, dict) and t.get("passed") is False and (t.get("reason") or t.get("why")))
+    reason = "; ".join(filter(None, (failed_because(t) for t in takes if isinstance(t, dict) and t.get("passed") is False)))
     one.update(checked=True, passed=report.get("passed"), reason=reason or report.get("why") or unchecked)
+    if gate and one.get("take"):  # the gate's report on the take itself, as a clip the queue checked carries it
+        def note(film):
+            try:
+                _, shot, _ = slate.find_shot(film, sid)
+            except HTTPException:
+                return
+            for take in shot.get("takes") or []:
+                if take.get("id") == one["take"] and not take.get("qa"):
+                    take["qa"] = gate
+        change(run["project"], note)
     name = run["shots"][sid]["name"]
     say(run, f"{name}: " + ("passed the check" if one["passed"] else "failed the check" + (f" ({one['reason'][:160]})" if one["reason"] else "")
                            if one["passed"] is False else "not checked" + (f" ({unchecked[:160]})" if unchecked else "")), shot=sid)
@@ -981,10 +1204,18 @@ def settle(run: dict, sid: str) -> None:
                 take["rating"] = ratings[take["id"]]
     if ratings:
         change(run["project"], rate)
-    last = next((a for a in reversed(rec["attempts"]) if a["status"] == "done"), None)
-    rec.update(settled=True, best=(best or {}).get("output"), fallback=(last or {}).get("output") if not best else None)
+    last = next((a for a in reversed(rec["attempts"]) if a["status"] != "stopped"), None) or (rec["attempts"] or [{}])[-1]
+    # a take that failed its check is the shot's no-good take, in the Library and among its takes, never in the cut
+    # unless someone circles it; a refusal or a failed render made no clip at all
+    outcome = ("passed" if best["passed"] else "unchecked") if best else \
+        "failed" if any(a["status"] == "done" for a in rec["attempts"]) else \
+        "stopped" if rec["attempts"][-1].get("status") == "stopped" else "refused" if last.get("refused") else "broken"
+    why = rec["attempts"][-1].get("reason") if outcome == "stopped" else last.get("reason")
+    rec.update(settled=True, best=(best or {}).get("output"), outcome=outcome, why="" if best else (why or "")[:600])
+    rec.pop("fallback", None)
     if not best:
-        say(run, f"{rec['name']}: no take passed" + (": the last one stands in the cut" if last else ": left out of the cut"), shot=sid)
+        say(run, f"{rec['name']}: {OUTCOMES[outcome]}, left out of the cut" +
+            (": its take is in the Library and among the shot's takes, rated no-good (circle it to cut it in)" if outcome == "failed" else ""), shot=sid)
 
 
 # ---------- cutting ----------
@@ -1011,10 +1242,10 @@ def cut_stage(run: dict, stop: threading.Event) -> None:
     if not run["asked"].get("cut"):
         return
     film = film_of(run["project"])
-    clips, takes = [], []
+    clips, takes, left = [], [], []
     for sid in run["order"]:
         rec = run["shots"].get(sid) or {}
-        path = rec.get("best") or rec.get("fallback")
+        path = rec.get("best")  # a take that failed its check is not cut in unless it is circled
         try:
             _, shot, _ = slate.find_shot(film, sid)
         except HTTPException:
@@ -1026,8 +1257,12 @@ def cut_stage(run: dict, stop: threading.Event) -> None:
             frames = (take.get("settings") or {}).get("frames")
             clips.append({"path": path, "in": 0, "out": 0, "duration": round(frames / 24, 3) if frames else float((shot.get("spec") or {}).get("durationSec") or 5)})
             takes.append(take)
+        else:
+            left.append(f"{shot.get('name')} ({OUTCOMES.get(outcome_of(rec) or '', 'no take')})")
     if not clips:
-        raise Failed("no shot has a take to cut")
+        raise Failed("no shot has a take to cut: " + ", ".join(left))
+    if left:
+        say(run, f"Left out of the cut: {', '.join(left)}")
     settings = (takes[0] if takes else {}).get("settings") or {}
     width, height = (settings.get("width"), settings.get("height")) if settings.get("width") else sizes.get(settings.get("preset"), (1920, 1080))
     title = film.get("name") or "Film"

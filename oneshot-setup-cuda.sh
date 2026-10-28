@@ -8,6 +8,11 @@
 #   bash oneshot-setup-spark.sh --image-only  # Qwen-Image-2.1 only (26 GB)
 #   bash oneshot-setup-spark.sh --no-render   # skip the test clip
 #   bash oneshot-setup-spark.sh --ref2va      # add MiniMax H3 Ref2VA (reference pictures hold a face), 39 GB more
+#   bash oneshot-setup-spark.sh --swap        # add the Library's Swap the character, 23 GB more: MiniMax H3 Ref2VA in int8
+#                                             # (21 GB, the weights it runs on), Akatz Labs' Character Swap LoRA v1.5 and
+#                                             # LightX2V's 8-step Turbo LoRA, and SAM 3.1 when it is not here yet
+#                                             # (spark/setup-swap.sh). MiniMax H3 Community
+#                                             # License: not licensed for use in the EU, the UK, South Korea or the US
 #   bash oneshot-setup-spark.sh --h3-base     # add MiniMax H3's own first-and-last-frame transformer, 40 GB more:
 #                                             # what keyframe LoRAs (360 Orbit, Transformation) were trained on
 #                                             # and, with it, the Library's actions (Turnaround sheet, Upscale, Remove a person:
@@ -26,6 +31,14 @@
 #                                             # which it builds too (spark/build-music3.sh). MiniMax-Music3 Community License:
 #                                             # commercial use allowed; a commercial UI shows "MiniMax-Music3"; above US$20M
 #                                             # yearly revenue needs MiniMax's written authorisation
+#   bash oneshot-setup-spark.sh --yue2        # add YuE2 (m-a-p's song model) for the Music tab, about 13 GB more (spark/setup-yue2.sh):
+#                                             # YuE2-3B (bf16) and its YuE2-Vae decoder at pinned revisions, sha256 checked, in
+#                                             # their own Python 3.12 environment under $PREFIX/yue2; the Music tab's default
+#                                             # engine where it is installed. Code Apache 2.0; weights CC BY-NC 4.0 with the
+#                                             # authors' creator permission: personal users, creators and musicians may sell
+#                                             # and license their songs royalty-free; a company needs the authors' licence.
+#                                             # On a GB10 it also builds TensorFold's decode engine for YuE2's tokens
+#                                             # (spark/build-yue2-engine.sh, 0.7 GB with Zig and the source)
 #   bash oneshot-setup-spark.sh --bolt        # add NVIDIA Nemotron 3.5 Bolt as the Studio's own brain engine, about 25 GB more:
 #                                             # NVIDIA's 24 GB checkpoint (a326822a) and its LiLiCorr drafter (4c6a5613), and
 #                                             # the engine (spark/build-bolt.sh: TensorFold with MiaAI-Lab's Bolt backend).
@@ -100,11 +113,11 @@ fi
 # written down in this repo to copy, and the resolver keeps them beside the torch pinned here.
 TORCH_PIN=(torch==2.14.1 torchvision==0.29.1)  # requirements.lock; scripts/setup-comfy.sh pins the same pair
 STUDIO_PIN=(huggingface_hub==1.33.0 fastapi==0.142.2 uvicorn==0.54.0 python-multipart==0.0.32 pillow==12.3.0)  # requirements.lock
-IMAGE_ONLY=0; RENDER=1; VERIFY=0; REF2VA=0; MOTION=0; VOICE=0; UPGRADE=0; LORAS=""; H3_BASE=0; WORKFLOWS=1; IMAGE_EDIT=0; FLUX3=0; MOSS=0; MUSIC=0; SOUND=0; BOLT=0; TRAIN=0; GRAPHICS=""; FINISH=""
+IMAGE_ONLY=0; RENDER=1; VERIFY=0; REF2VA=0; MOTION=0; VOICE=0; UPGRADE=0; LORAS=""; H3_BASE=0; WORKFLOWS=1; IMAGE_EDIT=0; FLUX3=0; MOSS=0; MUSIC=0; SOUND=0; BOLT=0; TRAIN=0; GRAPHICS=""; FINISH=""; YUE2=0; SWAP=0
 for arg in "$@"; do
   case "$arg" in
-    --ref2va) REF2VA=1;; --h3-base) H3_BASE=1;; --image-edit) IMAGE_EDIT=1;; --flux3) FLUX3=1;; --moss) MOSS=1;; --music) MUSIC=1;; --bolt) BOLT=1;; --train) TRAIN=1;; --graphics) GRAPHICS=1;; --no-graphics) GRAPHICS=0;; --finish) FINISH=1;; --no-finish) FINISH=0;; --sound) SOUND=1;; --motion) MOTION=1;; --voice) VOICE=1;; --image-only) IMAGE_ONLY=1;; --no-render) RENDER=0;; --verify) VERIFY=1; RENDER=0;; --upgrade) UPGRADE=1; RENDER=0; MOTION=1;;
-    --all) REF2VA=1; H3_BASE=1; IMAGE_EDIT=1; FLUX3=1; MOSS=1; MUSIC=1; SOUND=1; BOLT=1; VOICE=1; MOTION=1; TRAIN=1; GRAPHICS=1; FINISH=1;;  # every feature
+    --ref2va) REF2VA=1;; --swap) SWAP=1;; --h3-base) H3_BASE=1;; --image-edit) IMAGE_EDIT=1;; --flux3) FLUX3=1;; --moss) MOSS=1;; --music) MUSIC=1;; --yue2) YUE2=1;; --bolt) BOLT=1;; --train) TRAIN=1;; --graphics) GRAPHICS=1;; --no-graphics) GRAPHICS=0;; --finish) FINISH=1;; --no-finish) FINISH=0;; --sound) SOUND=1;; --motion) MOTION=1;; --voice) VOICE=1;; --image-only) IMAGE_ONLY=1;; --no-render) RENDER=0;; --verify) VERIFY=1; RENDER=0;; --upgrade) UPGRADE=1; RENDER=0; MOTION=1;;
+    --all) SWAP=1; REF2VA=1; H3_BASE=1; IMAGE_EDIT=1; FLUX3=1; MOSS=1; MUSIC=1; YUE2=1; SOUND=1; BOLT=1; VOICE=1; MOTION=1; TRAIN=1; GRAPHICS=1; FINISH=1;;  # every feature
     --no-workflows) WORKFLOWS=0;;
     --yes|-y) ;;  # the plain install without the checklist
     --loras) LORAS=all;; --loras=*) LORAS="${arg#--loras=}";; --no-loras) LORAS=none;; --lora-bundle=*) LORA_BUNDLE="${arg#--lora-bundle=}";;
@@ -132,10 +145,12 @@ if [ "$UPGRADE" = 1 ]; then
   [ -x "$PREFIX/venv/bin/python" ] || die "nothing to upgrade at $PREFIX: run oneshot-setup-spark.sh without --upgrade"
   [ -s "$MODELS/FastH3-Comfy/diffusion_models/fastvideo_fasth3_8step_v2_pruned_bf16.safetensors" ] || IMAGE_ONLY=1
   [ ! -s "$MODELS/MiniMax-H3-Comfy/diffusion_models/minimax_h3_ref2va_pruned_bf16.safetensors" ] || REF2VA=1
+  [ ! -s "$MODELS/MiniMax-H3-Comfy/loras/h3_character_swap_v1.5.safetensors" ] || SWAP=1
   [ ! -s "$MODELS/FLUX3-K-Comfy/diffusion_models/flux3-image-klein-bf16.safetensors" ] || FLUX3=1
   [ ! -s "$MODELS/FLUX3-K-Comfy/diffusion_models/flux3_image_klein_sd_bf16.safetensors" ] || FLUX3=1
   [ ! -s "$MODELS/MOSS-Image-Comfy/diffusion_models/moss_image_sft_bf16.safetensors" ] || MOSS=1
   [ ! -s "$MODELS/MiniMax-Music3-Comfy/diffusion_models/minimax_music3_dit_fp16.safetensors" ] || MUSIC=1
+  [ ! -x "${YUE2_HOME:-$PREFIX/yue2}/venv/bin/python" ] || YUE2=1
   [ ! -d "$PREFIX/ComfyUI/custom_nodes/ComfyUI-MMAudio" ] || SOUND=1
   [ ! -s "${BOLT_MODELS:-$MODELS}/Nemotron-3.5-Bolt-24GB/model.safetensors.index.json" ] || BOLT=1
   [ ! -x "$PREFIX/drama3/bin/drama3-generate" ] || VOICE=1
@@ -184,6 +199,10 @@ if [ "$UPGRADE" = 0 ]; then
   if [ "$SOUND" = 1 ] && [ ! -s "$MODELS/Sound-Comfy/stable-audio-open-1.0/model.safetensors" ]; then
     checklist_gate_part "$GATE_MODE" --sound "Sound effects and foley" "$GATE_CMD" https://huggingface.co/stabilityai/stable-audio-open-1.0/resolve/main/model_index.json || SOUND=0
   fi
+  if [ "$SWAP" = 1 ] && [ ! -s "$MODELS/MiniMax-H3-Comfy/loras/h3_character_swap_v1.5.safetensors" ]; then
+    checklist_gate_part "$GATE_MODE" --swap "Swap the character" "$GATE_CMD" \
+      https://huggingface.co/akatz-ai/MiniMax-H3-Character-Swap-LoRA/resolve/main/h3_character_swap_v1.5.safetensors || SWAP=0
+  fi
 fi
 [ "${STUDIO_GATE_DRY:-0}" != 1 ] || { echo "flux3=$FLUX3 sound=$SOUND"; exit 0; }
 # disk for what is still to fetch (GB, with room): each part asked for whose weights are not here yet, by the file that
@@ -195,11 +214,14 @@ if [ "$IMAGE_ONLY" = 0 ]; then
   missing "$MODELS/FastH3-Comfy/diffusion_models/fastvideo_fasth3_8step_v2_pruned_bf16.safetensors" && NEED=$((NEED + 75))
   [ "$REF2VA" = 0 ] || ! missing "$MODELS/MiniMax-H3-Comfy/diffusion_models/minimax_h3_ref2va_pruned_bf16.safetensors" || NEED=$((NEED + 40))
   [ "$H3_BASE" = 0 ] || ! missing "$MODELS/MiniMax-H3-Comfy/diffusion_models/minimax_h3_fl2va_pruned_bf16.safetensors" || NEED=$((NEED + 42))
+  [ "$SWAP" = 0 ] || ! missing "$MODELS/MiniMax-H3-Comfy/loras/h3_character_swap_v1.5.safetensors" || NEED=$((NEED + 4))
+  [ "$SWAP" = 0 ] || ! missing "$MODELS/MiniMax-H3-Comfy/diffusion_models/minimax_h3_ref2va_pruned_int8_convrot.safetensors" || NEED=$((NEED + 22))
   [ "$IMAGE_EDIT" = 0 ] || ! missing "$MODELS/Qwen-Image-2.1-Comfy/diffusion_models/qwen_image_2.1_bf16.safetensors" || NEED=$((NEED + 15))
   [ "$FLUX3" = 0 ] || [ -s "$MODELS/FLUX3-K-Comfy/diffusion_models/flux3_image_klein_sd_bf16.safetensors" ] \
     || [ -s "$MODELS/FLUX3-K-Comfy/diffusion_models/flux3-image-klein-bf16.safetensors" ] || NEED=$((NEED + 42))
   [ "$MOSS" = 0 ] || ! missing "$MODELS/MOSS-Image-Comfy/diffusion_models/moss_image_sft_bf16.safetensors" || NEED=$((NEED + 31))
   [ "$MUSIC" = 0 ] || ! missing "$MODELS/MiniMax-Music3-Comfy/diffusion_models/minimax_music3_dit_fp16.safetensors" || NEED=$((NEED + 23))
+  [ "$YUE2" = 0 ] || ! missing "${YUE2_WEIGHTS:-${YUE2_HOME:-$PREFIX/yue2}/weights}/YuE2-3B/model.safetensors" || NEED=$((NEED + 14))
   [ "$SOUND" = 0 ] || ! missing "$MODELS/Sound-Comfy/stable-audio-open-1.0/model.safetensors" || NEED=$((NEED + 12))
   [ "$BOLT" = 0 ] || ! missing "${BOLT_MODELS:-$MODELS}/Nemotron-3.5-Bolt-24GB/model.safetensors.index.json" || NEED=$((NEED + 26))
   [ "$TRAIN" = 0 ] || ! missing "$MODELS/Train-H3/vae/minimax_h3_video_vae_fp16.safetensors" || NEED=$((NEED + 15))
@@ -208,6 +230,8 @@ fi
 # motion graphics (about 400 MB) and Finish (about 150 MB) go under $PREFIX: a GB each, with room
 [ "$GRAPHICS" = 0 ] || [ -d "$PREFIX/graphics/node_modules/hyperframes" ] || NEED=$((NEED + 1))
 [ "$FINISH" = 0 ] || [ -f "$PREFIX/finish/fonts/InstrumentSerif-Regular.ttf" ] || NEED=$((NEED + 1))
+# STUDIO_DISK_DRY=1 (tests): what this install would fetch, and stop
+[ "${STUDIO_DISK_DRY:-0}" != 1 ] || { echo "need=$NEED ref2va=$REF2VA swap=$SWAP vram=${VRAM_GB:-unified}"; exit 0; }
 if [ "$VERIFY" = 0 ]; then
   mkdir -p "$PREFIX" "$MODELS"
   FREE=$(df -BG --output=avail "$MODELS" | tail -1 | tr -dc 0-9)
@@ -338,6 +362,16 @@ if [ "$REF2VA" = 1 ] && [ "$IMAGE_ONLY" = 0 ]; then
   if bash "$HERE/spark/comfy.sh" status | grep -q running; then echo "  restart ComfyUI to see them: bash spark/comfy.sh stop (the next render starts it)"; fi
 fi
 
+# Character Swap runs on Ref2VA's int8 weights (spark_swap.py weights; its memory was measured on them): fetched for
+# --swap wherever they are not here. An install that swaps on the bf16 file from before passes --verify as it is.
+REF2VA_INT8=diffusion_models/minimax_h3_ref2va_pruned_int8_convrot.safetensors
+if [ "$SWAP" = 1 ] && [ "$IMAGE_ONLY" = 0 ] && missing "$MODELS/MiniMax-H3-Comfy/$REF2VA_INT8" \
+   && { [ "$VERIFY" = 0 ] || missing "$MODELS/MiniMax-H3-Comfy/diffusion_models/minimax_h3_ref2va_pruned_bf16.safetensors"; }; then
+  say "MiniMax H3 Ref2VA for Character Swap, int8 (21 GB) -> $MODELS"
+  fetch Comfy-Org/MiniMax-H3 MiniMax-H3-Comfy "$REF2VA_INT8"
+  ok "Ref2VA transformer (int8)"
+fi
+
 if [ "$IMAGE_EDIT" = 1 ] && [ "$VERIFY" = 0 ]; then
   say "Qwen-Image-2.1's 40-step base model for ComfyUI (14 GB) -> $MODELS"
   echo "  Qwen-Image-2.1 is under the Qwen Research License Agreement: NON-COMMERCIAL use only. Read it first:"
@@ -399,6 +433,28 @@ if [ "$MUSIC" = 1 ]; then
     ok "music3-generate (int8 weights made on the GPU as it loads; MUSIC3_WEIGHTS=bf16 for the checkpoint's own)"
   else
     echo "  the engine did not build: songs will run on ComfyUI's nodes (slower). Fix and rerun spark/build-music3.sh"
+  fi
+fi
+
+if [ "$YUE2" = 1 ]; then  # YuE2 for the Music tab, in its own environment (spark/setup-yue2.sh, idempotent)
+  if PREFIX="$PREFIX" bash "$HERE/spark/setup-yue2.sh" $([ "$VERIFY" = 0 ] || echo --verify); then
+    # TensorFold's decode engine for YuE2's tokens (a DGX Spark's GB10 only): the server uses it where it is built,
+    # its own PyTorch token loop where it is not (YUE2_BACKEND=torch|blocks chooses)
+    case "$GPU" in *GB10*)
+      say "TensorFold's YuE2 decode engine for CUDA -> $PREFIX/tf-yue2"
+      if [ "$VERIFY" = 1 ]; then
+        [ -s "$PREFIX/tf-yue2/libtf_yue2.so" ] && ok "libtf_yue2 at $(cut -c1-8 "$PREFIX/tf-yue2/stamp" 2>/dev/null)" \
+          || echo "  not built: YuE2's tokens use its PyTorch loop (slower). bash spark/build-yue2-engine.sh builds it"
+      elif PREFIX="$PREFIX" bash "$HERE/spark/build-yue2-engine.sh"; then
+        ok "libtf_yue2 (int8 weights made on the GPU as the server loads)"
+      else
+        echo "  the engine did not build: YuE2's tokens use its PyTorch loop (slower). Fix and rerun spark/build-yue2-engine.sh"
+      fi;;
+    *) echo "  YuE2's tokens use its PyTorch loop on this GPU: TensorFold's decode engine for them is measured on a GB10 only (YUE2_ANY_GPU=1 bash spark/build-yue2-engine.sh builds it anyway)";;
+    esac
+  else
+    [ "$VERIFY" = 0 ] || die "YuE2 is not installed as pinned: run bash spark/setup-yue2.sh"
+    echo "  YuE2 did not install: songs use MiniMax Music 3 (with --music). Fix and rerun bash spark/setup-yue2.sh"
   fi
 fi
 
@@ -490,10 +546,18 @@ fi
 
 # The Library's three actions (Turnaround sheet, Upscale, Remove a person) run their authors' own ComfyUI nodes on the
 # Ref2VA model: wherever Ref2VA is installed, their node packs and two small models are too (spark/setup-workflows.sh).
-if [ "$IMAGE_ONLY" = 0 ] && [ "$WORKFLOWS" = 1 ] && [ -s "$MODELS/MiniMax-H3-Comfy/diffusion_models/minimax_h3_ref2va_pruned_bf16.safetensors" ]; then
+if [ "$IMAGE_ONLY" = 0 ] && [ "$WORKFLOWS" = 1 ] && { [ -s "$MODELS/MiniMax-H3-Comfy/diffusion_models/minimax_h3_ref2va_pruned_bf16.safetensors" ] \
+     || [ -s "$MODELS/MiniMax-H3-Comfy/diffusion_models/minimax_h3_ref2va_pruned_int8_convrot.safetensors" ]; }; then
   say "Library actions: three node packs at pinned commits, SAM 3.1 and the H3 latent upscaler (2.5 GB) -> $PREFIX/ComfyUI, $MODELS/Workflows-Comfy"
   PREFIX="$PREFIX" SPARK_MODELS="$MODELS" bash "$HERE/spark/setup-workflows.sh" $([ "$VERIFY" = 0 ] || echo --verify) $([ "$UPGRADE" = 0 ] || echo --no-models) \
     || echo "  ! the Library actions are not fully set up: the Library says which one is missing what"
+fi
+
+# The Library's Swap the character: two LoRAs and SAM 3.1 beside Ref2VA, on ComfyUI's own nodes (spark/setup-swap.sh)
+if [ "$IMAGE_ONLY" = 0 ] && [ "$SWAP" = 1 ]; then
+  say "Swap the character: Akatz Labs' Character Swap LoRA, LightX2V's 8-step Turbo LoRA and SAM 3.1 (2.1 GB) -> $MODELS"
+  PREFIX="$PREFIX" SPARK_MODELS="$MODELS" bash "$HERE/spark/setup-swap.sh" $([ "$VERIFY" = 0 ] && [ "$UPGRADE" = 0 ] || echo --verify) \
+    || echo "  ! Swap the character is not fully set up: the Library says what is missing"
 fi
 
 if [ "$IMAGE_ONLY" = 0 ]; then
@@ -550,7 +614,7 @@ elif [ "$VERIFY" = 1 ]; then echo "  - Finish is not installed (--finish adds it
 [ "$VERIFY" = 1 ] || cp "$HERE/VERSION" "$PREFIX/VERSION"
 if [ "$UPGRADE" = 1 ]; then
   say "Upgraded: $INSTALLED -> $(cat "$PREFIX/VERSION"). Checking the install (restart the app to serve the new pages: scripts/app.sh)"
-  exec bash "$HERE/oneshot-setup-cuda.sh" --verify $([ "$IMAGE_ONLY" = 0 ] || echo --image-only) $([ "$REF2VA" = 0 ] || echo --ref2va) $([ "$FLUX3" = 0 ] || echo --flux3) $([ "$MOSS" = 0 ] || echo --moss) $([ "$MUSIC" = 0 ] || echo --music) $([ "$SOUND" = 0 ] || echo --sound) $([ "$BOLT" = 0 ] || echo --bolt) $([ "$VOICE" = 0 ] || echo --voice) $([ "$TRAIN" = 0 ] || echo --train) $([ "$GRAPHICS" = 0 ] && echo --no-graphics || echo --graphics) $([ "$FINISH" = 0 ] && echo --no-finish || echo --finish)
+  exec bash "$HERE/oneshot-setup-cuda.sh" --verify $([ "$IMAGE_ONLY" = 0 ] || echo --image-only) $([ "$REF2VA" = 0 ] || echo --ref2va) $([ "$SWAP" = 0 ] || echo --swap) $([ "$FLUX3" = 0 ] || echo --flux3) $([ "$MOSS" = 0 ] || echo --moss) $([ "$MUSIC" = 0 ] || echo --music) $([ "$YUE2" = 0 ] || echo --yue2) $([ "$SOUND" = 0 ] || echo --sound) $([ "$BOLT" = 0 ] || echo --bolt) $([ "$VOICE" = 0 ] || echo --voice) $([ "$TRAIN" = 0 ] || echo --train) $([ "$GRAPHICS" = 0 ] && echo --no-graphics || echo --graphics) $([ "$FINISH" = 0 ] && echo --no-finish || echo --finish)
 fi
 # The essential LoRA bundle: every preset of the LoRA hub, fetched once from its author's page into one folder laid out
 # by the hub's groups, then installed (oneshot-essential-bundle.sh). --loras=GROUPS takes some groups, --lora-bundle=PATH

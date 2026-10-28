@@ -96,6 +96,32 @@ def test_remove_and_mask():
     assert "not a picture" in refused(build, "remove", {"video": "renders/c.mp4", "person": "x", "clean_frame": "renders/c.mp4"}, "j")
 
 
+def test_the_actions_run_on_character_swap_s_int8_ref2va_when_the_bf16_file_is_not_there():
+    import importlib
+
+    home, build, _, _, state = studio()
+    models = Path(os.environ["SPARK_MODELS"]) / "MiniMax-H3-Comfy/diffusion_models"
+    (models / "minimax_h3_ref2va_pruned_bf16.safetensors").unlink()
+    assert "Ref2VA is not installed" in state()["upscale"]["why"]
+    (models / "minimax_h3_ref2va_pruned_int8_convrot.safetensors").write_bytes(b"x")  # what --swap fetches
+    assert state()["upscale"]["ready"] and build("upscale", {"video": "renders/c.mp4"}, "j5")
+    sys.path.insert(0, str(PACK / "spark"))
+    W = importlib.import_module("spark_workflows")
+    had, files = W.listed, W.sg.REF2VA
+    W.sg.REF2VA = {"bf16": "minimax_h3_ref2va_pruned_bf16.safetensors", "int8": "minimax_h3_ref2va_pruned_int8_convrot.safetensors"}  # a Spark's files, on a Mac too
+    try:
+        for listed, chosen in (([W.sg.REF2VA["bf16"], W.sg.REF2VA["int8"]], W.sg.REF2VA["bf16"]),
+                               ([W.sg.REF2VA["int8"]], W.sg.REF2VA["int8"]), ([], None)):
+            W.listed = lambda loader, field, have=listed: have
+            assert W.ref2va() == chosen
+            if chosen:
+                graph = {}
+                W.loaders(graph)
+                assert graph["1"]["inputs"]["unet_name"] == chosen
+    finally:
+        W.listed, W.sg.REF2VA = had, files
+
+
 def test_not_installed_and_mac():
     _, build, _, _, state = studio(installed=False)
     assert "setup-workflows.sh" in refused(build, "upscale", {"video": "renders/c.mp4"}, "j")

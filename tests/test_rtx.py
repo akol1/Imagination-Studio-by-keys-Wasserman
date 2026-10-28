@@ -34,10 +34,12 @@ LINUX = sys.platform.startswith("linux")
 spark_only = pytest.mark.skipif(not LINUX, reason="the CUDA build's memory checks run on Linux only (server.SPARK)")
 
 
-def answers(monkeypatch, gpu=None, apps=None):
-    """nvidia-smi as a card (memory.total, used, free in MB) or a GB10 ([N/A]), and its compute apps."""
+def answers(monkeypatch, gpu=None, apps=None, name=None):
+    """nvidia-smi as a card (memory.total, used, free in MB) or a GB10 ([N/A]), its compute apps, and its name."""
 
     def smi(*query):
+        if name and query[0] == "--query-gpu=name":
+            return [[name]]
         if query[0].startswith("--query-gpu"):
             return [gpu] if gpu else []
         return [[str(pid), str(mb)] for pid, mb in (apps or {}).items()]
@@ -363,3 +365,86 @@ def test_the_page_cache_is_left_alone_on_a_card():
     source = (ROOT / "spark" / "memory_guard.py").read_text()
     release = source[source.index("    def release() -> None:"):]
     assert release.index('if card and not card["simulated"]:') < release.index("release_cache(")
+
+
+# three machines as nvidia-smi and /proc/meminfo show them: a DGX Spark, an RTX PRO 6000 on a 128 GB machine, and a
+# 32 GB RTX 5090 on a 91 GB one (docs/rtx-5090.md)
+MACHINES = {"gb10": (["[N/A]", "[N/A]", "[N/A]"], "NVIDIA GB10", {"MemTotal": 124_500, "MemAvailable": 118_000}),
+            "rtx-pro-6000": (["97887", "600", "97287"], "NVIDIA RTX PRO 6000 Blackwell Workstation Edition",
+                             {"MemTotal": 128_000, "MemAvailable": 120_000}),
+            "rtx-5090": (["32607", "600", "32007"], "NVIDIA GeForce RTX 5090", {"MemTotal": 93_000, "MemAvailable": 88_000})}
+
+
+def machine(monkeypatch, which, room=None):
+    gpu, name, info = MACHINES[which]
+    monkeypatch.setattr(memory_guard, "meminfo", lambda text=None: dict(info))
+    monkeypatch.setattr(memory_guard, "server_pid", lambda: None)
+    answers(monkeypatch, gpu=gpu, name=name)
+    if room:
+        monkeypatch.setenv("STUDIO_ROOM_MB", str(room))
+
+
+@pytest.mark.parametrize("which,room,fits", [
+    ("gb10", None, {480: True, 768: True}),
+    ("rtx-pro-6000", None, {480: True, 768: True}),
+    ("rtx-5090", None, {480: False, 768: False}),
+    ("rtx-5090", 84000, {480: True, 768: True}),
+])
+def test_character_swap_s_memory_on_each_machine(monkeypatch, which, room, fits):
+    machine(monkeypatch, which, room)
+    for quality in (480, 768):
+        said = memory_guard.swap_check(quality)
+        assert said["fits"] is fits[quality], (which, room, quality, said)
+        on_card, offloaded = which != "gb10" and not room, which != "gb10" and bool(room)
+        table = (memory_guard.SWAP_CARD_ESTIMATE if on_card else memory_guard.SWAP_OFFLOAD_ESTIMATE if offloaded
+                 else memory_guard.SWAP_ESTIMATE)
+        assert said["need_mb"] == table[quality] and said["route"].endswith("-card" if on_card else "-offload" if offloaded else str(quality))
+        if not said["fits"]:  # the card by name, and what to do
+            assert "this GPU (NVIDIA GeForce RTX 5090)" in said["reason"] and "STUDIO_ROOM_MB" in said["reason"]
+    # the bf16 Ref2VA (not measured) is held to its larger file
+    assert memory_guard.swap_check(480, weights="bf16")["need_mb"] == memory_guard.swap_check(480)["need_mb"] + memory_guard.SWAP_BF16_EXTRA_MB
+
+
+def test_a_swap_too_large_says_the_smaller_quality_that_fits(monkeypatch):
+    machine(monkeypatch, "gb10")
+    need480, need768 = memory_guard.SWAP_ESTIMATE[480], memory_guard.SWAP_ESTIMATE[768]
+    room = need480 + memory_guard.ERROR_MB + memory_guard.floor_mb(124_500) + (need768 - need480) // 2
+    said = memory_guard.swap_check(768, available_mb=room)
+    assert not said["fits"] and said["nearest"] == {"quality": 480} and "Fast (480p) fits" in said["reason"]
+    assert "this machine has" in said["reason"]
+
+
+@spark_only
+@pytest.mark.parametrize("which", ["gb10", "rtx-pro-6000", "rtx-5090"])
+def test_a_swap_with_bolt_resident_is_held_to_the_swap_s_own_peak(monkeypatch, which):
+    import server
+
+    machine(monkeypatch, which)
+    monkeypatch.setattr(server.bolt.engine(), "loaded", lambda: False)
+    said = server.bolt_need({"kind": "swap", "params": {"quality": 480}}, 28.0)
+    assert said is not None and "the job's estimated peak" in said[1]
+    expected = (memory_guard.SWAP_ESTIMATE if which == "gb10" else memory_guard.SWAP_CARD_ESTIMATE)[480]
+    assert f"about {expected / 1000:.0f} GB" in said[1]
+
+
+@spark_only
+def test_yue2_songs_on_a_32_gb_5090(monkeypatch):
+    """Measured under a 32 GB limit: a 30 s song peaked at 16.3 GB on the card, a 300 s one fitted only with
+    STUDIO_ROOM_MB. The card's own room takes songs up to about two minutes."""
+
+    machine(monkeypatch, "rtx-5090")
+    have = memory_guard.card_room_for_job([])
+    short = memory_guard.music_check(120, available_mb=have, route="music-yue2-int8", card=True)
+    long = memory_guard.music_check(300, available_mb=have, route="music-yue2-int8", card=True)
+    assert short["fits"] and not long["fits"] and "this GPU" in long["reason"]
+    monkeypatch.setenv("STUDIO_ROOM_MB", "84000")
+    assert memory_guard.music_check(300)["fits"]
+
+
+def test_each_machine_is_told_its_own_installer(monkeypatch):
+    import music_yue2
+    import sparks
+
+    for card, entry in ((False, "oneshot-setup-spark.sh --yue2"), (True, "oneshot-setup-rtx-6000.sh --yue2")):
+        monkeypatch.setattr(sparks, "card_face", lambda card=card: card)
+        assert music_yue2.install_command() == entry
