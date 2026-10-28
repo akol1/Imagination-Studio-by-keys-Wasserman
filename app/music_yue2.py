@@ -78,6 +78,24 @@ def nvidia() -> bool:
     return bool(shutil.which("nvidia-smi")) or Path("/dev/nvidiactl").exists()
 
 
+def on_card() -> bool:
+    """Whether this studio is the CUDA build on a workstation's card (an RTX Pro 6000, an RTX 5090), not a DGX Spark
+    (sparks.card_face, as app/swap.py asks it); False where no server is loaded."""
+
+    try:
+        import sparks
+
+        return sparks.card_face()
+    except Exception:  # noqa: BLE001 - a script or a test: named as a DGX Spark
+        return False
+
+
+def install_command() -> str:
+    """The installer this machine takes for YuE2: the RTX entry on a card, the Spark's elsewhere."""
+
+    return "oneshot-setup-rtx-6000.sh --yue2" if on_card() else "oneshot-setup-spark.sh --yue2"
+
+
 class Yue2(music.Cuda):
     """YuE2's server (``spark/yue2_server.py --serve``) in its own environment, as a ``voice.Served``. Measured on one
     GB10 (README, YuE2 songs): see ``load_s``, ``RTF_OF``, ``NEED_OF`` and memory_guard.MUSIC_YUE2_ESTIMATE."""
@@ -117,7 +135,8 @@ class Yue2(music.Cuda):
         if self.backend == "blocks" and self.weights in self.BLOCKS_RTF_OF:
             self.RTF, self.load_s = self.BLOCKS_RTF_OF[self.weights], self.BLOCKS_LOAD_S
             self.plan_s, self.song_rtf = self.BLOCKS_PLAN_S_OF[self.weights], self.BLOCKS_SONG_RTF_OF[self.weights]
-            self.label, self.NEED_GB = "TensorFold CUDA · DGX Spark", self.BLOCKS_NEED_GB
+            # measured on a GB10; on a card it runs only where it was built with YUE2_ANY_GPU=1 (build-yue2-engine.sh)
+            self.label, self.NEED_GB = "TensorFold CUDA · " + ("NVIDIA" if on_card() else "DGX Spark"), self.BLOCKS_NEED_GB
         self.guard_route = "music-yue2-" + ("blocks" if self.label.startswith("TensorFold") else self.weights)
 
     def python(self) -> Path:
@@ -147,7 +166,7 @@ class Yue2(music.Cuda):
         if not nvidia():
             return "YuE2 needs an NVIDIA GPU with BF16, and this machine shows none."
         if not self.python().is_file():
-            return f"No YuE2 environment at {self.venv} (bash spark/setup-yue2.sh, or oneshot-setup-spark.sh --yue2, about 13 GB)."
+            return f"No YuE2 environment at {self.venv} (bash spark/setup-yue2.sh, or {install_command()}, about 14 GB)."
         if not has_weights(self.model):
             return (f"No YuE2 weights at {self.model} (bash spark/setup-yue2.sh downloads them; YUE2_WEIGHTS names another folder).")
         if not self.server.is_file():

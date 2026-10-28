@@ -450,6 +450,7 @@ if [ "$YUE2" = 1 ]; then  # YuE2 for the Music tab, in its own environment (spar
       else
         echo "  the engine did not build: YuE2's tokens use its PyTorch loop (slower). Fix and rerun spark/build-yue2-engine.sh"
       fi;;
+    *) echo "  YuE2's tokens use its PyTorch loop on this GPU: TensorFold's decode engine for them is measured on a GB10 only (YUE2_ANY_GPU=1 bash spark/build-yue2-engine.sh builds it anyway)";;
     esac
   else
     [ "$VERIFY" = 0 ] || die "YuE2 is not installed as pinned: run bash spark/setup-yue2.sh"
