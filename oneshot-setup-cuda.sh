@@ -8,9 +8,10 @@
 #   bash oneshot-setup-spark.sh --image-only  # Qwen-Image-2.1 only (26 GB)
 #   bash oneshot-setup-spark.sh --no-render   # skip the test clip
 #   bash oneshot-setup-spark.sh --ref2va      # add MiniMax H3 Ref2VA (reference pictures hold a face), 39 GB more
-#   bash oneshot-setup-spark.sh --swap        # add the Library's Swap the character, 2.1 GB more beside Ref2VA (which it adds):
-#                                             # Akatz Labs' Character Swap LoRA v1.5 and LightX2V's 8-step Turbo LoRA, and
-#                                             # SAM 3.1 when it is not here yet (spark/setup-swap.sh). MiniMax H3 Community
+#   bash oneshot-setup-spark.sh --swap        # add the Library's Swap the character, 23 GB more: MiniMax H3 Ref2VA in int8
+#                                             # (21 GB, the weights it runs on), Akatz Labs' Character Swap LoRA v1.5 and
+#                                             # LightX2V's 8-step Turbo LoRA, and SAM 3.1 when it is not here yet
+#                                             # (spark/setup-swap.sh). MiniMax H3 Community
 #                                             # License: not licensed for use in the EU, the UK, South Korea or the US
 #   bash oneshot-setup-spark.sh --h3-base     # add MiniMax H3's own first-and-last-frame transformer, 40 GB more:
 #                                             # what keyframe LoRAs (360 Orbit, Transformation) were trained on
@@ -115,7 +116,7 @@ STUDIO_PIN=(huggingface_hub==1.33.0 fastapi==0.142.2 uvicorn==0.54.0 python-mult
 IMAGE_ONLY=0; RENDER=1; VERIFY=0; REF2VA=0; MOTION=0; VOICE=0; UPGRADE=0; LORAS=""; H3_BASE=0; WORKFLOWS=1; IMAGE_EDIT=0; FLUX3=0; MOSS=0; MUSIC=0; SOUND=0; BOLT=0; TRAIN=0; GRAPHICS=""; FINISH=""; YUE2=0; SWAP=0
 for arg in "$@"; do
   case "$arg" in
-    --ref2va) REF2VA=1;; --swap) SWAP=1; REF2VA=1;; --h3-base) H3_BASE=1;; --image-edit) IMAGE_EDIT=1;; --flux3) FLUX3=1;; --moss) MOSS=1;; --music) MUSIC=1;; --yue2) YUE2=1;; --bolt) BOLT=1;; --train) TRAIN=1;; --graphics) GRAPHICS=1;; --no-graphics) GRAPHICS=0;; --finish) FINISH=1;; --no-finish) FINISH=0;; --sound) SOUND=1;; --motion) MOTION=1;; --voice) VOICE=1;; --image-only) IMAGE_ONLY=1;; --no-render) RENDER=0;; --verify) VERIFY=1; RENDER=0;; --upgrade) UPGRADE=1; RENDER=0; MOTION=1;;
+    --ref2va) REF2VA=1;; --swap) SWAP=1;; --h3-base) H3_BASE=1;; --image-edit) IMAGE_EDIT=1;; --flux3) FLUX3=1;; --moss) MOSS=1;; --music) MUSIC=1;; --yue2) YUE2=1;; --bolt) BOLT=1;; --train) TRAIN=1;; --graphics) GRAPHICS=1;; --no-graphics) GRAPHICS=0;; --finish) FINISH=1;; --no-finish) FINISH=0;; --sound) SOUND=1;; --motion) MOTION=1;; --voice) VOICE=1;; --image-only) IMAGE_ONLY=1;; --no-render) RENDER=0;; --verify) VERIFY=1; RENDER=0;; --upgrade) UPGRADE=1; RENDER=0; MOTION=1;;
     --all) SWAP=1; REF2VA=1; H3_BASE=1; IMAGE_EDIT=1; FLUX3=1; MOSS=1; MUSIC=1; YUE2=1; SOUND=1; BOLT=1; VOICE=1; MOTION=1; TRAIN=1; GRAPHICS=1; FINISH=1;;  # every feature
     --no-workflows) WORKFLOWS=0;;
     --yes|-y) ;;  # the plain install without the checklist
@@ -214,6 +215,7 @@ if [ "$IMAGE_ONLY" = 0 ]; then
   [ "$REF2VA" = 0 ] || ! missing "$MODELS/MiniMax-H3-Comfy/diffusion_models/minimax_h3_ref2va_pruned_bf16.safetensors" || NEED=$((NEED + 40))
   [ "$H3_BASE" = 0 ] || ! missing "$MODELS/MiniMax-H3-Comfy/diffusion_models/minimax_h3_fl2va_pruned_bf16.safetensors" || NEED=$((NEED + 42))
   [ "$SWAP" = 0 ] || ! missing "$MODELS/MiniMax-H3-Comfy/loras/h3_character_swap_v1.5.safetensors" || NEED=$((NEED + 4))
+  [ "$SWAP" = 0 ] || ! missing "$MODELS/MiniMax-H3-Comfy/diffusion_models/minimax_h3_ref2va_pruned_int8_convrot.safetensors" || NEED=$((NEED + 22))
   [ "$IMAGE_EDIT" = 0 ] || ! missing "$MODELS/Qwen-Image-2.1-Comfy/diffusion_models/qwen_image_2.1_bf16.safetensors" || NEED=$((NEED + 15))
   [ "$FLUX3" = 0 ] || [ -s "$MODELS/FLUX3-K-Comfy/diffusion_models/flux3_image_klein_sd_bf16.safetensors" ] \
     || [ -s "$MODELS/FLUX3-K-Comfy/diffusion_models/flux3-image-klein-bf16.safetensors" ] || NEED=$((NEED + 42))
@@ -228,6 +230,8 @@ fi
 # motion graphics (about 400 MB) and Finish (about 150 MB) go under $PREFIX: a GB each, with room
 [ "$GRAPHICS" = 0 ] || [ -d "$PREFIX/graphics/node_modules/hyperframes" ] || NEED=$((NEED + 1))
 [ "$FINISH" = 0 ] || [ -f "$PREFIX/finish/fonts/InstrumentSerif-Regular.ttf" ] || NEED=$((NEED + 1))
+# STUDIO_DISK_DRY=1 (tests): what this install would fetch, and stop
+[ "${STUDIO_DISK_DRY:-0}" != 1 ] || { echo "need=$NEED ref2va=$REF2VA swap=$SWAP vram=${VRAM_GB:-unified}"; exit 0; }
 if [ "$VERIFY" = 0 ]; then
   mkdir -p "$PREFIX" "$MODELS"
   FREE=$(df -BG --output=avail "$MODELS" | tail -1 | tr -dc 0-9)
@@ -356,6 +360,16 @@ if [ "$REF2VA" = 1 ] && [ "$IMAGE_ONLY" = 0 ]; then
   ok "Ref2VA transformer (bf16) and LightX2V's Ref2VA Turbo adapter (4 passes)"
   # a running ComfyUI read its model folders when it started
   if bash "$HERE/spark/comfy.sh" status | grep -q running; then echo "  restart ComfyUI to see them: bash spark/comfy.sh stop (the next render starts it)"; fi
+fi
+
+# Character Swap runs on Ref2VA's int8 weights (spark_swap.py weights; its memory was measured on them): fetched for
+# --swap wherever they are not here. An install that swaps on the bf16 file from before passes --verify as it is.
+REF2VA_INT8=diffusion_models/minimax_h3_ref2va_pruned_int8_convrot.safetensors
+if [ "$SWAP" = 1 ] && [ "$IMAGE_ONLY" = 0 ] && missing "$MODELS/MiniMax-H3-Comfy/$REF2VA_INT8" \
+   && { [ "$VERIFY" = 0 ] || missing "$MODELS/MiniMax-H3-Comfy/diffusion_models/minimax_h3_ref2va_pruned_bf16.safetensors"; }; then
+  say "MiniMax H3 Ref2VA for Character Swap, int8 (21 GB) -> $MODELS"
+  fetch Comfy-Org/MiniMax-H3 MiniMax-H3-Comfy "$REF2VA_INT8"
+  ok "Ref2VA transformer (int8)"
 fi
 
 if [ "$IMAGE_EDIT" = 1 ] && [ "$VERIFY" = 0 ]; then
@@ -531,7 +545,8 @@ fi
 
 # The Library's three actions (Turnaround sheet, Upscale, Remove a person) run their authors' own ComfyUI nodes on the
 # Ref2VA model: wherever Ref2VA is installed, their node packs and two small models are too (spark/setup-workflows.sh).
-if [ "$IMAGE_ONLY" = 0 ] && [ "$WORKFLOWS" = 1 ] && [ -s "$MODELS/MiniMax-H3-Comfy/diffusion_models/minimax_h3_ref2va_pruned_bf16.safetensors" ]; then
+if [ "$IMAGE_ONLY" = 0 ] && [ "$WORKFLOWS" = 1 ] && { [ -s "$MODELS/MiniMax-H3-Comfy/diffusion_models/minimax_h3_ref2va_pruned_bf16.safetensors" ] \
+     || [ -s "$MODELS/MiniMax-H3-Comfy/diffusion_models/minimax_h3_ref2va_pruned_int8_convrot.safetensors" ]; }; then
   say "Library actions: three node packs at pinned commits, SAM 3.1 and the H3 latent upscaler (2.5 GB) -> $PREFIX/ComfyUI, $MODELS/Workflows-Comfy"
   PREFIX="$PREFIX" SPARK_MODELS="$MODELS" bash "$HERE/spark/setup-workflows.sh" $([ "$VERIFY" = 0 ] || echo --verify) $([ "$UPGRADE" = 0 ] || echo --no-models) \
     || echo "  ! the Library actions are not fully set up: the Library says which one is missing what"

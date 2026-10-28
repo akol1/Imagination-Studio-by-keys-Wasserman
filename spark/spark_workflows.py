@@ -105,7 +105,7 @@ def server(action: str) -> None:
     if missing:
         sys.exit(f"ComfyUI has no node {', '.join(missing)}: run `bash {'scripts/setup-comfy.sh' if sg.MAC else 'spark/setup-workflows.sh'}`, "
                  f"then `bash {'mac' if sg.MAC else 'spark'}/comfy.sh stop`")
-    if sg.REF2VA["bf16"] not in listed("UNETLoader", "unet_name"):
+    if ref2va() is None:
         sys.exit("MiniMax H3 Ref2VA is not installed: bash oneshot-setup-spark.sh --ref2va")
     if action in PACK:
         PATCHED.write_text(f"{PACK[action]} {comfy_pid()}")
@@ -203,8 +203,16 @@ def take(item: dict, target: Path) -> None:
     (sg.PREFIX / "ComfyUI" / "output" / item.get("subfolder", "") / item["filename"]).unlink(missing_ok=True)
 
 
+def ref2va() -> str | None:
+    """The Ref2VA weights the actions load: bf16, the file they were made and measured with, else the int8 file that
+    Character Swap's install brings (oneshot-setup-spark.sh --swap); None when neither is listed."""
+
+    have = listed("UNETLoader", "unet_name")
+    return next((sg.REF2VA[one] for one in ("bf16", "int8") if sg.REF2VA.get(one) in have), None)
+
+
 def loaders(w: dict, vae: str | None = None) -> None:
-    w["1"] = {"class_type": "UNETLoader", "inputs": {"unet_name": sg.REF2VA["bf16"], "weight_dtype": "default"}}
+    w["1"] = {"class_type": "UNETLoader", "inputs": {"unet_name": ref2va() or sg.REF2VA["bf16"], "weight_dtype": "default"}}
     w["3"] = {"class_type": "CLIPLoader", "inputs": {"clip_name": sg.H3_TEXT, "type": "minimax", "device": "default"}}
     w["4"] = {"class_type": "VAELoader", "inputs": {"vae_name": vae or sg.H3_VAE}}
     w["5"] = {"class_type": "VAELoader", "inputs": {"vae_name": sg.H3_AUDIO_VAE}}

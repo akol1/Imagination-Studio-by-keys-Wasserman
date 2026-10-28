@@ -593,10 +593,10 @@ def test_the_installer_fetches_the_swaps_files_and_the_checklist_lists_it():
                    "sam3.1_multiplex_fp16.safetensors", "mv -n", "South Korea"):
         assert needed in setup
     cuda = (ROOT / "oneshot-setup-cuda.sh").read_text()
-    assert "--swap) SWAP=1; REF2VA=1;;" in cuda and 'bash "$HERE/spark/setup-swap.sh"' in cuda and "--swap \"Swap the character\"" in cuda
+    assert "--swap) SWAP=1;;" in cuda and 'bash "$HERE/spark/setup-swap.sh"' in cuda and "--swap \"Swap the character\"" in cuda
     rows = subprocess.run(["bash", "-c", f'. "{ROOT}/scripts/install-checklist.sh"; checklist_rows_cuda aarch64'], capture_output=True, text=True).stdout
     row = next(r for r in rows.splitlines() if r.startswith("swap|")).split("|")
-    assert row[5] == "--swap" and row[7] == "ref2va" and row[4] == "2100"
+    assert row[5] == "--swap" and row[7] == "" and row[4] == "23100"  # the int8 Ref2VA with it, not --ref2va's bf16
 
 
 def test_the_credits_name_everyone_the_swap_runs():

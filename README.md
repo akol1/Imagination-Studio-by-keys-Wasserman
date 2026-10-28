@@ -128,7 +128,7 @@ FastH3 video with sound (125 GB), motion graphics, Finish and phone notification
 | `--all` | Every feature below, about 400 GB (on a Mac, every feature its memory runs, without `--train`) |
 | `--image-only` | Qwen-Image-2.1 only (26 GB) |
 | `--ref2va` | Reference pictures to video (39 GB more) |
-| `--swap` | The Library's Character Swap: two LoRAs and SAM 3.1 beside Ref2VA (2.1 GB more; adds `--ref2va`). DGX Spark and CUDA only |
+| `--swap` | The Library's Character Swap: MiniMax H3 Ref2VA in int8, two LoRAs and SAM 3.1 (23 GB more; 2.1 GB where the int8 Ref2VA is already there). DGX Spark and CUDA only |
 | `--h3-base` | MiniMax H3's own transformer, for keyframe LoRAs and the Library actions (40 GB more) |
 | `--image-edit` | Qwen-Image-2.1's 40-step model (14 GB more) |
 | `--flux3` | FLUX3-K pictures (41 GB more, gated) |
@@ -239,8 +239,8 @@ A Mac has nothing new to install: neither runs on a Mac, and its Music tab stays
   It runs on the studio's own MiniMax H3 Ref2VA (int8), with LightX2V's 8-step Turbo LoRA, Akatz Labs' Character Swap
   LoRA v1.5 and SAM 3.1 to find and follow the person. Measured on a DGX Spark with the GPU to itself: a 5 s part in
   about **6 minutes** at Fast and about **12 minutes** at High. A part with a hard cut, or with nobody in its first
-  frame, is refused before anything is drawn. DGX Spark and CUDA only. `--swap` is 2.1 GB beside Ref2VA (it ticks
-  `--ref2va` when Ref2VA is not there). [Character Swap](#character-swap).
+  frame, is refused before anything is drawn. DGX Spark and CUDA only. `--swap` is 23 GB: the int8 Ref2VA it runs on
+  (21 GB, without `--ref2va`'s 40 GB bf16 file) and 2.1 GB beside it. [Character Swap](#character-swap).
 
 Licences, also in Settings → About and beside each choice in the app:
 

@@ -63,9 +63,10 @@ if ! grep -q "Workflows-Comfy/checkpoints" "$YAML" 2>/dev/null || ! grep -q "Wor
     echo "  ✓ model folders added to extra_model_paths.yaml"; touch "$PREFIX/workflows.restart"
   fi
 fi
-# the fp16 video decoder and the 8-bit Ref2VA weights the authors' graphs name are optional: the Studio's graphs use
-# the files it already has (Ref2VA in bf16, the 8-bit decoder)
+# the fp16 video decoder is optional: the Studio's graphs use the files it already has (Ref2VA in bf16, or in int8
+# where only Character Swap's int8 file is here, and the 8-bit decoder)
 [ -s "$MODELS/MiniMax-H3-Comfy/diffusion_models/minimax_h3_ref2va_pruned_bf16.safetensors" ] \
+  || [ -s "$MODELS/MiniMax-H3-Comfy/diffusion_models/minimax_h3_ref2va_pruned_int8_convrot.safetensors" ] \
   || { echo "  ! MiniMax H3 Ref2VA is not installed: bash oneshot-setup-spark.sh --ref2va"; bad=1; }
 if [ -e "$PREFIX/workflows.restart" ] && bash "$(dirname "$0")/comfy.sh" status | grep -q running; then
   echo "  restart ComfyUI to load the new nodes: bash spark/comfy.sh stop (the next render starts it)"

@@ -227,3 +227,77 @@ def test_the_mac_installer_drops_a_refused_part_and_installs_the_rest(tmp_path):
     assert "flux3=1 sound=0" in done.stdout  # FLUX3-K stays, sound waits for its licence
     assert "Sound effects and foley is gated on Hugging Face and left out" in done.stdout
     assert "Not installed yet: Sound effects and foley" in done.stdout and "then run: bash oneshot-setup.sh --sound)" in done.stdout
+
+
+FAKE_SMI = r"""#!/bin/bash
+# nvidia-smi as one card answers it: FAKE_GPU_NAME, FAKE_VRAM_MB ("[N/A]" on a GB10, whose memory is the machine's)
+for a in "$@"; do case "$a" in
+  --query-gpu=name) echo "$FAKE_GPU_NAME"; exit 0;;
+  --query-gpu=memory.total) echo "$FAKE_VRAM_MB"; exit 0;;
+  --query-gpu=compute_cap) echo "$FAKE_CC"; exit 0;;
+esac; done
+echo "GPU 0: $FAKE_GPU_NAME"
+"""
+CARDS = {"gb10": ("NVIDIA GB10", "[N/A]", "12.1"), "rtx-pro-6000": ("NVIDIA RTX PRO 6000 Blackwell Workstation Edition", "97887", "12.0"),
+         "rtx-5090": ("NVIDIA GeForce RTX 5090", "32607", "12.0")}
+
+
+def disk_need(tmp_path, card, *flags, have=(), **extra):
+    """oneshot-setup-cuda.sh up to its disk check on ``card`` (a stand-in nvidia-smi), with ``have`` already under the
+    models folder: (exit code, its need line or error)."""
+
+    bin_ = tmp_path / "bin"
+    bin_.mkdir(exist_ok=True)
+    (bin_ / "nvidia-smi").write_text(FAKE_SMI)
+    for tool in ("git", "ffmpeg", "ffprobe", "uv"):
+        (bin_ / tool).write_text("#!/bin/sh\nexit 0\n")
+    for one in bin_.iterdir():
+        one.chmod(0o755)
+    models = tmp_path / "models"
+    for name in have:
+        (models / name).parent.mkdir(parents=True, exist_ok=True)
+        (models / name).write_bytes(b"x")
+    name, vram, cc = CARDS[card]
+    done = subprocess.run([BASH, str(ROOT / "oneshot-setup-cuda.sh"), "--yes", *flags], capture_output=True, text=True, timeout=60,
+                          env=env(PATH=f"{bin_}:/usr/bin:/bin", HOME=str(tmp_path), PREFIX=str(tmp_path / "prefix"), SPARK_MODELS=str(models),
+                                  HF_HOME=str(tmp_path / "hf"), STUDIO_DISK_DRY="1", STUDIO_GATE_FAKE="akatz-ai=open",
+                                  FAKE_GPU_NAME=name, FAKE_VRAM_MB=vram, FAKE_CC=cc, **extra))
+    said = next((line for line in done.stdout.splitlines() if line.startswith("need=")), done.stderr.strip()[-300:])
+    return done.returncode, said
+
+
+def big_enough():
+    try:
+        total = int(next(l for l in Path("/proc/meminfo").read_text().splitlines() if l.startswith("MemTotal")).split()[1])
+    except (OSError, StopIteration):
+        return False
+    return total >= 100 * 1024 * 1024 and sys.platform.startswith("linux")
+
+
+INT8 = "MiniMax-H3-Comfy/diffusion_models/minimax_h3_ref2va_pruned_int8_convrot.safetensors"
+BF16 = "MiniMax-H3-Comfy/diffusion_models/minimax_h3_ref2va_pruned_bf16.safetensors"
+
+
+@pytest.mark.skipif(not big_enough(), reason="the installer's preflight wants a machine of 100 GB (a DGX Spark's) or more")
+@pytest.mark.parametrize("card", ["gb10", "rtx-pro-6000", "rtx-5090"])
+def test_character_swap_fetches_the_int8_ref2va_it_runs_on_not_the_40_gb_bf16_file(tmp_path, card):
+    small = {"STUDIO_ALLOW_SMALL_VRAM": "1"} if card == "rtx-5090" else {}
+    vram = {"gb10": "unified", "rtx-pro-6000": "95", "rtx-5090": "31"}[card]
+    base = 5 + 26 + 75 + 1 + 1  # Qwen-Image, FastH3, motion graphics and Finish
+    assert disk_need(tmp_path, card, **small) == (0, f"need={base} ref2va=0 swap=0 vram={vram}")
+    assert disk_need(tmp_path, card, "--swap", **small) == (0, f"need={base + 4 + 22} ref2va=0 swap=1 vram={vram}")
+    assert disk_need(tmp_path, card, "--swap", have=[INT8], **small) == (0, f"need={base + 4} ref2va=0 swap=1 vram={vram}")
+    # with --ref2va the bf16 file comes too (reference clips with the Turbo adapter and LoRAs run on it), and swap's int8
+    assert disk_need(tmp_path, card, "--ref2va", "--swap", have=[INT8], **small) == (0, f"need={base + 40 + 4} ref2va=1 swap=1 vram={vram}")
+    assert disk_need(tmp_path, card, "--ref2va", have=[BF16], **small) == (0, f"need={base} ref2va=1 swap=0 vram={vram}")
+    if card == "rtx-5090":  # a 32 GB card installs video only when asked to
+        code, said = disk_need(tmp_path, card, "--swap")
+        assert code == 1 and "STUDIO_ALLOW_SMALL_VRAM=1" in said and "docs/rtx-5090.md" in said
+
+
+def test_swap_no_longer_ticks_the_bf16_ref2va():
+    cuda = (ROOT / "oneshot-setup-cuda.sh").read_text()
+    assert "--swap) SWAP=1;;" in cuda and 'fetch Comfy-Org/MiniMax-H3 MiniMax-H3-Comfy "$REF2VA_INT8"' in cuda
+    rows = subprocess.run([BASH, "-c", f'. "{LIB}"; checklist_rows_cuda aarch64'], capture_output=True, text=True, timeout=20).stdout
+    swap = next(line.split("|") for line in rows.splitlines() if line.startswith("swap|"))
+    assert swap[4] == "23100" and swap[7] == ""

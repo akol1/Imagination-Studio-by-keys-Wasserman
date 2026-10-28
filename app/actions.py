@@ -93,7 +93,8 @@ def attach(home: Path, pack: Path, spark: bool, inside, relative):
                  "mask": ["checkpoints/sam3.1_multiplex_fp16.safetensors"]}.get(kind, [])
         if any(not (nodes / n).is_dir() for n in need) or any(not (models / "Workflows-Comfy" / f).is_file() for f in files):
             return "Not installed yet: run `bash spark/setup-workflows.sh` in the pack's folder (three node packs and 2.5 GB of models), then restart ComfyUI."
-        if not (models / "MiniMax-H3-Comfy/diffusion_models/minimax_h3_ref2va_pruned_bf16.safetensors").is_file():
+        if not any((models / "MiniMax-H3-Comfy/diffusion_models" / f"minimax_h3_ref2va_pruned_{one}.safetensors").is_file()
+                   for one in ("bf16", "int8_convrot")):  # either: Character Swap's install brings only the int8 file
             return "MiniMax H3 Ref2VA is not installed: run `bash oneshot-setup-spark.sh --ref2va`."
         if LORA[kind] and lora_file(LORA[kind]) is None:
             return f"Install {recipe(LORA[kind]).get('name', LORA[kind])} in the LoRA hub first."

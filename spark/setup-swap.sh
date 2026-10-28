@@ -1,6 +1,7 @@
 #!/bin/bash
 # The pieces behind the Library's "Swap the character" on a DGX Spark (app/swap.py, spark/spark_swap.py), about 2.1 GB
-# beside MiniMax H3 Ref2VA (oneshot-setup-spark.sh --ref2va). No node pack: it runs on ComfyUI's own nodes.
+# beside MiniMax H3 Ref2VA's int8 weights (oneshot-setup-spark.sh --swap fetches those). No node pack: it runs on
+# ComfyUI's own nodes.
 #   bash spark/setup-swap.sh            # fetch what is missing (oneshot-setup-spark.sh --swap runs this)
 #   bash spark/setup-swap.sh --verify   # check, download nothing
 #   Character Swap LoRA v1.5   Akatz Labs, 155 MB    MiniMax H3 Community License (a Model Derivative of MiniMax H3)
@@ -19,7 +20,7 @@ bad=0
 
 if [ ! -s "$MODELS/MiniMax-H3-Comfy/diffusion_models/minimax_h3_ref2va_pruned_bf16.safetensors" ] \
    && [ ! -s "$MODELS/MiniMax-H3-Comfy/diffusion_models/minimax_h3_ref2va_pruned_int8_convrot.safetensors" ]; then
-  echo "  ! MiniMax H3 Ref2VA is not installed: bash oneshot-setup-spark.sh --ref2va --swap"; bad=1
+  echo "  ! MiniMax H3 Ref2VA is not installed: bash oneshot-setup-spark.sh --swap (it fetches the int8 weights)"; bad=1
 fi
 [ "$VERIFY" = 1 ] || echo "  MiniMax H3 and the Character Swap LoRA: MiniMax H3 Community License, not licensed for use in the EU, the UK, South Korea or the US (https://huggingface.co/akatz-ai/MiniMax-H3-Character-Swap-LoRA/blob/main/LICENSE)"
 
