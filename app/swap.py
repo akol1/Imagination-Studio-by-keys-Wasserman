@@ -213,6 +213,8 @@ def attach(home: Path, pack: Path, spark: bool, inside, relative, media_seconds)
 
         if kind not in KINDS:
             raise HTTPException(400, f"unknown job kind {kind}")
+        if not spark:  # a Mac is told it has no swap before anything about the clip it chose
+            raise HTTPException(400, missing())
         chosen = settings(params)
         why = missing()
         if why:

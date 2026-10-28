@@ -61,3 +61,17 @@ def test_without_yue2_installed_there_is_no_picker():
     if got is None:
         return
     assert got["picker"] is False and "Music" in got["text"] and "MiniMax-Music3" in got["text"]
+
+
+def test_where_yue2_is_not_offered_the_tab_says_why_in_the_picker_s_place():
+    got = run(ENGINES + """
+      MU.takes = []; MU.engine = null;
+      const mac = Object.assign({}, yue, { available: false, installed: false, why: "YuE2 has no Mac build: on a Mac the Music tab makes songs with MiniMax Music 3." });
+      S.music = Object.assign({}, S.music.engines.music3, { engine: "music3", engine_names: { yue2: "YuE2", music3: "MiniMax Music 3" }, engines: { yue2: mac, music3: S.music.engines.music3 } });
+      const view = viewMusic(); out.text = text(view);
+      out.picker = !!find(view, n => n.attrs && n.attrs["aria-label"] === "Song engine");
+      out.note = !!find(view, n => n.attrs && n.attrs.class && String(n.attrs.class).includes("mu-yue2-why"));
+    """)
+    if got is None:
+        return
+    assert not got["picker"] and got["note"] and "YuE2 has no Mac build" in got["text"]

@@ -210,6 +210,10 @@ def test_where_it_cannot_run_it_says_what_to_install(tmp_path):
     with pytest.raises(HTTPException) as refused:
         mac.build("swap", GOOD, "j1")
     assert "not on a Mac" in refused.value.detail
+    short = stand_in(tmp_path / "mac-short", spark=False, length=3.0)  # the Mac's reason first, not the clip's length
+    with pytest.raises(HTTPException) as refused:
+        short.build("swap", GOOD, "j1")
+    assert "not on a Mac" in refused.value.detail and "long" not in refused.value.detail
     bare = stand_in(tmp_path / "bare", installed=False)
     with pytest.raises(HTTPException) as refused:
         bare.build("swap", GOOD, "j1")
