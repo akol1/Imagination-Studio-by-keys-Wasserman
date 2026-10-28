@@ -354,6 +354,7 @@ def test_the_panel_in_the_first_ad_tab():
     DR.st[SL.p.id] = { state: "none" }; out.form = text(directorPanel(SL.p));
     out.sheet = slSheetPicture({ name: "Wren", age: "40", clothing: "a long wool overcoat and a felt hat" });
     out.plain = slSheetPicture({ name: "Ada", clothing: "a grey sweater" });
+    out.blank = slSheetPicture(BLANK);
     calls.length = 0; DR.st[SL.p.id] = { state: "none" }; await drStart(SL.p);
     out.posted = calls.find(c => c[0] === "/api/slate/direct");
     """
@@ -361,7 +362,7 @@ def test_the_panel_in_the_first_ad_tab():
         load = 'vm.runInThisContext(fs.readFileSync(process.argv[2], "utf8"));\n'
         assert HARNESS.count(load) == 1
         (Path(scratch) / "harness.js").write_text(HARNESS.replace(load, load + 'vm.runInThisContext(fs.readFileSync(process.argv[4], "utf8"));\n'))
-        (Path(scratch) / "test.js").write_text(code)
+        (Path(scratch) / "test.js").write_text(code.replace("BLANK", json.dumps(BLANK_SHEET)))
         done = subprocess.run(["node", str(Path(scratch) / "harness.js"), str(ROOT / "app/static/slate.js"), str(Path(scratch) / "test.js"),
                                str(ROOT / "app/static/director.js")], capture_output=True, text=True, timeout=60)
     assert done.returncode == 0, done.stderr[-2000:]
@@ -378,6 +379,7 @@ def test_the_panel_in_the_first_ad_tab():
     assert "No retake" in out["form"] and "Keep it" not in out["form"]
     # the page's portrait prompt frames a costume as the Director's does
     assert "knees up" in out["sheet"] and "no props" not in out["sheet"] and "no props" in out["plain"]
+    assert out["blank"] == director.sheet_picture(BLANK_SHEET)  # the page's portrait and the Director's say the same
     posted = out["posted"][1]
     assert posted["project"] == "p-test" and posted["logline"] == "A keeper finds a letter." and posted["scenes"] == 3 and posted["cut"] is True and posted["retakes"] == 1
 
@@ -588,6 +590,62 @@ def test_a_new_angle_opens_on_the_cast_and_a_carried_on_beat_on_the_shot_before(
     assert on({"size": "WS", "angle": "eye level", "cast": [], "continues": False}, wide) == "previous"  # no one to pin
     monkeypatch.setattr(director, "ref2va", lambda: False)
     assert on({"size": "CU", "cast": ["Ada"]}, wide) == "previous" and on(wide, None) == "text"
+
+
+# a sheet as a brain fills the fields it has nothing for
+BLANK_SHEET = {"name": "Bo", "age": "late fifties", "gender": "male", "ethnicity": "N/A", "faceFeatures": "unknown", "hair": "None",
+               "clothing": "none.", "expression": "", "keyLightSide": None}
+
+
+def test_a_brain_s_none_never_reaches_a_prompt_and_a_written_age_is_not_years_old():
+    said = director.sheet_picture(BLANK_SHEET)
+    assert said.startswith("Bo, late fifties, male. Character reference portrait: centered head-and-shoulders")
+    assert not any(word in said for word in ("None", "N/A", "unknown", "years old", "Hair:", "Wearing", ". .", "..")), said
+    assert director.sheet_picture({"name": "Ada", "age": "34", "hair": "short dark hair"}).startswith("Ada, 34 years old. Hair: short dark hair.")
+    assert director.sheet_picture({"name": "Ada", "age": 34}).startswith("Ada, 34 years old.")
+    assert slate.person(BLANK_SHEET) == "late fifties, male" and slate.person({"age": "34", "hair": "N/A", "clothing": "a coat"}) == "34 years old, wearing a coat"
+    assert slate.voice_of({"ageGender": "None", "timbre": "warm", "pitch": "n/a"}) == "a voice that is warm"
+    assert director.plate_picture({"name": "The Pier", "description": "Old planks", "weather": "None", "timeOfDay": "N/A"}).startswith(
+        "The Pier: Old planks. Location plate:")
+
+
+def test_stills_are_made_with_a_picture_model_this_machine_has(monkeypatch, tmp_path):
+    import settings
+
+    monkeypatch.setattr(settings, "HOME", tmp_path)
+    monkeypatch.setattr(director, "pictures", lambda: ["flux3k-fast", "moss-image"])  # a Spark with FLUX3-K and no Qwen
+    assert director.picture_model() == "flux3k-fast"
+    settings.save({"presets": {"image_model": "moss-image"}})
+    assert director.picture_model() == "moss-image"  # Settings' default where it is installed
+    settings.save({"presets": {"image_model": "qwen"}})
+    assert director.picture_model() == "flux3k-fast"
+    monkeypatch.setattr(director, "pictures", lambda: ["qwen", "flux3k-fast"])
+    assert director.picture_model() == "qwen"
+    monkeypatch.setattr(director, "pictures", lambda: [])
+    assert director.picture_model() is None  # the queue then says what to install
+
+
+def test_only_the_cast_the_shots_show_get_portraits_and_stills_name_their_picture_model(studio, monkeypatch):
+    class Extra(Brain):  # the bible has a third character no shot casts
+        def __call__(self, backend, system, prompt, tier, endpoint="", model=""):
+            said = super().__call__(backend, system, prompt, tier, endpoint, model)
+            if "Write the characters" in prompt or "Write the locations" in prompt:
+                bible = json.loads(said.split("```json\n")[1].split("\n```")[0])
+                bible["characters"].append({"name": "Cy", "age": "None", "gender": "male", "hair": "N/A", "clothing": "a hat and a coat"})
+                return "```json\n" + json.dumps(bible) + "\n```"
+            return said
+
+    monkeypatch.setattr(director, "pictures", lambda: ["flux3k-fast"])
+    queue, brain = Queue(), Extra()
+    studio(queue, brain)
+    project = new_film()
+    client.post("/api/slate/direct", json={"project": project, "scenes": 2, "shotsPerScene": 2, "seconds": 5, "retakes": 0, "cut": False})
+    run = until(project)
+    assert run["state"] == "done", run
+    stills = [b for b in queue.bodies if b["kind"] == "scout"]
+    assert sorted(b["title"] for b in stills) == ["Plate: The Harbour", "Reference: Ada", "Reference: Bo"]  # no portrait of Cy
+    assert all(b["params"]["image_model"] == "flux3k-fast" for b in stills)
+    assert not slate.get_project(project)["characters"][2].get("images")
 
 
 def test_a_costume_portrait_shows_the_costume():

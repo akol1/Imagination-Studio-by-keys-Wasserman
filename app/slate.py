@@ -524,18 +524,36 @@ def sentence(text: str) -> str:
     return text if not text or text[-1] in ".!?\"”" else text + "."
 
 
+# what a brain writes in a field it has nothing for: never a word of a prompt ("Hair: None. Wearing None.")
+EMPTY_WORDS = {"none", "n/a", "na", "null", "nil", "unknown", "not specified", "unspecified", "-", "--", "—", "tbd", "?"}
+
+
+def given(value) -> str:
+    """A sheet's field as words for a prompt: "" for a missing value and for a brain's None, N/A or unknown."""
+
+    words = " ".join(value.split()) if isinstance(value, str) else str(value) if isinstance(value, (int, float)) and not isinstance(value, bool) else ""
+    return "" if words.strip(" .").lower() in EMPTY_WORDS else words
+
+
+def age_words(value) -> str:
+    """An age as a prompt says it: "34" is "34 years old"; "mid-thirties" or "34 years old" stay as written."""
+
+    age = given(value)
+    return f"{age} years old" if age.isdigit() else age
+
+
 def person(sheet: dict) -> str:
-    bits = [f"{sheet.get('age')} years old" if str(sheet.get("age") or "").strip().isdigit() else sheet.get("age"), sheet.get("gender"),
-            sheet.get("ethnicity"), sheet.get("faceFeatures"), sheet.get("hair") and "hair: " + sheet["hair"],
-            sheet.get("clothing") and "wearing " + sheet["clothing"]]
+    hair, clothing = given(sheet.get("hair")), given(sheet.get("clothing"))
+    bits = [age_words(sheet.get("age")), given(sheet.get("gender")), given(sheet.get("ethnicity")), given(sheet.get("faceFeatures")),
+            hair and "hair: " + hair, clothing and "wearing " + clothing]
     return ", ".join(bit.strip().rstrip(".") for bit in bits if bit and bit.strip())
 
 
 def voice_of(sheet: dict | None, fallback: str = "") -> str:
     if not sheet:
         return fallback.strip() or "a natural voice"
-    sound = ", ".join(bit.strip().rstrip(".") for bit in (sheet.get(key, "") for key in ("accent", "timbre", "pitch", "pacing", "texture")) if bit and bit.strip())
-    who = (sheet.get("ageGender") or "").strip().rstrip(".")
+    sound = ", ".join(bit.strip().rstrip(".") for bit in (given(sheet.get(key)) for key in ("accent", "timbre", "pitch", "pacing", "texture")) if bit and bit.strip())
+    who = given(sheet.get("ageGender")).strip().rstrip(".")
     if who:
         return f"the voice of {who}" + (f" ({sound})" if sound else "")
     return f"a voice that is {sound}" if sound else "a natural voice"

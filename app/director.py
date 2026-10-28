@@ -58,6 +58,10 @@ APP = None  # the FastAPI app
 ref2va = lambda: False  # whether shots can open on cast stills
 machines = lambda: 1  # how many machines render the queue's clips (this one and its Sparks, sparks.py)
 resident = lambda: ""  # what is loaded beside the queue now, in words (server.resident_words), for a refusal
+pictures = lambda: []  # the picture models installed here (server.image_models)
+# the picture model of the cast's and places' stills where Settings' default is not installed here: the app's own order
+# (Qwen first, as every page's default), then FLUX3-K Fast, which draws whole figures, then the slower ones
+PICTURE_ORDER = ("qwen", "flux3k-fast", "moss-image", "qwen-full", "flux3k-full")
 
 runs: dict[str, dict] = {}  # project -> {"thread", "stop"}
 guard = threading.RLock()  # one read-modify-write of a film file at a time
@@ -73,11 +77,11 @@ class Failed(Exception):
 
 
 def attach(home: Path, *, queue, lookup, stop_job, check, new_project, save_project, presets: dict, app=None,
-           references=None, renderers=None, loaded=None) -> APIRouter:
-    global HOME, submit, job_of, cancel, qa_start, editor_new, editor_save, sizes, APP, ref2va, machines, resident
+           references=None, renderers=None, loaded=None, picture_models=None) -> APIRouter:
+    global HOME, submit, job_of, cancel, qa_start, editor_new, editor_save, sizes, APP, ref2va, machines, resident, pictures
     HOME, submit, job_of, cancel, qa_start, editor_new, editor_save = home, queue, lookup, stop_job, check, new_project, save_project
     sizes, APP, ref2va = presets, app, references or ref2va
-    machines, resident = renderers or machines, loaded or resident
+    machines, resident, pictures = renderers or machines, loaded or resident, picture_models or pictures
     return router
 
 
@@ -360,22 +364,25 @@ def sheet_picture(c: dict) -> str:
     uniform the portrait is from the knees up and shows all of it: later shots match the costume to this picture, and a
     head-and-shoulders crop with "no props" lost a period overcoat and a fedora."""
 
-    who = ", ".join(x for x in (text(c.get("gender")), text(c.get("ethnicity"))) if x)
+    g = lambda key: slate.given(c.get(key))  # noqa: E731 - a brain's None, N/A or unknown is no words
+    who = ", ".join(x for x in (slate.age_words(c.get("age")), g("gender"), g("ethnicity")) if x)
     framing = ("three-quarter length from the knees up, facing the camera, the whole costume in frame as described, hat and coat included, "
-               "plain seamless backdrop, generous headroom" if COSTUME.search(text(c.get("clothing"))) else
+               "plain seamless backdrop, generous headroom" if COSTUME.search(g("clothing")) else
                "centered head-and-shoulders, facing the camera, plain seamless backdrop, generous headroom, no props")
-    words = (f"{c.get('name')}, " + (f"{c['age']} years old, " if c.get("age") else "") + f"{who}. {text(c.get('faceFeatures'))}. Hair: {text(c.get('hair'))}. "
-             f"Wearing {text(c.get('clothing'))}. {text(c.get('expression'))}. Character reference portrait: {framing}. "
-             f"{c.get('keyLightSide') or 'Key light from left'}, {c.get('lightingMood') or 'natural soft light'}, "
-             "clean catchlights, gentle fill. Photoreal, neutral grade, true-to-skin color, crisp detail for identity reference.")
+    bits = [", ".join(x for x in (g("name") or "A person", who) if x), g("faceFeatures"), g("hair") and "Hair: " + g("hair"),
+            g("clothing") and "Wearing " + g("clothing"), g("expression"), f"Character reference portrait: {framing}",
+            f"{g('keyLightSide') or 'Key light from left'}, {g('lightingMood') or 'natural soft light'}, clean catchlights, gentle fill",
+            "Photoreal, neutral grade, true-to-skin color, crisp detail for identity reference"]
+    words = ". ".join(bit.strip().rstrip(".") for bit in bits if bit and bit.strip()) + "."
     return re.sub(r"\.\s*\.", ".", re.sub(r"\s+\.", ".", words))
 
 
 def plate_picture(l: dict) -> str:
     """A location's plate prompt (slate.js slPlatePicture)."""
 
-    bits = [f"{l.get('name')}: {l.get('description') or ''}", l.get("timeOfDay"), l.get("weather"), l.get("architecture"), l.get("textures"),
-            l.get("practicalLights") and "lit by " + l["practicalLights"]]
+    g = lambda key: slate.given(l.get(key))  # noqa: E731
+    bits = [f"{g('name')}: {g('description')}".strip(": "), g("timeOfDay"), g("weather"), g("architecture"), g("textures"),
+            g("practicalLights") and "lit by " + g("practicalLights")]
     return ". ".join(b for b in bits if isinstance(b, str) and b.strip()) + \
         ". Location plate: a wide establishing still of the empty place at eye level, natural perspective, photographic, every surface in focus."
 
@@ -809,6 +816,20 @@ def opening(shot: dict, before: dict | None) -> str:
 
 # ---------- casting ----------
 
+def picture_model() -> str | None:
+    """The picture model of the cast's and places' stills: Settings' default picture model where it is installed, else
+    the first of PICTURE_ORDER that is (a machine with FLUX3-K and no Qwen); None where none is, and the queue says why."""
+
+    have = list(pictures() or [])
+    try:
+        import settings
+
+        wanted = settings.load()["presets"].get("image_model") if settings.HOME else None
+    except Exception:  # noqa: BLE001 - a settings file that cannot be read leaves the order below
+        wanted = None
+    return wanted if wanted in have else next((one for one in PICTURE_ORDER if one in have), None)
+
+
 def queue(body: dict) -> dict | None:
     try:
         return submit(body)
@@ -821,11 +842,15 @@ def cast_stage(run: dict, stop: threading.Event) -> None:
 
     project, casting = run["project"], run.setdefault("casting", {})
     film = film_of(project)
+    # only who and where a shot shows: a character the bible has and no shot casts gets no portrait
+    shots = [tf_of(s) for scene in film.get("scenes") or [] for s in scene.get("shots") or []]
+    seen = {one for tf in shots for one in tf.get("cast") or []}
+    places = {tf.get("location") for tf in shots if tf.get("location")}
     for c in film.get("characters") or []:
-        if not (c.get("images") or []) and c["id"] not in casting:
+        if not (c.get("images") or []) and c["id"] in seen and c["id"] not in casting:
             casting[c["id"]] = {"kind": "cast", "name": c.get("name"), "step": "scout", "job": None}
     for l in film.get("locations") or []:
-        if not (l.get("images") or []) and (l.get("description") or "").strip() and l["id"] not in casting:
+        if not (l.get("images") or []) and slate.given(l.get("description")).strip() and l["id"] in places and l["id"] not in casting:
             casting[l["id"]] = {"kind": "place", "name": l.get("name"), "step": "scout", "job": None}
     save(run)
     while True:
@@ -853,12 +878,14 @@ def cast_queue(run: dict, sid: str, one: dict) -> None:
     if sheet is None:
         one["step"] = "done"
         return
+    model = picture_model()
+    model = {"image_model": model} if model else {}
     if one["step"] == "turn":
         body = {"kind": "turnaround", "title": "Turnaround: " + sheet.get("name", ""), "params": {"image": (sheet.get("images") or [None])[0], "size": 1024, "strength": 1, "seed": 0}}
     elif one["kind"] == "cast":
-        body = {"kind": "scout", "title": "Reference: " + sheet.get("name", ""), "params": {"prompt": sheet_picture(sheet), "count": 1, "seed": 1, "width": 1024, "height": 1024}}
+        body = {"kind": "scout", "title": "Reference: " + sheet.get("name", ""), "params": {"prompt": sheet_picture(sheet), "count": 1, "seed": 1, "width": 1024, "height": 1024, **model}}
     else:
-        body = {"kind": "scout", "title": "Plate: " + sheet.get("name", ""), "params": {"prompt": plate_picture(sheet), "count": 1, "seed": 1, "width": 1344, "height": 768}}
+        body = {"kind": "scout", "title": "Plate: " + sheet.get("name", ""), "params": {"prompt": plate_picture(sheet), "count": 1, "seed": 1, "width": 1344, "height": 768, **model}}
     try:
         job = queue(body)
     except Failed as error:

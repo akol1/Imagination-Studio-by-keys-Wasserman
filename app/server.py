@@ -2890,7 +2890,8 @@ def resident_words() -> str:
 
 app.include_router(director.attach(HOME, queue=queue_job, lookup=jobs.get, stop_job=cancel, check=qa_gate, new_project=new_project,
                                    save_project=save_project, presets={k: v[1] for k, v in PRESETS.items()}, app=app, references=ref2va_ready,
-                                   renderers=lambda: 1 + sum(1 for w in hub.workers() if w.get("enabled", True)), loaded=resident_words))
+                                   renderers=lambda: 1 + sum(1 for w in hub.workers() if w.get("enabled", True)), loaded=resident_words,
+                                   picture_models=image_models))
 import agents  # noqa: E402  (Brains and agents: the user's own CLI sign-ins and MCP tools, beside this file)
 app.include_router(agents.attach(HOME))
 
