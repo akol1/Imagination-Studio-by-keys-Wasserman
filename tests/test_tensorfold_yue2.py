@@ -252,6 +252,45 @@ def test_a_build_at_the_stamp_is_kept_and_an_edit_rebuilds(box, tmp_path):
     assert "already built" not in run(box).stdout
 
 
+def test_the_gpu_test_waits_for_an_idle_gpu_and_an_untested_build_is_built_again(box, tmp_path):
+    lock = tmp_path / "studio-gpu.lock.d"
+    lock.mkdir()  # a render holds the studio's GPU
+    done = run(box, TF_YUE2_SOURCE=str(box["src"]), STUDIO_GPU_LOCK=str(lock))
+    assert done.returncode == 0, done.stderr
+    assert "GPU test is left out: the studio's GPU lock is held" in done.stdout
+    log = (box["tmp"] / "zig.log").read_text()
+    assert "build tf-yue2" in log and "test-yue2" not in log
+    stamp = box["prefix"] / "tf-yue2" / "stamp"
+    assert stamp.read_text().strip().endswith(" untested")
+    # another CUDA process on the GPU (nvidia-smi lists its pid) holds the test back too
+    lock.rmdir()
+    stub(tmp_path / "bin", "nvidia-smi", 'case "$*" in *compute-apps*) echo 4242;; *compute_cap*) echo 12.1;; *) echo "NVIDIA GB10";; esac\n')
+    done = run(box, TF_YUE2_SOURCE=str(box["src"]), STUDIO_GPU_LOCK=str(lock))
+    assert "1 other CUDA process(es) are on the GPU" in done.stdout and "test-yue2" not in (box["tmp"] / "zig.log").read_text()
+    # asked to, it tests beside them; and an idle GPU is tested
+    done = run(box, TF_YUE2_SOURCE=str(box["src"]), STUDIO_GPU_LOCK=str(lock), YUE2_ENGINE_TEST="1")
+    assert done.returncode == 0 and "test-yue2" in (box["tmp"] / "zig.log").read_text() and not stamp.read_text().strip().endswith("untested")
+
+
+def test_zig_is_checked_against_its_published_sha256():
+    script = SCRIPT.read_text()
+    assert "ZIG_SHA256_aarch64=9e8d11661d4ae3bd57702a3832781e23ad151dde5798e16a5ccd503f65234ff8" in script
+    assert "ZIG_SHA256_x86_64=1cbe9df9f27e6b78d14ccbca43b6703a404ef79ef1c463de901d7f088d4e2026" in script
+    fetch = script[script.index('if [ ! -x "$ZIG" ]'):]
+    assert fetch.index("sha256sum -c") < fetch.index("tar -xJf") and "| tar" not in fetch[:fetch.index("fi\n")]
+
+
+def test_a_zig_archive_that_does_not_match_is_not_used(box, tmp_path):
+    zig = box["prefix"] / "zig-0.17.0"
+    for f in zig.iterdir():
+        f.unlink()
+    zig.rmdir()
+    stub(tmp_path / "bin", "curl", 'while [ $# -gt 0 ]; do [ "$1" = -o ] && { echo "not zig" > "$2"; }; shift; done\n')
+    done = run(box, TF_YUE2_SOURCE=str(box["src"]))
+    assert done.returncode == 1 and "does not match its published SHA-256" in done.stderr
+    assert not (box["prefix"] / "zig-0.17.0.tar.xz.part").exists() and not (zig / "zig").exists()
+
+
 def test_a_checkout_without_the_anchor_is_refused(box):
     (box["src"] / "zig/build/cuda.zig").write_text("pub fn targets() void {}\n")
     done = run(box, TF_YUE2_SOURCE=str(box["src"]))

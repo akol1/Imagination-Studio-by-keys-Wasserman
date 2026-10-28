@@ -7,11 +7,18 @@
 # A build needs the CUDA toolkit's nvcc (12.9 or newer; a Spark has 13 at /usr/local/cuda) and fetches Zig 0.17.0 and
 # TensorFold's source under $PREFIX. About a minute.
 # Measured on a GB10 only: on another GPU it refuses unless YUE2_ANY_GPU=1 (the server then decodes in PyTorch).
-# Environment: PREFIX, NVCC, TF_YUE2_COMMIT, TF_YUE2_SOURCE (an existing TensorFold checkout to lay the family over).
+# The engine's own GPU test (zig build test-yue2) runs only on an idle GPU: with the studio's GPU lock held or another
+# CUDA process running (an --upgrade beside a render) it is left out and said, and the next run builds and tests again.
+# Zig's archive is checked against the SHA-256 ziglang.org publishes for it.
+# Environment: PREFIX, NVCC, TF_YUE2_COMMIT, TF_YUE2_SOURCE (an existing TensorFold checkout to lay the family over),
+# STUDIO_GPU_LOCK, YUE2_ENGINE_TEST (1: test even beside other GPU work; 0: never).
 set -euo pipefail
 PREFIX="${PREFIX:-$HOME/.local/opt/tensorfold-studio}"
 TF_YUE2_COMMIT="${TF_YUE2_COMMIT:-5505dbfaf38efce55e564062886ad74bae6f21e5}"
 ZIG_VERSION=0.17.0
+# ziglang.org/download/index.json for 0.17.0
+ZIG_SHA256_aarch64=9e8d11661d4ae3bd57702a3832781e23ad151dde5798e16a5ccd503f65234ff8
+ZIG_SHA256_x86_64=1cbe9df9f27e6b78d14ccbca43b6703a404ef79ef1c463de901d7f088d4e2026
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 FAMILY="$HERE/tensorfold_yue2/tensorfold"
 OUT="$PREFIX/tf-yue2"
@@ -46,7 +53,13 @@ ZIG="$PREFIX/zig-$ZIG_VERSION/zig"
 if [ ! -x "$ZIG" ]; then
   echo "[tensorfold] fetching Zig $ZIG_VERSION"
   mkdir -p "$PREFIX/zig-$ZIG_VERSION"
-  curl -sfL "https://ziglang.org/download/$ZIG_VERSION/zig-$arch-linux-$ZIG_VERSION.tar.xz" | tar -xJ --strip-components=1 -C "$PREFIX/zig-$ZIG_VERSION"
+  archive="$PREFIX/zig-$ZIG_VERSION.tar.xz.part"
+  sum="ZIG_SHA256_$arch"
+  curl -sfL -o "$archive" "https://ziglang.org/download/$ZIG_VERSION/zig-$arch-linux-$ZIG_VERSION.tar.xz" \
+    || { rm -f "$archive"; echo "Zig $ZIG_VERSION could not be downloaded" >&2; exit 1; }
+  echo "${!sum}  $archive" | sha256sum -c --quiet - \
+    || { rm -f "$archive"; echo "Zig $ZIG_VERSION's archive does not match its published SHA-256: not used" >&2; exit 1; }
+  tar -xJf "$archive" --strip-components=1 -C "$PREFIX/zig-$ZIG_VERSION" && rm -f "$archive"
 fi
 SRC="${TF_YUE2_SOURCE:-$PREFIX/tf-yue2-src}"
 if [ -z "${TF_YUE2_SOURCE:-}" ]; then
@@ -69,8 +82,20 @@ if ! grep -qF "$hook" "$SRC/zig/build/cuda.zig"; then
 fi
 echo "[tensorfold] building the YuE2 engine with $NVCC (sm $SM)"
 (cd "$SRC" && nice -n 19 "$ZIG" build tf-yue2 -j2 -Doptimize=fast -Dnvcc="$NVCC" -Dsm="$SM")
-(cd "$SRC" && nice -n 19 "$ZIG" build test-yue2 -Dnvcc="$NVCC" -Dsm="$SM")
+# the engine's test runs kernels on the GPU: never beside a render or a song (the studio's GPU lock) or another job
+busy=""
+[ ! -e "${STUDIO_GPU_LOCK:-$HOME/studio-gpu.lock.d}" ] || busy="the studio's GPU lock is held (a job is running)"
+others="$(nvidia-smi ${smi_i[@]+"${smi_i[@]}"} --query-compute-apps=pid --format=csv,noheader 2>/dev/null | grep -cE '^[[:space:]]*[0-9]+[[:space:]]*$' || true)"
+[ -n "$busy" ] || [ "${others:-0}" = 0 ] || busy="$others other CUDA process(es) are on the GPU"
+case "${YUE2_ENGINE_TEST:-}" in 1) busy="";; 0) busy="YUE2_ENGINE_TEST=0";; esac
+tested=""
+if [ -z "$busy" ]; then
+  (cd "$SRC" && nice -n 19 "$ZIG" build test-yue2 -Dnvcc="$NVCC" -Dsm="$SM")
+else
+  tested=" untested"
+  echo "[tensorfold] the engine's GPU test is left out: $busy. Run bash spark/build-yue2-engine.sh again on an idle GPU to test it"
+fi
 mkdir -p "$OUT"
 cp "$SRC/zig-out/lib/libtf_yue2.so" "$OUT/libtf_yue2.so.new" && mv "$OUT/libtf_yue2.so.new" "$OUT/libtf_yue2.so"
-echo "$STAMP" > "$OUT/stamp"
+echo "$STAMP$tested" > "$OUT/stamp"  # an untested build is built and tested again next time
 echo "[tensorfold] YuE2 engine -> $OUT/libtf_yue2.so"
