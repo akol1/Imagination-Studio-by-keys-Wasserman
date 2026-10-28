@@ -193,6 +193,21 @@ def int8_linears(model, rows: int = 2) -> dict:
 DTYPES = {"BF16": "bfloat16", "F16": "float16", "F32": "float32", "I64": "int64", "I32": "int32", "U8": "uint8", "I8": "int8"}
 
 
+def free_cache() -> None:
+    """PyTorch's cached GPU memory given back (after a song failed): on a DGX Spark the system shares it."""
+
+    try:
+        import gc
+
+        import torch
+
+        gc.collect()
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+    except Exception:  # noqa: BLE001 - no torch, no GPU: nothing to give back
+        pass
+
+
 def read_weights(path: Path, device: str) -> dict:
     """A safetensors file's tensors on ``device``, read in one sequential pass into memory and copied from there.
     Measured on a GB10 for YuE2-3B (7.3 GB): 1.7 s to read and 0.5 s to the GPU, where copying from the mapped file
@@ -446,6 +461,8 @@ def main() -> int:
 
             note("failed: " + traceback.format_exc(limit=3).replace("\n", " | ")[-800:])
             answer = {"ok": False, "error": f"{type(error).__name__}: {error}"[-600:]}
+            del error
+            free_cache()  # what the failed song held (its caches, a half-made score) is not kept for the next one
         say({"id": job, **answer})
     return 0
 

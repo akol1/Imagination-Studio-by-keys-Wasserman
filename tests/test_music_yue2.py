@@ -44,7 +44,9 @@ for line in sys.stdin:
     request = json.loads(line)
     with open(os.environ["FAKE_YUE2_LOG"], "a") as log:
         log.write(line)
-    if "FAIL" in request["style"]:
+    if "FAIL" in request["style"]:  # the score was begun (its folder made), then the song failed
+        os.makedirs(request["artifacts"], exist_ok=True)
+        open(os.path.join(request["artifacts"], "score.abc"), "w").write("X:1\n")
         print(json.dumps({"id": request["id"], "ok": False, "error": "RuntimeError: the score came out empty"}), file=sys.stderr, flush=True)
         continue
     for stage, total in (("plan", 4096), ("semantic", 1501), ("nar", 64), ("vae", 2)):
@@ -388,6 +390,8 @@ def test_a_yue2_song_runs_on_its_server_holds_the_lock_and_gives_way(tmp_path):
             assert again["music"]["instrumental"] is True and requests_of(here.folder)[-1]["instrumental"] is True
             failed = wait(client.post("/api/music/takes", json={"caption": "FAIL", "seconds": 10}).json()["id"])
             assert failed["status"] == "failed" and "score came out empty" in failed["error"] and one.loaded()
+            assert not (music.HOME / "music" / f"{failed['id']}.yue2").exists()  # its half-made score went with it
+            assert (music.HOME / "music" / f"{job['id']}.yue2" / "score.abc").is_file()  # a finished song's stays
             # the takes and the Library list it as a YuE2 song
             listed = {t["id"]: t for t in client.get("/api/music/takes").json()}
             assert listed[job["id"]]["engine"] == "yue2" and again["id"] in listed and failed["id"] not in listed
@@ -450,3 +454,24 @@ def test_the_mcp_song_tool_takes_an_engine(monkeypatch):
 def test_the_server_script_has_a_seam_for_another_decoder_block_engine():
     text = (ROOT / "spark/yue2_server.py").read_text()
     assert '"blocks"' in text and "tensorfold_yue2" in text and "prepare(model" in text
+
+
+def test_a_refusal_for_memory_says_both_figures_to_a_tenth_of_a_gigabyte(monkeypatch):
+    """27.56 GB free against a need of 28 read "needs about 28 GB ... has 28 GB" when both were rounded to whole ones."""
+
+    one = music_yue2.Yue2()
+    monkeypatch.setattr(one, "present", lambda: "")
+    monkeypatch.setattr(voice, "mem_available_gb", lambda: 27.56)
+    monkeypatch.setattr(voice, "comfy_up", lambda port=None: False)
+    monkeypatch.setattr(voice, "has_card_memory", lambda: False)
+    one.NEED_GB = 28.0
+    said = one.check()
+    assert "needs about 28.0 GB" in said and "has 27.6 GB available" in said
+
+
+def test_the_server_gives_back_what_a_failed_song_held():
+    text = (ROOT / "spark" / "yue2_server.py").read_text()
+    failing = text[text.index("answer = engine.song(request, progress)"):]
+    assert failing.index("free_cache()") < failing.index('say({"id": job, **answer})')
+    assert "torch.cuda.empty_cache()" in text[text.index("def free_cache"):text.index("def read_weights")]
+    yue2_server.free_cache()  # with no GPU (or no torch) it does nothing and says nothing

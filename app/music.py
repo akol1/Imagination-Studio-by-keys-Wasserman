@@ -938,8 +938,13 @@ def perform(job: dict) -> bool:
         if other is not one:
             other.release(f"a song on {ENGINES[chosen]} needs the GPU")
     job["engine"] = one.name
-    measured = one.make(job, params, wav)
+    try:
+        measured = one.make(job, params, wav)
+    except BaseException:
+        forget_song(wav)
+        raise
     if measured is None:
+        forget_song(wav)
         return False
     if not wav.is_file():
         raise RuntimeError(f"{ENGINES[chosen]} finished without writing its song")
@@ -971,6 +976,13 @@ def perform(job: dict) -> bool:
     job["music"] = take
     job["progress"] = None
     return True
+
+
+def forget_song(wav: Path) -> None:
+    """A song that failed or was cancelled: what YuE2 wrote beside it (its score, ``<id>.yue2``) and a half-written wav."""
+
+    shutil.rmtree(wav.with_suffix(".yue2"), ignore_errors=True)
+    wav.unlink(missing_ok=True)
 
 
 def takes() -> list[dict]:
