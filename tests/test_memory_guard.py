@@ -341,6 +341,7 @@ def test_the_comfy_server_is_looked_for_on_the_port_set_now(monkeypatch):
 
 def test_a_song_refused_on_a_card_says_the_card_to_a_tenth_and_what_lets_it_in(monkeypatch):
     monkeypatch.setattr(G, "card_name", lambda: "NVIDIA GeForce RTX 5090")
+    monkeypatch.setattr(G, "ram_room_mb", lambda: 120_000)  # a machine with RAM to spare: the card is what runs out
     said = G.music_check(300, available_mb=29_400, total_mb=64_000, route="music-yue2-int8", card=True)
     assert not said["fits"]
     has = f"GPU (NVIDIA GeForce RTX 5090) has {said['available_mb'] / 1000:.1f} GB"
