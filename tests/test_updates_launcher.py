@@ -175,3 +175,23 @@ def test_a_mac_engine_built_from_another_commit_is_stale(tmp_path):
     (tmp_path / "prefix/zig-engine/COMMIT").write_text("b" * 40 + "\n")
     assert updates.engine_stale(tmp_path, tmp_path / "prefix") is None
     assert updates.engine_stale(tmp_path, tmp_path / "nowhere") is None  # no engine installed: nothing to rebuild
+
+
+def test_a_rebuilt_mac_engine_is_installed_with_its_renderer_link(tmp_path, monkeypatch):
+    sys.path.insert(0, str(ROOT / "app"))
+    import launcher
+    pin = "b" * 40
+    built = tmp_path / "pack/payload/zig-engine"
+    built.mkdir(parents=True)
+    (built / "COMMIT").write_text(pin + "\n")
+    (built / "h3_case.py").write_text("import h3_generate_dev\n")
+    prefix = tmp_path / "prefix"
+    (prefix / "zig-engine").mkdir(parents=True)
+    (prefix / "zig-engine/COMMIT").write_text("a" * 40 + "\n")
+    monkeypatch.setattr(launcher.subprocess, "run", lambda *a, **k: subprocess.CompletedProcess(a, 0, "", ""))
+    monkeypatch.setattr(launcher, "idle", lambda opener, port: True)
+    monkeypatch.setattr(launcher, "prefix_of", lambda: prefix)
+    launcher.rebuild_engine(tmp_path / "pack", pin, "7870")
+    assert (prefix / "zig-engine/COMMIT").read_text().strip() == pin
+    assert os.readlink(prefix / "zig-engine/h3_generate_dev.py") == "../h3_generate.py"  # h3_case.py imports it
+    assert (prefix / "zig-engine.before-update/COMMIT").read_text().strip() == "a" * 40

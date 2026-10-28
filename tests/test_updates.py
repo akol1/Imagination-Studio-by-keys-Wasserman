@@ -450,3 +450,23 @@ def test_github_sources(url):
 def test_other_sources_are_not_update_channels(url):
     with pytest.raises(updates.UpdateError):
         updates.repository(url)
+
+
+def test_prefix_copies_left_by_an_older_version_are_refreshed_and_edits_kept(history, tmp_path):
+    upstream, clone = history
+    for text in ("# qwen 1\n", "# qwen 2\n", "# qwen 3\n"):
+        (upstream / "qwen_image_generate.py").write_text(text)
+        (upstream / "zig_fasth3.py").write_text("# zig " + text[2:])
+        command(upstream, "add", ".")
+        command(upstream, "commit", "-m", "renderer " + text.strip())
+    command(clone, "pull", "-q")  # a pull without oneshot-setup.sh --upgrade: PREFIX keeps the first versions
+    prefix = tmp_path / "prefix"
+    prefix.mkdir()
+    (prefix / "qwen_image_generate.py").write_text("# qwen 1\n")
+    (prefix / "zig_fasth3.py").write_text("# a person's own edit\n")
+
+    assert updates.sync_prefix(clone, "HEAD", prefix) == ["qwen_image_generate.py"]
+    assert (prefix / "qwen_image_generate.py").read_text() == "# qwen 3\n"
+    assert (prefix / "qwen_image_generate.py.before-update").read_text() == "# qwen 1\n"
+    assert (prefix / "zig_fasth3.py").read_text() == "# a person's own edit\n"
+    assert updates.sync_prefix(clone, "HEAD", prefix) == []  # up to date: nothing more to do

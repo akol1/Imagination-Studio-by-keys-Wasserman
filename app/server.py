@@ -1697,7 +1697,10 @@ def passes(chosen: dict, steps: bool) -> dict:
 
 
 def last_frame(video: Path, image: Path) -> None:
-    subprocess.run(["ffmpeg", "-v", "error", "-y", "-sseof", "-0.2", "-i", str(video), "-vsync", "0", "-update", "1",
+    """The clip's last frame. No -vsync/-fps_mode: ffmpeg 7+ dropped -vsync and 4.x lacks -fps_mode, and with -update
+    each decoded frame overwrites the image, so the last one written is the last frame either way."""
+
+    subprocess.run(["ffmpeg", "-v", "error", "-y", "-sseof", "-0.2", "-i", str(video), "-update", "1",
                     "-q:v", "1", str(image)], check=True, env=environment({}), timeout=120)
 
 
